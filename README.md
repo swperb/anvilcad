@@ -48,7 +48,8 @@ system are still ahead; see the roadmap.
 - STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
   B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes and
   cylinders import as exact solids, so features added to them build exactly; everything
-  else imports as a watertight mesh body. Open a `.step` or `.stp` file to start a part.
+  else imports as a watertight mesh body. AP242 tessellated bodies (triangulated faces)
+  import as meshes too. Open a `.step` or `.stp` file to start a part.
 - Export to STEP AP214 (exact geometry whenever the whole part was built exactly, facets
   otherwise), STL (binary) and OBJ
 - SOLIDWORKS files are identified and explained (see below)
@@ -172,6 +173,13 @@ bash scripts/build.sh run --release -p anvil-app
 Run the tests with `cargo test --workspace` (or `bash scripts/build.sh test --workspace`).
 The app crate's tests drive the real UI with simulated mouse input, so sketching,
 dimensioning, dragging, face picking, extruding and undo are covered without a window.
+
+STEP import is checked against the NIST MBE PMI CAD test models (33 files from several
+CAD systems, AP203 and AP242). Every file imports, every solid is watertight, and the
+volumes of the same part exported by different systems agree to within 0.4%. Two of the
+files are kept in `crates/anvil-step/tests/data` as regression tests (see the NOTICE
+there). To check a folder of your own STEP files:
+`cargo run --release -p anvil-step --example report -- <folder>`.
 
 Command line: `anvilcad [FILE.anvprt | --sample] [--screenshot OUT.png] [--edit-sketch ID]`
 

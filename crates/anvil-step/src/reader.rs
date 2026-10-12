@@ -65,9 +65,20 @@ pub struct Body {
     pub solid: bool,
 }
 
+/// A body the file stores as triangles (AP242 tessellated geometry).
+#[derive(Debug, Clone, Default)]
+pub struct TessBody {
+    pub name: String,
+    pub vertices: Vec<DVec3>,
+    /// Per face: whether it lies on a plane, and its triangles.
+    pub faces: Vec<(bool, Vec<[u32; 3]>)>,
+    pub solid: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Model {
     pub bodies: Vec<Body>,
+    pub tessellated: Vec<TessBody>,
     pub edges: HashMap<u64, EdgeCurve>,
     pub vertices: HashMap<u64, DVec3>,
     pub warnings: Vec<String>,
@@ -485,6 +496,121 @@ impl<'a> Reader<'a> {
     }
 }
 
+impl Reader<'_> {
+    /// Reads a TESSELLATED_SOLID or TESSELLATED_SHELL.
+    fn tess_body(&mut self, id: u64) -> Result<TessBody, String> {
+        let e = self.entity(id)?;
+        let mut body =
+            TessBody { name: name_of(e), solid: e.name() == "TESSELLATED_SOLID", ..TessBody::default() };
+        let items = e.params().get(1).and_then(Param::as_list).ok_or("tessellated body without items")?;
+        let mut index: HashMap<(u64, usize), u32> = HashMap::new();
+        for item in items {
+            let fid = self.reference(Some(item))?;
+            match self.tess_face(fid, &mut body, &mut index) {
+                Ok(()) => {}
+                Err(msg) => self.warn(format!("tessellated face #{fid} skipped: {msg}")),
+            }
+        }
+        Ok(body)
+    }
+
+    fn tess_face(
+        &mut self,
+        id: u64,
+        body: &mut TessBody,
+        index: &mut HashMap<(u64, usize), u32>,
+    ) -> Result<(), String> {
+        let e = self.entity(id)?;
+        let p = e.params();
+        // Faces carry a geometric link (parameter 4) that sets do not.
+        let (link, rest) = match e.name() {
+            "TRIANGULATED_FACE" | "COMPLEX_TRIANGULATED_FACE" => (p.get(4), 5),
+            "TRIANGULATED_SURFACE_SET" | "COMPLEX_TRIANGULATED_SURFACE_SET" => (None, 4),
+            other => return Err(format!("{other} is not a triangulated face")),
+        };
+        let cid = self.reference(p.get(1))?;
+        let coords = self.entity(cid)?;
+        let pts = coords.params().get(2).and_then(Param::as_list).ok_or("coordinates list without points")?;
+        let pnindex: Vec<usize> = p
+            .get(rest)
+            .and_then(Param::as_list)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|q| q.as_real().map(|v| v as usize))
+            .collect();
+        let lists = |i: usize| -> Vec<Vec<usize>> {
+            p.get(i)
+                .and_then(Param::as_list)
+                .unwrap_or(&[])
+                .iter()
+                .map(|l| {
+                    l.as_list()
+                        .unwrap_or(&[])
+                        .iter()
+                        .filter_map(|q| q.as_real().map(|v| v as usize))
+                        .collect()
+                })
+                .collect()
+        };
+        let mut local: Vec<[usize; 3]> = Vec::new();
+        if e.name().starts_with("COMPLEX") {
+            for strip in lists(rest + 1) {
+                for i in 0..strip.len().saturating_sub(2) {
+                    let (a, b, c) = (strip[i], strip[i + 1], strip[i + 2]);
+                    local.push(if i % 2 == 0 { [a, b, c] } else { [b, a, c] });
+                }
+            }
+            for fan in lists(rest + 2) {
+                for i in 1..fan.len().saturating_sub(1) {
+                    local.push([fan[0], fan[i], fan[i + 1]]);
+                }
+            }
+        } else {
+            for t in lists(rest + 1) {
+                if let [a, b, c] = t[..] {
+                    local.push([a, b, c]);
+                }
+            }
+        }
+        let scale = self.scale;
+        let mut vertex = |k: usize| -> Result<u32, String> {
+            // Indices are 1-based, into pnindex when present, else into the coordinates.
+            let ci = if pnindex.is_empty() {
+                k
+            } else {
+                *pnindex.get(k.wrapping_sub(1)).ok_or("bad point index")?
+            };
+            if let Some(&v) = index.get(&(cid, ci)) {
+                return Ok(v);
+            }
+            let q = pts.get(ci.wrapping_sub(1)).and_then(Param::as_list).ok_or("bad coordinate index")?;
+            let c = |i: usize| q.get(i).and_then(Param::as_real).unwrap_or(0.0);
+            let v = body.vertices.len() as u32;
+            body.vertices.push(DVec3::new(c(0), c(1), c(2)) * scale);
+            index.insert((cid, ci), v);
+            Ok(v)
+        };
+        let mut tris = Vec::with_capacity(local.len());
+        for [a, b, c] in local {
+            let t = [vertex(a)?, vertex(b)?, vertex(c)?];
+            if t[0] != t[1] && t[1] != t[2] && t[0] != t[2] {
+                tris.push(t);
+            }
+        }
+        let planar = link.and_then(Param::as_ref).and_then(|r| self.ex.get(r)).is_some_and(|l| {
+            l.name() == "PLANE"
+                || (l.name() == "ADVANCED_FACE"
+                    && l.params()
+                        .get(2)
+                        .and_then(Param::as_ref)
+                        .and_then(|s| self.ex.get(s))
+                        .is_some_and(|s| s.name() == "PLANE"))
+        });
+        body.faces.push((planar, tris));
+        Ok(())
+    }
+}
+
 /// Millimetres per unit for a length unit entity, following conversion-based units.
 fn unit_scale(ex: &Exchange, id: u64, depth: usize) -> Option<(f64, String)> {
     if depth > 8 {
@@ -569,6 +695,13 @@ pub fn read(ex: &Exchange) -> Model {
             .collect();
     ids.sort_unstable();
     ids.dedup();
+    for id in ex.of_type("TESSELLATED_SOLID").chain(ex.of_type("TESSELLATED_SHELL")).collect::<Vec<_>>() {
+        match r.tess_body(id) {
+            Ok(b) if b.faces.iter().any(|(_, t)| !t.is_empty()) => r.model.tessellated.push(b),
+            Ok(_) => {}
+            Err(msg) => r.warn(format!("tessellated body #{id} skipped: {msg}")),
+        }
+    }
     for id in ids {
         match r.body(id) {
             Ok(b) if !b.faces.is_empty() => r.model.bodies.push(b),

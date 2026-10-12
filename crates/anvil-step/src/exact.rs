@@ -3,6 +3,7 @@
 
 use crate::reader::{Body, LoopKind, Model};
 use crate::shapes;
+use anvil_brep::intersect::{self, Ssi};
 use anvil_brep::topo::{Coedge, Edge, Face, FaceTag, Loop};
 use anvil_brep::{Curve, EdgeId, Solid, Surface, VertexId, check};
 use glam::DVec3;
@@ -64,6 +65,41 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
     if !body.solid {
         return Err("surface models are imported as meshes".into());
     }
+    // Exact surfaces of every face, and the faces each edge bounds, so that edges the
+    // file stores as B-splines can be rebuilt exactly from the two surfaces they join.
+    let surfaces: Vec<Option<Surface>> =
+        body.faces.iter().map(|f| f.surface.as_ref().and_then(surface)).collect();
+    let mut edge_faces: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (fi, f) in body.faces.iter().enumerate() {
+        for b in &f.bounds {
+            if let LoopKind::Edges(edges) = &b.kind {
+                for oe in edges {
+                    let list = edge_faces.entry(oe.edge).or_default();
+                    if !list.contains(&fi) {
+                        list.push(fi);
+                    }
+                }
+            }
+        }
+    }
+    let rebuilt = |edge: u64, e: &crate::reader::EdgeCurve| -> Option<Curve> {
+        let faces = edge_faces.get(&edge)?;
+        let [fa, fb] = faces[..] else { return None };
+        let (sa, sb) = (surfaces.get(fa)?.as_ref()?, surfaces.get(fb)?.as_ref()?);
+        let (ps, pe) = (*model.vertices.get(&e.start)?, *model.vertices.get(&e.end)?);
+        // A point inside the edge, from the file's own curve, picks the right branch.
+        let mid = e.curve.as_ref().map(|c| {
+            let (t0, t1) = (c.invert(ps), c.invert(pe));
+            c.eval(0.5 * (t0 + t1))
+        });
+        let tol = 1e-4 * ps.length().max(pe.length()).max(1.0);
+        let Ok(Ssi::Curves(cs)) = intersect::surfaces(sa, sb, 1e-6) else { return None };
+        cs.into_iter().find(|c| {
+            c.distance_to_curve(ps) < tol
+                && c.distance_to_curve(pe) < tol
+                && mid.is_none_or(|m| c.distance_to_curve(m) < tol * 10.0)
+        })
+    };
     let mut solid = Solid::default();
     let mut vids: HashMap<u64, VertexId> = HashMap::new();
     let mut eids: HashMap<u64, EdgeId> = HashMap::new();
@@ -87,11 +123,14 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                 let id = match eids.get(&oe.edge) {
                     Some(id) => *id,
                     None => {
-                        let c = e
-                            .curve
-                            .as_ref()
-                            .and_then(curve)
-                            .ok_or_else(|| format!("{} edges are not exact yet", e.curve_type))?;
+                        let c = e.curve.as_ref().and_then(curve).or_else(|| rebuilt(oe.edge, e)).ok_or_else(
+                            || {
+                                format!(
+                                    "{} edges are not exact yet",
+                                    e.curve_type.to_lowercase().replace('_', " ")
+                                )
+                            },
+                        )?;
                         let mut vertex = |v: u64| -> Result<VertexId, String> {
                             if let Some(id) = vids.get(&v) {
                                 return Ok(*id);

@@ -34,9 +34,17 @@ struct Builder {
     index: HashMap<[i64; 3], u32>,
 }
 
+fn key(p: DVec3) -> [i64; 3] {
+    [(p.x * 1e7).round() as i64, (p.y * 1e7).round() as i64, (p.z * 1e7).round() as i64]
+}
+
 impl Builder {
+    fn find(&self, p: DVec3) -> Option<u32> {
+        self.index.get(&key(p)).copied()
+    }
+
     fn vertex(&mut self, p: DVec3) -> u32 {
-        let key = [(p.x * 1e7).round() as i64, (p.y * 1e7).round() as i64, (p.z * 1e7).round() as i64];
+        let key = key(p);
         if let Some(&i) = self.index.get(&key) {
             return i;
         }
@@ -149,14 +157,17 @@ fn unwrap(reference: f64, v: f64, period: f64) -> f64 {
 }
 
 /// Triangulates closed loops lying in a 2D domain. `lift` maps a domain point to 3D
-/// (used for interior points), `normal` gives the outward normal at a domain point.
+/// (used for interior points). The domain is laid out so that counter-clockwise is
+/// along the surface's natural normal; `outward` says whether the face's outward normal
+/// agrees with it. Orientation comes from the 2D winding alone, which stays right for
+/// long thin triangles where comparing 3D normals can mislead.
 fn triangulate(
     b: &mut Builder,
     loops3: &[Vec<DVec3>],
     loops2: &[Vec<DVec2>],
     interior: &[DVec2],
     lift: &dyn Fn(DVec2) -> DVec3,
-    normal: &dyn Fn(DVec2) -> DVec3,
+    outward: bool,
 ) -> Vec<[u32; 3]> {
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
     let mut map: HashMap<usize, u32> = HashMap::new();
@@ -205,12 +216,8 @@ fn triangulate(
         if i0 == i1 || i1 == i2 || i0 == i2 {
             continue;
         }
-        let p = |i: u32| {
-            let a = b.mesh.vertices[i as usize];
-            DVec3::new(a[0], a[1], a[2])
-        };
-        let n = (p(i1) - p(i0)).cross(p(i2) - p(i0));
-        if n.dot(normal(c)) < 0.0 { tris.push([i0, i2, i1]) } else { tris.push([i0, i1, i2]) }
+        let ccw = (uv[1] - uv[0]).perp_dot(uv[2] - uv[0]) > 0.0;
+        if ccw == outward { tris.push([i0, i1, i2]) } else { tris.push([i0, i2, i1]) }
     }
     tris
 }
@@ -288,17 +295,303 @@ fn flat_face(b: &mut Builder, loops3: &[Vec<DVec3>], normal: DVec3) -> Vec<[u32;
     let y = z.cross(x);
     let loops2: Vec<Vec<DVec2>> =
         loops3.iter().map(|l| l.iter().map(|p| DVec2::new(p.dot(x), p.dot(y))).collect()).collect();
-    triangulate(b, loops3, &loops2, &[], &|_| DVec3::ZERO, &|_| z)
+    // (x, y, z) is right-handed, so counter-clockwise in (x, y) is along z.
+    triangulate(b, loops3, &loops2, &[], &|_| DVec3::ZERO, true)
 }
 
-fn curved_face(b: &mut Builder, s: &Surface, sense: f64, loops3: &[Vec<DVec3>]) -> Vec<[u32; 3]> {
+fn coord(q: DVec2, dim: usize) -> f64 {
+    if dim == 0 { q.x } else { q.y }
+}
+
+fn with_coord(mut q: DVec2, dim: usize, v: f64) -> DVec2 {
+    if dim == 0 {
+        q.x = v;
+    } else {
+        q.y = v;
+    }
+    q
+}
+
+/// How far a loop travels around a periodic parameter: about +TAU or -TAU for a loop
+/// that winds once around the surface, zero for an ordinary closed loop.
+fn winding(l: &[DVec2], dim: usize) -> f64 {
+    match (l.first(), l.last()) {
+        (Some(f), Some(e)) => unwrap(coord(*e, dim), coord(*f, dim), TAU) - coord(*f, dim),
+        _ => 0.0,
+    }
+}
+
+/// Faces of revolution are often bounded by loops that each go once around the axis
+/// (a band between two circles, or a cap bounded by one circle), with no seam edge. In
+/// parameter space such loops are open strips, not closed polygons. Two of them are
+/// joined into one closed outline through a cut between existing vertices; a single one
+/// is closed through the surface's pole or apex. No point is added on a real edge, so
+/// neighbouring faces still share their vertices exactly.
+fn close_wrapping(
+    s: &Surface,
+    sense: f64,
+    loops3: Vec<Vec<DVec3>>,
+    raw: Vec<Vec<DVec2>>,
+    dim: usize,
+) -> (Vec<Vec<DVec3>>, Vec<Vec<DVec2>>) {
+    let wraps: Vec<usize> = (0..raw.len()).filter(|&i| winding(&raw[i], dim).abs() > PI).collect();
+    // Holes (loops that do not wrap) must avoid the cut and sit on the same turn as the
+    // joined outline. The cut goes through the middle of the widest gap between them.
+    let holes: Vec<usize> = (0..raw.len()).filter(|i| !wraps.contains(i)).collect();
+    let cut_at = |start: f64| -> f64 {
+        let mut spans: Vec<(f64, f64)> = holes
+            .iter()
+            .filter_map(|&h| {
+                let us: Vec<f64> = raw[h].iter().map(|q| coord(*q, dim)).collect();
+                let lo = us.iter().copied().fold(f64::INFINITY, f64::min);
+                let hi = us.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                (lo.is_finite() && hi - lo < TAU).then(|| {
+                    let width = hi - lo;
+                    let lo = start + (lo - start).rem_euclid(TAU);
+                    (lo, lo + width)
+                })
+            })
+            .collect();
+        if spans.is_empty() {
+            return start;
+        }
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut best = (0.0, start);
+        for i in 0..spans.len() {
+            let end = spans[i].1;
+            let next = if i + 1 < spans.len() { spans[i + 1].0 } else { spans[0].0 + TAU };
+            if next - end > best.0 {
+                best = (next - end, 0.5 * (end + next));
+            }
+        }
+        best.1
+    };
+    let place_holes = |out3: &mut Vec<Vec<DVec3>>, out2: &mut Vec<Vec<DVec2>>, lo: f64| {
+        for &h in &holes {
+            let mut l = raw[h].clone();
+            let mean = l.iter().map(|q| coord(*q, dim)).sum::<f64>() / l.len().max(1) as f64;
+            let shift = (lo + (mean - lo).rem_euclid(TAU)) - mean;
+            for q in l.iter_mut() {
+                *q = with_coord(*q, dim, coord(*q, dim) + shift);
+            }
+            out3.push(loops3[h].clone());
+            out2.push(l);
+        }
+    };
+    match wraps[..] {
+        [a, b] => {
+            let (a, b) = if winding(&raw[a], dim) > 0.0 { (a, b) } else { (b, a) };
+            let (wa, wb) = (winding(&raw[a], dim), winding(&raw[b], dim));
+            if wa <= 0.0 || wb >= 0.0 {
+                return (loops3, raw);
+            }
+            // Start the first loop at its vertex nearest the cut.
+            let Some(&first) = raw[a].first() else { return (loops3, raw) };
+            let cut = cut_at(coord(first, dim));
+            let na = raw[a].len();
+            let ka = (0..na)
+                .min_by(|&i, &j| {
+                    let d = |k: usize| (unwrap(cut, coord(raw[a][k], dim), TAU) - cut).abs();
+                    d(i).total_cmp(&d(j))
+                })
+                .unwrap_or(0);
+            let mut pts3: Vec<DVec3> = (0..na).map(|i| loops3[a][(ka + i) % na]).collect();
+            let mut uv: Vec<DVec2> = Vec::with_capacity(na + 1);
+            let mut prev = unwrap(cut, coord(raw[a][ka], dim), TAU);
+            for i in 0..na {
+                let q = raw[a][(ka + i) % na];
+                prev = unwrap(prev, coord(q, dim), TAU);
+                uv.push(with_coord(q, dim, prev));
+            }
+            let a0 = uv[0];
+            let a03 = pts3[0];
+            let end = coord(a0, dim) + wa;
+            pts3.push(a03);
+            uv.push(with_coord(a0, dim, end));
+            // Start the other loop at its vertex nearest the end of the first.
+            let nb = raw[b].len();
+            let Some(k) = (0..nb).min_by(|&i, &j| {
+                let di = (unwrap(end, coord(raw[b][i], dim), TAU) - end).abs();
+                let dj = (unwrap(end, coord(raw[b][j], dim), TAU) - end).abs();
+                di.total_cmp(&dj)
+            }) else {
+                return (loops3, raw);
+            };
+            let mut prev = end;
+            for step in 0..=nb {
+                let i = (k + step) % nb;
+                let mut q = raw[b][i];
+                let v = unwrap(prev, coord(q, dim), TAU);
+                q = with_coord(q, dim, v);
+                prev = v;
+                pts3.push(loops3[b][i]);
+                uv.push(q);
+            }
+            let lo = coord(a0, dim);
+            let mut out3 = vec![pts3];
+            let mut out2 = vec![uv];
+            place_holes(&mut out3, &mut out2, lo);
+            (out3, out2)
+        }
+        [a] if dim == 0 => {
+            let w = winding(&raw[a], dim);
+            let up = (w > 0.0) == (sense > 0.0);
+            let pole = match s {
+                Surface::Sphere { .. } => Some(if up { PI / 2.0 } else { -PI / 2.0 }),
+                Surface::Cone { radius, semi_angle, .. } if semi_angle.tan().abs() > 1e-12 => {
+                    Some(-radius / semi_angle.tan())
+                }
+                _ => None,
+            };
+            let (Some(v), Some(&a0), Some(&a03)) = (pole, raw[a].first(), loops3[a].first()) else {
+                return (loops3, raw);
+            };
+            let mut l3 = vec![loops3[a].clone()];
+            let mut l2 = vec![raw[a].clone()];
+            let (u0, u1) = (a0.x, a0.x + w);
+            let a = 0;
+            // Close the loop itself first (its start point, one turn later), then run
+            // along the pole back to where it started.
+            l3[a].push(a03);
+            l2[a].push(DVec2::new(u1, a0.y));
+            for u in [u1, u0] {
+                let q = DVec2::new(u, v);
+                l3[a].push(s.eval(q));
+                l2[a].push(q);
+            }
+            place_holes(&mut l3, &mut l2, u0.min(u1));
+            (l3, l2)
+        }
+        _ => (loops3, raw),
+    }
+}
+
+/// The height parameter of a pole or apex, if `p` lies on one.
+fn pole_height(s: &Surface, p: DVec3) -> Option<f64> {
+    match s {
+        Surface::Sphere { frame, radius } => {
+            let l = frame.to_local(p);
+            (DVec2::new(l.x, l.y).length() < 1e-7 * radius.max(1.0)).then_some(if l.z > 0.0 {
+                PI / 2.0
+            } else {
+                -PI / 2.0
+            })
+        }
+        Surface::Cone { frame, radius, semi_angle } => {
+            let l = frame.to_local(p);
+            let r = radius + l.z * semi_angle.tan();
+            (DVec2::new(l.x, l.y).length() < 1e-7 * radius.abs().max(1.0) && r.abs() < 1e-6).then_some(l.z)
+        }
+        _ => None,
+    }
+}
+
+/// Counts what is wrong with a face's triangles: edges covered twice, open edges that
+/// are not on the face's loops, and loop edges not covered exactly once. Zero means the
+/// face is a clean, manifold patch with exactly the boundary it should have.
+fn defects(b: &Builder, loops3: &[Vec<DVec3>], tris: &[[u32; 3]]) -> usize {
+    // How many times each loop edge appears. Once: a true boundary, covered from one
+    // side. Twice: a seam, which the loop runs along in both directions, covered from
+    // both sides.
+    let mut uses: HashMap<(u32, u32), u32> = HashMap::new();
+    for l in loops3 {
+        let ids: Vec<Option<u32>> = l.iter().map(|p| b.find(*p)).collect();
+        for k in 0..ids.len() {
+            if let (Some(a), Some(c)) = (ids[k], ids[(k + 1) % ids.len()])
+                && a != c
+            {
+                *uses.entry((a.min(c), a.max(c))).or_default() += 1;
+            }
+        }
+    }
+    let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
+    for t in tris {
+        for k in 0..3 {
+            *directed.entry((t[k], t[(k + 1) % 3])).or_default() += 1;
+        }
+    }
+    let mut bad = directed.values().filter(|&&n| n > 1).count();
+    for &(a, c) in directed.keys() {
+        let open = !directed.contains_key(&(c, a));
+        let boundary = uses.get(&(a.min(c), a.max(c))) == Some(&1);
+        if open != boundary {
+            bad += 1;
+        }
+    }
+    bad + uses
+        .keys()
+        .filter(|&&(a, c)| !directed.contains_key(&(a, c)) && !directed.contains_key(&(c, a)))
+        .count()
+}
+
+/// The file's loops run counter-clockwise about the face's outward normal, whatever
+/// the surface's parameterisation. If the triangles run the other way along most of the
+/// boundary, the whole face is flipped to agree with the loops.
+fn orient_by_loops(b: &Builder, loops3: &[Vec<DVec3>], tris: &mut [[u32; 3]]) {
+    let mut directed: std::collections::HashSet<(u32, u32)> = Default::default();
+    for t in tris.iter() {
+        for k in 0..3 {
+            directed.insert((t[k], t[(k + 1) % 3]));
+        }
+    }
+    let (mut agree, mut disagree) = (0usize, 0usize);
+    for l in loops3 {
+        let ids: Vec<Option<u32>> = l.iter().map(|p| b.find(*p)).collect();
+        for k in 0..ids.len() {
+            let (Some(a), Some(c)) = (ids[k], ids[(k + 1) % ids.len()]) else { continue };
+            match (directed.contains(&(a, c)), directed.contains(&(c, a))) {
+                (true, false) => agree += 1,
+                (false, true) => disagree += 1,
+                _ => {}
+            }
+        }
+    }
+    if disagree > agree {
+        for t in tris.iter_mut() {
+            t.swap(1, 2);
+        }
+    }
+}
+
+fn curved_face(
+    b: &mut Builder,
+    s: &Surface,
+    sense: f64,
+    loops3: &[Vec<DVec3>],
+    with_interior: bool,
+) -> Vec<[u32; 3]> {
     let (pu, pv) = s.periodic();
+    // A loop point on a pole or apex has no single longitude; it becomes a short
+    // segment between the longitudes of the boundary on either side of it.
+    let mut split3: Vec<Vec<DVec3>> = Vec::with_capacity(loops3.len());
+    let mut split2: Vec<Vec<DVec2>> = Vec::with_capacity(loops3.len());
+    for l in loops3 {
+        let qs: Vec<DVec2> = l.iter().map(|p| s.invert(*p)).collect();
+        let n = l.len();
+        let (mut o3, mut o2) = (Vec::with_capacity(n + 2), Vec::with_capacity(n + 2));
+        for i in 0..n {
+            match pole_height(s, l[i]) {
+                Some(v) if n > 2 => {
+                    let (before, after) = (qs[(i + n - 1) % n].x, qs[(i + 1) % n].x);
+                    o3.extend([l[i], l[i]]);
+                    o2.extend([DVec2::new(before, v), DVec2::new(after, v)]);
+                }
+                _ => {
+                    o3.push(l[i]);
+                    o2.push(qs[i]);
+                }
+            }
+        }
+        split3.push(o3);
+        split2.push(o2);
+    }
+    let loops3 = &split3[..];
     // Raw parameters, unwrapped along each loop and then onto the first loop's branch.
     let mut raw: Vec<Vec<DVec2>> = Vec::new();
-    for l in loops3 {
+    for l in &split2 {
         let mut out: Vec<DVec2> = Vec::with_capacity(l.len());
-        for p in l {
-            let mut q = s.invert(*p);
+        for &q0 in l {
+            let mut q = q0;
             if let Some(prev) = out.last() {
                 if pu {
                     q.x = unwrap(prev.x, q.x, TAU);
@@ -322,6 +615,14 @@ fn curved_face(b: &mut Builder, s: &Surface, sense: f64, loops3: &[Vec<DVec3>]) 
             }
         }
     }
+    let mut loops3: Vec<Vec<DVec3>> = loops3.to_vec();
+    if pu {
+        (loops3, raw) = close_wrapping(s, sense, loops3, raw, 0);
+    }
+    if pv {
+        (loops3, raw) = close_wrapping(s, sense, loops3, raw, 1);
+    }
+    let loops3 = &loops3[..];
     // Scale parameters to millimetres around the face so the triangulation sees the
     // surface's real proportions.
     let all: Vec<DVec2> = raw.iter().flatten().copied().collect();
@@ -337,10 +638,9 @@ fn curved_face(b: &mut Builder, s: &Surface, sense: f64, loops3: &[Vec<DVec3>]) 
         _ => (size.max_element() / 12.0).max(0.05),
     };
     let step = DVec2::splat(curvature_step.max(size.max_element() / 150.0).max(1e-3));
-    let interior = grid(&loops2, step);
+    let interior = if with_interior { grid(&loops2, step) } else { Vec::new() };
     let lift = |q: DVec2| s.eval(q / metric);
-    let normal = |q: DVec2| s.normal(q / metric) * sense;
-    triangulate(b, loops3, &loops2, &interior, &lift, &normal)
+    triangulate(b, loops3, &loops2, &interior, &lift, sense > 0.0)
 }
 
 fn chord_step(radius: f64) -> f64 {
@@ -369,9 +669,35 @@ pub fn tessellate(model: &Model, body: &Body, warnings: &mut Vec<String>) -> Mes
         let loops3 = face_loops(model, &samples, f);
         let sense = if f.same_sense { 1.0 } else { -1.0 };
         let planar = matches!(f.surface, Some(Surface::Plane { .. })) || f.surface_type == "POLY";
-        let triangles = match &f.surface {
+        let mut triangles = match &f.surface {
             Some(Surface::Plane { frame }) => flat_face(&mut b, &loops3, frame.z * sense),
-            Some(s) if !loops3.is_empty() => curved_face(&mut b, s, sense, &loops3),
+            Some(s) if !loops3.is_empty() => {
+                // Try the full tessellation, then without interior points, then flat;
+                // keep the first clean result, or the least broken one.
+                let mut best: Option<(usize, Vec<[u32; 3]>)> = None;
+                for attempt in 0..3 {
+                    let tris = match attempt {
+                        0 => curved_face(&mut b, s, sense, &loops3, true),
+                        1 => curved_face(&mut b, s, sense, &loops3, false),
+                        _ => {
+                            let n = loops3.first().map(|l| newell(l)).unwrap_or(DVec3::Z);
+                            flat_face(&mut b, &loops3, n)
+                        }
+                    };
+                    let d = defects(&b, &loops3, &tris);
+                    if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                        best = Some((d, tris));
+                    }
+                    if d == 0 {
+                        break;
+                    }
+                }
+                let (d, tris) = best.unwrap_or_default();
+                if d > 0 && std::env::var("STEP_DEBUG").is_ok() {
+                    eprintln!("STEP_DEBUG face #{} {} still has {d} defects", f.id, f.surface_type);
+                }
+                tris
+            }
             Some(s) => closed_surface(&mut b, s, sense),
             None => {
                 if f.surface_type != "POLY" {
@@ -381,6 +707,7 @@ pub fn tessellate(model: &Model, body: &Body, warnings: &mut Vec<String>) -> Mes
                 flat_face(&mut b, &loops3, n)
             }
         };
+        orient_by_loops(&b, &loops3, &mut triangles);
         b.mesh.faces.push(MeshFace { planar, triangles });
     }
     let faceted = body.faces.iter().all(|f| f.surface_type == "POLY");

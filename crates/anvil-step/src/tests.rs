@@ -335,3 +335,40 @@ fn files_without_bodies_and_broken_files_are_errors() {
         other => panic!("{other:?}"),
     }
 }
+
+/// A cone with its apex: a flat disc of radius `r` at z = 0 and a CONICAL_SURFACE face
+/// bounded by the rim circle and a VERTEX_LOOP at the apex (like a drill point).
+fn pointed_cone(r: f64, h: f64) -> String {
+    let mut f = Fixture::new();
+    let vrim = f.vertex(DVec3::new(r, 0.0, 0.0));
+    let vapex = f.vertex(DVec3::new(0.0, 0.0, h));
+    let ab = f.axis(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let c = f.e(format!("CIRCLE('',#{ab},{r:?})"));
+    let rim = f.e(format!("EDGE_CURVE('',#{vrim},#{vrim},#{c},.T.)"));
+    let disc_oe = f.e(format!("ORIENTED_EDGE('',*,*,#{rim},.F.)"));
+    let disc_loop = f.e(format!("EDGE_LOOP('',(#{disc_oe}))"));
+    let disc_bound = f.e(format!("FACE_OUTER_BOUND('',#{disc_loop},.T.)"));
+    let plane = f.e(format!("PLANE('',#{ab})"));
+    let disc = f.e(format!("ADVANCED_FACE('',(#{disc_bound}),#{plane},.F.)"));
+    let cone_oe = f.e(format!("ORIENTED_EDGE('',*,*,#{rim},.T.)"));
+    let cone_loop = f.e(format!("EDGE_LOOP('',(#{cone_oe}))"));
+    let cone_bound = f.e(format!("FACE_OUTER_BOUND('',#{cone_loop},.T.)"));
+    let apex_loop = f.e(format!("VERTEX_LOOP('',#{vapex})"));
+    let apex_bound = f.e(format!("FACE_BOUND('',#{apex_loop},.T.)"));
+    let angle = (-r / h).atan();
+    let cone = f.e(format!("CONICAL_SURFACE('',#{ab},{r:?},{angle:?})"));
+    let side = f.e(format!("ADVANCED_FACE('',(#{cone_bound},#{apex_bound}),#{cone},.T.)"));
+    let shell = f.e(format!("CLOSED_SHELL('',(#{disc},#{side}))"));
+    f.e(format!("MANIFOLD_SOLID_BREP('cone',#{shell})"));
+    f.text()
+}
+
+#[test]
+fn cone_with_apex_is_closed() {
+    let (r, h) = (6.0, 9.0);
+    let imp = import(&pointed_cone(r, h)).expect("import");
+    let m = &imp.bodies[0].mesh;
+    assert!(watertight(m), "pointed cone mesh has gaps");
+    let exact = PI * r * r * h / 3.0;
+    assert!((mesh_volume(m) - exact).abs() / exact < 0.005, "{}", mesh_volume(m));
+}

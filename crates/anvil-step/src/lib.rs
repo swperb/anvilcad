@@ -66,6 +66,24 @@ pub fn import(text: &str) -> Result<Import, StepError> {
         let name = if b.name.is_empty() { format!("Body #{}", b.id) } else { b.name.clone() };
         bodies.push(Body { name, exact, not_exact, mesh, solid: b.solid });
     }
+    for t in &model.tessellated {
+        let mesh = Mesh {
+            vertices: t.vertices.iter().map(|v| [v.x, v.y, v.z]).collect(),
+            faces: t
+                .faces
+                .iter()
+                .map(|(planar, tris)| MeshFace { planar: *planar, triangles: tris.clone() })
+                .collect(),
+        };
+        let name = if t.name.is_empty() { "Tessellated body".to_string() } else { t.name.clone() };
+        bodies.push(Body {
+            name,
+            exact: None,
+            not_exact: Some("the file stores this body as triangles, so it is imported as a mesh".into()),
+            mesh,
+            solid: t.solid,
+        });
+    }
     if bodies.is_empty() {
         return Err(StepError::NoBodies(warnings));
     }

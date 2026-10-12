@@ -343,7 +343,15 @@ impl Document {
                     }
                     None => st.leave_exact(id, "imported bodies without exact geometry are meshes".into()),
                 }
-                st.body = if ib.adds && !st.body.is_empty() { st.body.union(&mesh) } else { mesh };
+                // Bodies from one file stay separate, as in a multibody part, and sheets
+                // are not closed, so they are appended rather than combined by a boolean.
+                st.body = if ib.adds && !st.body.is_empty() {
+                    let mut polys = st.body.polygons.clone();
+                    polys.extend(mesh.polygons);
+                    Solid::new(polys)
+                } else {
+                    mesh
+                };
             }
             FeatureKind::Fillet(f) => {
                 let radius = num(&f.radius, "radius")?;
