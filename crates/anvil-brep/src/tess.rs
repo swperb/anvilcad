@@ -1,0 +1,276 @@
+//! Display tessellation.
+//!
+//! Each edge is sampled once and the samples are shared by both faces that use
+//! it, so the mesh is watertight by construction. Faces are triangulated in
+//! their surface's parameter space with a constrained Delaunay triangulation.
+
+use crate::geom::Surface;
+use crate::topo::{Face, Solid};
+use crate::{KernelError, Result, tol};
+use glam::{DVec2, DVec3};
+use spade::{ConstrainedDelaunayTriangulation, Point2, Triangulation};
+use std::collections::HashMap;
+use std::f64::consts::TAU;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TessParams {
+    /// Maximum distance between a curve and its chords (mm).
+    pub chord: f64,
+    /// Maximum angle subtended by one chord (radians).
+    pub max_angle: f64,
+}
+
+impl Default for TessParams {
+    fn default() -> Self {
+        Self { chord: tol::CHORD, max_angle: tol::MAX_ANGLE }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TriMesh {
+    pub positions: Vec<DVec3>,
+    pub normals: Vec<DVec3>,
+    pub triangles: Vec<[u32; 3]>,
+    /// Index of the B-rep face each triangle belongs to.
+    pub triangle_face: Vec<u32>,
+    /// Polyline for each B-rep edge, indexed like `Solid::edges`.
+    pub edges: Vec<Vec<DVec3>>,
+}
+
+impl TriMesh {
+    /// True when every triangle edge is matched by exactly one opposite edge
+    /// in another triangle (closed and consistently oriented).
+    pub fn is_watertight(&self) -> bool {
+        let key = |p: DVec3| (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
+        let mut ids: HashMap<(u64, u64, u64), u32> = HashMap::new();
+        let canon: Vec<u32> = self
+            .positions
+            .iter()
+            .map(|p| {
+                let n = ids.len() as u32;
+                *ids.entry(key(*p)).or_insert(n)
+            })
+            .collect();
+        let mut directed: HashMap<(u32, u32), i32> = HashMap::new();
+        for t in &self.triangles {
+            for k in 0..3 {
+                let a = canon[t[k] as usize];
+                let b = canon[t[(k + 1) % 3] as usize];
+                *directed.entry((a, b)).or_default() += 1;
+            }
+        }
+        directed.iter().all(|(&(a, b), &n)| n == 1 && directed.get(&(b, a)) == Some(&1))
+    }
+
+    pub fn bounds(&self) -> Option<(DVec3, DVec3)> {
+        let first = *self.positions.first()?;
+        Some(self.positions.iter().fold((first, first), |(lo, hi), p| (lo.min(*p), hi.max(*p))))
+    }
+}
+
+pub fn tessellate(solid: &Solid, params: &TessParams) -> Result<TriMesh> {
+    let mut edges = Vec::with_capacity(solid.edges.len());
+    for e in &solid.edges {
+        let mut pts = e.curve.sample(e.t0, e.t1, params.chord, params.max_angle);
+        // Pin the ends to the vertices so neighbouring edges share exact points.
+        let (Some(a), Some(b)) = (solid.vertex(e.start), solid.vertex(e.end)) else {
+            return Err(KernelError::Tessellation("edge without vertices".into()));
+        };
+        if let Some(first) = pts.first_mut() {
+            *first = a.point;
+        }
+        if let Some(last) = pts.last_mut() {
+            *last = b.point;
+        }
+        edges.push(pts);
+    }
+    let mut mesh = TriMesh { edges, ..TriMesh::default() };
+    for (fi, face) in solid.faces.iter().enumerate() {
+        tessellate_face(face, fi as u32, &mut mesh, params)
+            .map_err(|e| KernelError::Tessellation(format!("face {fi}: {e}")))?;
+    }
+    Ok(mesh)
+}
+
+fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &TessParams) -> Result<()> {
+    // Closed 3D polylines for each loop, without the repeated end point.
+    let mut loops3: Vec<Vec<DVec3>> = Vec::new();
+    for l in face.loops() {
+        let mut pts = Vec::new();
+        for c in &l.coedges {
+            let samples = mesh
+                .edges
+                .get(c.edge.index())
+                .ok_or_else(|| KernelError::Tessellation("missing edge".into()))?;
+            let n = samples.len();
+            if c.reversed {
+                pts.extend(samples.iter().rev().take(n.saturating_sub(1)));
+            } else {
+                pts.extend(samples.iter().take(n.saturating_sub(1)));
+            }
+        }
+        if pts.len() < 2 {
+            return Err(KernelError::Tessellation("loop has too few points".into()));
+        }
+        loops3.push(pts);
+    }
+
+    let mut loops_uv: Vec<Vec<DVec2>> = loops3.iter().map(|l| to_uv(&face.surface, l)).collect();
+    // On a cylinder every loop must use the same branch of the angle.
+    if let Surface::Cylinder { radius, .. } = face.surface
+        && let Some(reference) = loops_uv.first().and_then(|l| l.first()).map(|p| p.x)
+    {
+        let period = TAU * radius;
+        for l in loops_uv.iter_mut().skip(1) {
+            if let Some(first) = l.first().map(|p| p.x) {
+                let shift = period * ((reference - first) / period).round();
+                for p in l.iter_mut() {
+                    p.x += shift;
+                }
+            }
+        }
+    }
+
+    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
+    // spade vertex index -> mesh vertex index
+    let mut vmap: Vec<Option<u32>> = Vec::new();
+    for (l3, luv) in loops3.iter().zip(&loops_uv) {
+        let mut handles = Vec::with_capacity(l3.len());
+        for (p, uv) in l3.iter().zip(luv) {
+            let h = cdt
+                .insert(Point2::new(uv.x, uv.y))
+                .map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
+            let hi = h.index();
+            if vmap.len() <= hi {
+                vmap.resize(hi + 1, None);
+            }
+            if vmap[hi].is_none() {
+                vmap[hi] = Some(mesh.positions.len() as u32);
+                mesh.positions.push(*p);
+                mesh.normals.push(face.normal_at(*p));
+            }
+            handles.push(h);
+        }
+        for k in 0..handles.len() {
+            let (a, b) = (handles[k], handles[(k + 1) % handles.len()]);
+            if a == b {
+                continue;
+            }
+            if !cdt.can_add_constraint(a, b) {
+                return Err(KernelError::Tessellation("boundary crosses itself in parameter space".into()));
+            }
+            cdt.add_constraint(a, b);
+        }
+    }
+
+    // Curved faces get interior points on a grid, so triangles stay small in
+    // the curved direction instead of spanning chords across the surface.
+    if let Surface::Cylinder { radius, .. } = face.surface {
+        let step_angle = {
+            let mut a = params.max_angle.max(1e-3);
+            if params.chord > 0.0 && params.chord < radius {
+                a = a.min(2.0 * (1.0 - params.chord / radius).acos());
+            }
+            a
+        };
+        let du = radius * step_angle;
+        let all: Vec<DVec2> = loops_uv.iter().flatten().copied().collect();
+        let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+        for p in &all {
+            lo = lo.min(*p);
+            hi = hi.max(*p);
+        }
+        let dv = du.max((hi.y - lo.y) / 64.0);
+        let nu = ((hi.x - lo.x) / du).ceil() as usize;
+        let nv = ((hi.y - lo.y) / dv).ceil() as usize;
+        if nu.saturating_mul(nv) < 200_000 {
+            let near_boundary = |q: DVec2| {
+                loops_uv.iter().any(|l| {
+                    (0..l.len()).any(|i| {
+                        let (a, b) = (l[i], l[(i + 1) % l.len()]);
+                        let ab = b - a;
+                        let t = ((q - a).dot(ab) / ab.length_squared().max(1e-30)).clamp(0.0, 1.0);
+                        (a + ab * t - q).length() < 0.3 * du.min(dv)
+                    })
+                })
+            };
+            for i in 1..nu {
+                for j in 0..=nv {
+                    let q = DVec2::new(lo.x + du * i as f64, lo.y + dv * j as f64);
+                    let inside =
+                        loops_uv.iter().filter(|l| crate::profile::point_in_polygon(q, l)).count() % 2 == 1;
+                    if !inside || near_boundary(q) {
+                        continue;
+                    }
+                    let h = cdt
+                        .insert(Point2::new(q.x, q.y))
+                        .map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
+                    let hi = h.index();
+                    if vmap.len() <= hi {
+                        vmap.resize(hi + 1, None);
+                    }
+                    if vmap[hi].is_none() {
+                        let p = face.surface.eval_uv(q);
+                        vmap[hi] = Some(mesh.positions.len() as u32);
+                        mesh.positions.push(p);
+                        mesh.normals.push(face.normal_at(p));
+                    }
+                }
+            }
+        }
+    }
+
+    for tri in cdt.inner_faces() {
+        let vs = tri.vertices();
+        let uv: Vec<DVec2> = vs.iter().map(|v| DVec2::new(v.position().x, v.position().y)).collect();
+        let centroid = (uv[0] + uv[1] + uv[2]) / 3.0;
+        let inside =
+            loops_uv.iter().filter(|l| crate::profile::point_in_polygon(centroid, l)).count() % 2 == 1;
+        if !inside {
+            continue;
+        }
+        let mut idx = [0u32; 3];
+        for (k, v) in vs.iter().enumerate() {
+            idx[k] = vmap
+                .get(v.fix().index())
+                .copied()
+                .flatten()
+                .ok_or_else(|| KernelError::Tessellation("unmapped vertex".into()))?;
+        }
+        let ccw = (uv[1] - uv[0]).perp_dot(uv[2] - uv[0]) > 0.0;
+        if ccw == face.reversed {
+            idx.swap(1, 2);
+        }
+        mesh.triangles.push(idx);
+        mesh.triangle_face.push(face_index);
+    }
+    Ok(())
+}
+
+/// Maps a closed loop on a surface to parameter space. Parameters are scaled
+/// to millimetres so the Delaunay criterion sees true proportions.
+fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
+    match surface {
+        Surface::Plane { frame } => pts
+            .iter()
+            .map(|p| {
+                let l = frame.to_local(*p);
+                DVec2::new(l.x, l.y)
+            })
+            .collect(),
+        Surface::Cylinder { frame, radius } => {
+            let mut prev: Option<f64> = None;
+            pts.iter()
+                .map(|p| {
+                    let l = frame.to_local(*p);
+                    let mut theta = l.y.atan2(l.x);
+                    if let Some(pr) = prev {
+                        theta += TAU * ((pr - theta) / TAU).round();
+                    }
+                    prev = Some(theta);
+                    DVec2::new(theta * radius, l.z)
+                })
+                .collect()
+        }
+    }
+}

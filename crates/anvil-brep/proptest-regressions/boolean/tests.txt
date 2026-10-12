@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 01cc9cc0b41c1bd74ba38a0a0bd24af06a4628ad66fbb6056bf4190e8033b634 # shrinks to (alo, ahi) = (DVec3(3.0, 3.0, 0.0), DVec3(4.0, 4.0, 1.0)), (blo, bhi) = (DVec3(4.0, 1.0, 0.0), DVec3(5.0, 3.0, 1.0))

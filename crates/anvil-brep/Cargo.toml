@@ -1,0 +1,23 @@
+[package]
+name = "anvil-brep"
+description = "Exact boundary-representation kernel for AnvilCAD: analytic curves and surfaces, exact booleans, extrusion, fillets and chamfers"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+glam = { version = "0.34", features = ["serde"] }
+thiserror = "2"
+spade = "2.15"
+
+[dev-dependencies]
+proptest = "1.11"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
