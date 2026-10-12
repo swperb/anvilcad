@@ -1,0 +1,9 @@
+[package]
+name = "anvil-kernel"
+description = "AnvilCAD geometry kernel: math, profiles, solids, booleans, tessellation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true

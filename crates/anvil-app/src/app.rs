@@ -1,0 +1,2541 @@
+//! Main application window.
+
+use crate::camera::{Camera, StdView};
+use crate::render::{Renderer, SceneData};
+use crate::sketcher::{self, SkSel, SketchSession, Tool};
+use anvil_kernel::{EdgeRef, FaceId, Mesh, ModelEdge, Vec2, Vec3};
+use anvil_model::*;
+use eframe::egui::{self, Color32, Key, Modifiers, RichText, Sense, Stroke};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Selection {
+    None,
+    Plane(PlaneRef),
+    Face(FaceId),
+    Feature(u32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tab {
+    Features,
+    Sketch,
+    Evaluate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlanePurpose {
+    Sketch,
+    RefPlane,
+}
+
+enum Editor {
+    /// Waiting for the user to pick a plane or planar face.
+    PickPlane(PlanePurpose),
+    /// Editing a feature live. Cancel restores `before`.
+    Feature { id: u32, before: Document, is_new: bool, bufs: HashMap<&'static str, String> },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingAction {
+    New,
+    Open,
+    OpenSample,
+    Exit,
+}
+
+#[derive(Default)]
+struct Windows {
+    properties: bool,
+    equations: bool,
+    mass: bool,
+    about: bool,
+}
+
+pub struct AnvilApp {
+    doc: Document,
+    committed: Document,
+    saved: Document,
+    undo: Vec<Document>,
+    redo: Vec<Document>,
+    state: BuildState,
+    mesh: Mesh,
+    edges: Vec<[Vec3; 2]>,
+    scene_dirty: bool,
+    renderer: Arc<Mutex<Renderer>>,
+    camera: Camera,
+    fit_pending: bool,
+    path: Option<PathBuf>,
+    selection: Selection,
+    hover_face: Option<FaceId>,
+    sketch: Option<SketchSession>,
+    editor: Option<Editor>,
+    tab: Tab,
+    windows: Windows,
+    message: Option<(String, String)>,
+    confirm: Option<PendingAction>,
+    show_edges: bool,
+    rename: Option<(u32, String)>,
+    status: String,
+    last_title: String,
+    allow_close: bool,
+    dragging: bool,
+    new_var: String,
+    new_prop: String,
+    screenshot: Option<(PathBuf, u32)>,
+    view_rect: egui::Rect,
+    /// While editing a fillet, chamfer or shell: the body before that feature, which is shown
+    /// and picked from.
+    pick_body: Option<PickBody>,
+    hover_edge: Option<EdgeRef>,
+}
+
+struct PickBody {
+    solid: anvil_kernel::Solid,
+    edges: Vec<ModelEdge>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickKind {
+    Edges,
+    Faces,
+}
+
+impl AnvilApp {
+    pub fn new(
+        ctx: &egui::Context,
+        open: Option<PathBuf>,
+        screenshot: Option<PathBuf>,
+        edit_sketch: Option<u32>,
+    ) -> AnvilApp {
+        let mut style = (*ctx.style()).clone();
+        style.visuals = egui::Visuals::light();
+        style.spacing.item_spacing = egui::vec2(6.0, 5.0);
+        ctx.set_style(style);
+
+        let doc = Document::new();
+        let mut app = AnvilApp {
+            committed: doc.clone(),
+            saved: doc.clone(),
+            doc,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            state: BuildState::default(),
+            mesh: Mesh::default(),
+            edges: Vec::new(),
+            scene_dirty: true,
+            renderer: Arc::new(Mutex::new(Renderer::new())),
+            camera: Camera::default(),
+            fit_pending: true,
+            path: None,
+            selection: Selection::None,
+            hover_face: None,
+            sketch: None,
+            editor: None,
+            tab: Tab::Features,
+            windows: Windows::default(),
+            message: None,
+            confirm: None,
+            show_edges: true,
+            rename: None,
+            status: "Ready".into(),
+            last_title: String::new(),
+            allow_close: false,
+            dragging: false,
+            new_var: String::new(),
+            new_prop: String::new(),
+            screenshot: screenshot.map(|p| (p, 0)),
+            view_rect: egui::Rect::NOTHING,
+            pick_body: None,
+            hover_edge: None,
+        };
+        if let Some(p) = open {
+            if p.as_os_str() == "--sample" {
+                app.load_document(crate::sample::sample_part(), None);
+            } else {
+                app.open_path(&p);
+            }
+        }
+        app.rebuild();
+        if let Some(id) = edit_sketch {
+            app.edit_sketch(id);
+            app.fit_pending = true;
+        }
+        app
+    }
+
+    // ----- document state -------------------------------------------------------------
+
+    fn rebuild(&mut self) {
+        self.state = self.doc.rebuild();
+        if self.pick_target().is_none() {
+            self.pick_body = None;
+        }
+        let shown = self.pick_body.as_ref().map(|p| &p.solid).unwrap_or(&self.state.body);
+        self.mesh = shown.tessellate();
+        self.edges = shown.feature_edges();
+        self.scene_dirty = true;
+        if let Some(s) = &mut self.sketch {
+            if let Some(st) = self.state.sketch_status.get(&s.feature) {
+                s.status = st.clone();
+            }
+        }
+        let errs = self.state.errors.len();
+        self.status =
+            if errs == 0 { "Rebuild OK".into() } else { format!("Rebuild finished with {errs} error(s)") };
+    }
+
+    fn load_document(&mut self, doc: Document, path: Option<PathBuf>) {
+        self.doc = doc;
+        self.committed = self.doc.clone();
+        self.saved = if path.is_some() { self.doc.clone() } else { Document::new() };
+        self.undo.clear();
+        self.redo.clear();
+        self.path = path;
+        self.sketch = None;
+        self.editor = None;
+        self.selection = Selection::None;
+        self.fit_pending = true;
+        self.rebuild();
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.doc != self.saved
+    }
+
+    fn commit_if_changed(&mut self) {
+        let editing_feature = matches!(self.editor, Some(Editor::Feature { .. }));
+        if !self.dragging && !editing_feature && self.doc != self.committed {
+            self.undo.push(std::mem::replace(&mut self.committed, self.doc.clone()));
+            if self.undo.len() > 200 {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+        }
+    }
+
+    fn undo(&mut self) {
+        if let Some(prev) = self.undo.pop() {
+            self.redo.push(std::mem::replace(&mut self.doc, prev));
+            self.after_history_jump();
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(next) = self.redo.pop() {
+            self.undo.push(std::mem::replace(&mut self.doc, next));
+            self.after_history_jump();
+        }
+    }
+
+    fn after_history_jump(&mut self) {
+        self.committed = self.doc.clone();
+        self.editor = None;
+        if let Some(s) = &mut self.sketch {
+            s.selection.clear();
+            s.dim_edit = None;
+            s.cancel_pending();
+            if self.doc.sketch(s.feature).is_none() {
+                self.sketch = None;
+            }
+        }
+        self.rebuild();
+    }
+
+    fn title(&self) -> String {
+        let name = self
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Part1".into());
+        format!("{}{} - AnvilCAD", name, if self.is_dirty() { " *" } else { "" })
+    }
+
+    fn part_name(&self) -> String {
+        self.path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Part1".into())
+    }
+
+    // ----- files -------------------------------------------------------------------------
+
+    fn request(&mut self, a: PendingAction) {
+        if self.is_dirty() {
+            self.confirm = Some(a);
+        } else {
+            self.perform(a);
+        }
+    }
+
+    fn perform(&mut self, a: PendingAction) {
+        match a {
+            PendingAction::New => self.load_document(Document::new(), None),
+            PendingAction::OpenSample => self.load_document(crate::sample::sample_part(), None),
+            PendingAction::Open => {
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter(
+                        "AnvilCAD and SOLIDWORKS files",
+                        &["anvprt", "anvprtdot", "fprt", "sldprt", "sldasm", "slddrw", "prtdot"],
+                    )
+                    .add_filter("AnvilCAD part", &["anvprt"])
+                    .add_filter("AnvilCAD part template", &["anvprtdot"])
+                    .add_filter("SOLIDWORKS", &["sldprt", "sldasm", "slddrw", "prtdot", "asmdot", "drwdot"])
+                    .pick_file()
+                {
+                    self.open_path(&p);
+                }
+            }
+            PendingAction::Exit => {
+                self.allow_close = true;
+            }
+        }
+    }
+
+    fn open_path(&mut self, p: &Path) {
+        match anvil_io::solidworks::identify(p) {
+            Ok(Some(info)) => {
+                self.message = Some(("SOLIDWORKS file".into(), info.explanation()));
+                return;
+            }
+            Err(e) => {
+                self.message = Some(("Open failed".into(), e.to_string()));
+                return;
+            }
+            Ok(None) => {}
+        }
+        let is_template = p.extension().map(|e| e.eq_ignore_ascii_case(PART_TEMPLATE_EXT)).unwrap_or(false);
+        match Document::load(p) {
+            Ok(d) if is_template => self.load_document(Document::from_template(&d), None),
+            Ok(d) => self.load_document(d, Some(p.to_path_buf())),
+            Err(e) => self.message = Some(("Open failed".into(), format!("{}: {e}", p.display()))),
+        }
+    }
+
+    fn save(&mut self, save_as: bool) {
+        let path = match (&self.path, save_as) {
+            (Some(p), false) => Some(p.clone()),
+            _ => rfd::FileDialog::new()
+                .add_filter("AnvilCAD part", &[PART_EXT])
+                .set_file_name(format!("{}.{PART_EXT}", self.part_name()))
+                .save_file(),
+        };
+        let Some(path) = path else { return };
+        match self.doc.save(&path) {
+            Ok(()) => {
+                self.path = Some(path.clone());
+                self.saved = self.doc.clone();
+                self.status = format!("Saved {}", path.display());
+            }
+            Err(e) => self.message = Some(("Save failed".into(), e.to_string())),
+        }
+    }
+
+    fn save_template(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("AnvilCAD part template", &[PART_TEMPLATE_EXT])
+            .set_file_name(format!("Template.{PART_TEMPLATE_EXT}"))
+            .save_file()
+        {
+            match self.doc.save(&path) {
+                Ok(()) => self.status = format!("Template saved to {}", path.display()),
+                Err(e) => self.message = Some(("Save failed".into(), e.to_string())),
+            }
+        }
+    }
+
+    fn export(&mut self) {
+        if self.state.body.is_empty() {
+            self.message = Some(("Export".into(), "There is no solid body to export yet.".into()));
+            return;
+        }
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("STEP AP214", &["step", "stp"])
+            .add_filter("STL", &["stl"])
+            .add_filter("Wavefront OBJ", &["obj"])
+            .set_file_name(format!("{}.step", self.part_name()))
+            .save_file()
+        {
+            match anvil_io::export_by_extension(&self.state.body, &path, &self.part_name()) {
+                Ok(()) => self.status = format!("Exported {}", path.display()),
+                Err(e) => self.message = Some(("Export failed".into(), e.to_string())),
+            }
+        }
+    }
+
+    // ----- commands -------------------------------------------------------------------
+
+    fn start_sketch(&mut self, plane: PlaneRef) {
+        let frame = match plane.standard_frame() {
+            Some(f) => Some(f),
+            None => match plane {
+                PlaneRef::Face(f) => self.state.body.planar_face_frame(f),
+                PlaneRef::Feature(id) => self.state.frames.get(&id).copied(),
+                _ => None,
+            },
+        };
+        let Some(frame) = frame else {
+            self.message = Some(("Sketch".into(), "Select a plane or a planar face.".into()));
+            return;
+        };
+        let id = self.doc.add_feature(FeatureKind::Sketch(SketchFeature::new(plane)));
+        self.editor = None;
+        self.enter_sketch(id, frame);
+    }
+
+    fn enter_sketch(&mut self, id: u32, frame: anvil_kernel::Frame) {
+        let mut s = SketchSession::new(id, frame);
+        if let Some(st) = self.state.sketch_status.get(&id) {
+            s.status = st.clone();
+        }
+        self.camera.normal_to(&frame);
+        self.camera.target = frame.origin;
+        self.sketch = Some(s);
+        self.tab = Tab::Sketch;
+        self.selection = Selection::Feature(id);
+    }
+
+    fn edit_sketch(&mut self, id: u32) {
+        // Make sure the sketch's plane is current before editing.
+        self.rebuild();
+        let frame = self
+            .state
+            .frames
+            .get(&id)
+            .copied()
+            .or_else(|| self.doc.sketch(id).and_then(|s| s.plane.standard_frame()));
+        match frame {
+            Some(f) => self.enter_sketch(id, f),
+            None => {
+                self.message = Some((
+                    "Edit Sketch".into(),
+                    "This sketch's plane could not be resolved. Fix the features it depends on first.".into(),
+                ))
+            }
+        }
+    }
+
+    fn exit_sketch(&mut self) {
+        if let Some(s) = self.sketch.take() {
+            // An empty new sketch is just removed.
+            if let Some(sf) = self.doc.sketch(s.feature) {
+                if sf.sketch.entities.is_empty() && self.doc.dependents(s.feature).is_empty() {
+                    self.doc.delete_feature(s.feature);
+                } else {
+                    self.selection = Selection::Feature(s.feature);
+                }
+            }
+        }
+        self.tab = Tab::Features;
+        self.rebuild();
+    }
+
+    /// The sketch a solid feature should use: the open sketch, or the selected one.
+    fn target_sketch(&self) -> Option<u32> {
+        if let Some(s) = &self.sketch {
+            return Some(s.feature);
+        }
+        match self.selection {
+            Selection::Feature(id) if self.doc.sketch(id).is_some() => Some(id),
+            _ => None,
+        }
+    }
+
+    fn begin_feature(&mut self, make: impl FnOnce(&Document, u32) -> Option<FeatureKind>) {
+        let Some(sk) = self.target_sketch() else {
+            self.message = Some((
+                "Select a sketch".into(),
+                "Select a sketch in the FeatureManager tree (or open one), then run the command.".into(),
+            ));
+            return;
+        };
+        if self.sketch.is_some() {
+            self.exit_sketch();
+        }
+        let before = self.doc.clone();
+        let Some(kind) = make(&self.doc, sk) else { return };
+        let id = self.doc.add_feature(kind);
+        self.open_editor(id, before, true);
+    }
+
+    fn open_editor(&mut self, id: u32, before: Document, is_new: bool) {
+        let mut bufs = HashMap::new();
+        if let Some(f) = self.doc.feature(id) {
+            match &f.kind {
+                FeatureKind::Extrude(e) => {
+                    bufs.insert("depth", e.depth.text());
+                }
+                FeatureKind::Revolve(r) => {
+                    bufs.insert("angle", r.angle.text());
+                }
+                FeatureKind::Plane(p) => {
+                    bufs.insert("offset", p.offset.text());
+                }
+                FeatureKind::LinearPattern(p) => {
+                    bufs.insert("spacing", p.spacing.text());
+                    bufs.insert("count", p.count.text());
+                }
+                FeatureKind::CircularPattern(p) => {
+                    bufs.insert("angle", p.total_angle.text());
+                    bufs.insert("count", p.count.text());
+                }
+                FeatureKind::Sketch(_) => {
+                    self.edit_sketch(id);
+                    return;
+                }
+                FeatureKind::ImportedBody(_) => {}
+                FeatureKind::Fillet(f) => {
+                    bufs.insert("radius", f.radius.text());
+                }
+                FeatureKind::Chamfer(c) => {
+                    bufs.insert("distance", c.distance.text());
+                }
+                FeatureKind::Shell(s) => {
+                    bufs.insert("thickness", s.thickness.text());
+                }
+            }
+        }
+        self.editor = Some(Editor::Feature { id, before, is_new, bufs });
+        self.selection = Selection::Feature(id);
+        if self.pick_target().is_some() {
+            self.compute_pick_body(id);
+        }
+        self.rebuild();
+    }
+
+    fn cmd_extrude(&mut self, op: BodyOp) {
+        self.begin_feature(|_, sk| {
+            Some(FeatureKind::Extrude(ExtrudeFeature {
+                sketch: sk,
+                end: if op == BodyOp::Cut { EndCondition::ThroughAll } else { EndCondition::Blind },
+                depth: Dim::Value(10.0),
+                reverse: false,
+                op,
+            }))
+        });
+    }
+
+    fn cmd_revolve(&mut self, op: BodyOp) {
+        let mut err = None;
+        self.begin_feature(|doc, sk| {
+            let sketch = &doc.sketch(sk)?.sketch;
+            let lines: Vec<usize> =
+                (0..sketch.entities.len()).filter(|&e| sketch.entities[e].is_line()).collect();
+            let axis =
+                lines.iter().copied().find(|&e| sketch.entities[e].construction).or(lines.first().copied());
+            match axis {
+                Some(axis) => Some(FeatureKind::Revolve(RevolveFeature {
+                    sketch: sk,
+                    axis,
+                    angle: Dim::Value(360.0),
+                    op,
+                })),
+                None => {
+                    err = Some("A revolve needs a line in the sketch to use as its axis. Add a centerline.");
+                    None
+                }
+            }
+        });
+        if let Some(e) = err {
+            self.message = Some(("Revolve".into(), e.into()));
+        }
+    }
+
+    fn cmd_pattern(&mut self, circular: bool) {
+        let seed = match self.selection {
+            Selection::Feature(id) => match self.doc.feature(id).map(|f| &f.kind) {
+                Some(FeatureKind::Extrude(_)) | Some(FeatureKind::Revolve(_)) => Some(id),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(seed) = seed else {
+            self.message = Some((
+                "Pattern".into(),
+                "Select an extrude or revolve feature in the tree to pattern.".into(),
+            ));
+            return;
+        };
+        let before = self.doc.clone();
+        let kind = if circular {
+            FeatureKind::CircularPattern(CircularPatternFeature {
+                features: vec![seed],
+                axis: Axis::Y,
+                total_angle: Dim::Value(360.0),
+                count: Dim::Value(4.0),
+            })
+        } else {
+            FeatureKind::LinearPattern(LinearPatternFeature {
+                features: vec![seed],
+                direction: Axis::X,
+                spacing: Dim::Value(20.0),
+                count: Dim::Value(3.0),
+            })
+        };
+        let id = self.doc.add_feature(kind);
+        self.open_editor(id, before, true);
+    }
+
+    fn selected_plane(&self) -> Option<PlaneRef> {
+        match self.selection {
+            Selection::Plane(p) => Some(p),
+            Selection::Face(f) if self.state.body.planar_face_frame(f).is_some() => Some(PlaneRef::Face(f)),
+            Selection::Feature(id) => match self.doc.feature(id)?.kind {
+                FeatureKind::Plane(_) => Some(PlaneRef::Feature(id)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn cmd_sketch(&mut self) {
+        if let Some(p) = self.selected_plane() {
+            self.start_sketch(p);
+        } else {
+            self.editor = Some(Editor::PickPlane(PlanePurpose::Sketch));
+        }
+    }
+
+    /// The feature being edited when it picks edges or faces from the model.
+    fn pick_target(&self) -> Option<(u32, PickKind)> {
+        let Some(Editor::Feature { id, .. }) = &self.editor else { return None };
+        match self.doc.feature(*id)?.kind {
+            FeatureKind::Fillet(_) | FeatureKind::Chamfer(_) => Some((*id, PickKind::Edges)),
+            FeatureKind::Shell(_) => Some((*id, PickKind::Faces)),
+            _ => None,
+        }
+    }
+
+    /// Rebuilds the model as it stands before `id`, for picking.
+    fn compute_pick_body(&mut self, id: u32) {
+        let mut d = self.doc.clone();
+        d.rollback = d.index_of(id);
+        let solid = d.rebuild().body;
+        self.pick_body = Some(PickBody { edges: solid.model_edges(), solid });
+    }
+
+    fn cmd_edge_treatment(&mut self, chamfer: bool) {
+        if self.state.body.is_empty() {
+            self.message = Some(("Fillet".into(), "There is no body to fillet yet.".into()));
+            return;
+        }
+        let before = self.doc.clone();
+        let kind = if chamfer {
+            FeatureKind::Chamfer(ChamferFeature { edges: Vec::new(), distance: Dim::Value(1.0) })
+        } else {
+            FeatureKind::Fillet(FilletFeature { edges: Vec::new(), radius: Dim::Value(2.0) })
+        };
+        let id = self.doc.add_feature(kind);
+        self.open_editor(id, before, true);
+    }
+
+    fn cmd_shell(&mut self) {
+        if self.state.body.is_empty() {
+            self.message = Some(("Shell".into(), "There is no body to shell yet.".into()));
+            return;
+        }
+        let remove = match self.selection {
+            Selection::Face(f) => vec![f],
+            _ => Vec::new(),
+        };
+        let before = self.doc.clone();
+        let id =
+            self.doc.add_feature(FeatureKind::Shell(ShellFeature { remove, thickness: Dim::Value(1.0) }));
+        self.open_editor(id, before, true);
+    }
+
+    fn cmd_plane(&mut self) {
+        if let Some(p) = self.selected_plane() {
+            self.create_ref_plane(p);
+        } else {
+            self.editor = Some(Editor::PickPlane(PlanePurpose::RefPlane));
+        }
+    }
+
+    fn create_ref_plane(&mut self, base: PlaneRef) {
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::Plane(PlaneFeature {
+            base,
+            offset: Dim::Value(10.0),
+            flip: false,
+        }));
+        self.open_editor(id, before, true);
+    }
+
+    fn plane_picked(&mut self, p: PlaneRef) {
+        match self.editor {
+            Some(Editor::PickPlane(PlanePurpose::Sketch)) => self.start_sketch(p),
+            Some(Editor::PickPlane(PlanePurpose::RefPlane)) => self.create_ref_plane(p),
+            _ => {}
+        }
+    }
+
+    fn delete_selected_feature(&mut self) {
+        if let Selection::Feature(id) = self.selection {
+            let gone = self.doc.delete_feature(id);
+            self.status = format!("Deleted {} feature(s)", gone.len());
+            self.selection = Selection::None;
+            self.rebuild();
+        }
+    }
+
+    // ----- UI: top bars ---------------------------------------------------------------
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        egui::menu::bar(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("New            Ctrl+N").clicked() {
+                    ui.close_menu();
+                    self.request(PendingAction::New);
+                }
+                if ui.button("Open...        Ctrl+O").clicked() {
+                    ui.close_menu();
+                    self.request(PendingAction::Open);
+                }
+                ui.separator();
+                if ui.button("Save           Ctrl+S").clicked() {
+                    ui.close_menu();
+                    self.save(false);
+                }
+                if ui.button("Save As...").clicked() {
+                    ui.close_menu();
+                    self.save(true);
+                }
+                if ui.button("Save as Part Template...").clicked() {
+                    ui.close_menu();
+                    self.save_template();
+                }
+                if ui.button("Export (STEP / STL / OBJ)...").clicked() {
+                    ui.close_menu();
+                    self.export();
+                }
+                ui.separator();
+                if ui.button("Properties...").clicked() {
+                    ui.close_menu();
+                    self.windows.properties = true;
+                }
+                ui.separator();
+                if ui.button("Exit").clicked() {
+                    ui.close_menu();
+                    self.request(PendingAction::Exit);
+                }
+            });
+            ui.menu_button("Edit", |ui| {
+                if ui.add_enabled(!self.undo.is_empty(), egui::Button::new("Undo   Ctrl+Z")).clicked() {
+                    ui.close_menu();
+                    self.undo();
+                }
+                if ui.add_enabled(!self.redo.is_empty(), egui::Button::new("Redo   Ctrl+Y")).clicked() {
+                    ui.close_menu();
+                    self.redo();
+                }
+                ui.separator();
+                if ui.button("Rebuild   Ctrl+B").clicked() {
+                    ui.close_menu();
+                    self.rebuild();
+                }
+            });
+            ui.menu_button("View", |ui| {
+                for (i, v) in StdView::ALL.iter().enumerate() {
+                    if ui.button(format!("{:<12} Ctrl+{}", v.label(), i + 1)).clicked() {
+                        ui.close_menu();
+                        self.camera.set_view(*v);
+                        self.fit_pending = true;
+                    }
+                }
+                if ui.button("Zoom to Fit    F").clicked() {
+                    ui.close_menu();
+                    self.fit_pending = true;
+                }
+                ui.checkbox(&mut self.show_edges, "Shaded with edges");
+            });
+            ui.menu_button("Tools", |ui| {
+                if ui.button("Equations...").clicked() {
+                    ui.close_menu();
+                    self.windows.equations = true;
+                }
+                if ui.button("Mass Properties...").clicked() {
+                    ui.close_menu();
+                    self.windows.mass = true;
+                }
+            });
+            ui.menu_button("Help", |ui| {
+                if ui.button("Open Sample Part").clicked() {
+                    ui.close_menu();
+                    self.request(PendingAction::OpenSample);
+                }
+                if ui.button("About AnvilCAD").clicked() {
+                    ui.close_menu();
+                    self.windows.about = true;
+                }
+            });
+        });
+    }
+
+    fn command_manager(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            for (t, label) in
+                [(Tab::Features, "Features"), (Tab::Sketch, "Sketch"), (Tab::Evaluate, "Evaluate")]
+            {
+                if ui.selectable_label(self.tab == t, RichText::new(label).strong()).clicked() {
+                    self.tab = t;
+                }
+            }
+        });
+        ui.separator();
+        ui.horizontal_wrapped(|ui| match self.tab {
+            Tab::Features => {
+                if ui.button("Extruded Boss/Base").clicked() {
+                    self.cmd_extrude(BodyOp::Boss);
+                }
+                if ui.button("Revolved Boss/Base").clicked() {
+                    self.cmd_revolve(BodyOp::Boss);
+                }
+                if ui.button("Extruded Cut").clicked() {
+                    self.cmd_extrude(BodyOp::Cut);
+                }
+                if ui.button("Revolved Cut").clicked() {
+                    self.cmd_revolve(BodyOp::Cut);
+                }
+                ui.separator();
+                if ui.button("Linear Pattern").clicked() {
+                    self.cmd_pattern(false);
+                }
+                if ui.button("Circular Pattern").clicked() {
+                    self.cmd_pattern(true);
+                }
+                ui.separator();
+                if ui.button("Fillet").clicked() {
+                    self.cmd_edge_treatment(false);
+                }
+                if ui.button("Chamfer").clicked() {
+                    self.cmd_edge_treatment(true);
+                }
+                if ui.button("Shell").clicked() {
+                    self.cmd_shell();
+                }
+                ui.separator();
+                if ui.button("Reference Plane").clicked() {
+                    self.cmd_plane();
+                }
+            }
+            Tab::Sketch => {
+                if self.sketch.is_none() {
+                    if ui.button("Sketch").clicked() {
+                        self.cmd_sketch();
+                    }
+                    ui.label("Select a plane or planar face, then click Sketch.");
+                } else {
+                    let tools = [
+                        Tool::Select,
+                        Tool::Line,
+                        Tool::Centerline,
+                        Tool::Rectangle,
+                        Tool::Circle,
+                        Tool::Arc,
+                        Tool::Dimension,
+                    ];
+                    let s = self.sketch.as_mut().unwrap();
+                    for t in tools {
+                        if ui.selectable_label(s.tool == t, t.label()).clicked() {
+                            s.set_tool(t);
+                        }
+                    }
+                    ui.separator();
+                    if ui.button("Exit Sketch").clicked() {
+                        self.exit_sketch();
+                    }
+                }
+            }
+            Tab::Evaluate => {
+                if ui.button("Mass Properties").clicked() {
+                    self.windows.mass = true;
+                }
+                if ui.button("Equations").clicked() {
+                    self.windows.equations = true;
+                }
+                if ui.button("Custom Properties").clicked() {
+                    self.windows.properties = true;
+                }
+            }
+        });
+    }
+
+    // ----- UI: left panel ---------------------------------------------------------------
+
+    fn feature_tree(&mut self, ui: &mut egui::Ui) {
+        ui.heading(self.part_name());
+        let mat = self
+            .doc
+            .material
+            .as_ref()
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| "Material <not specified>".into());
+        if ui.selectable_label(false, format!("  {mat}")).clicked() {
+            self.windows.properties = true;
+        }
+        for p in [PlaneRef::Front, PlaneRef::Top, PlaneRef::Right] {
+            let sel = self.selection == Selection::Plane(p);
+            let r = ui.selectable_label(sel, format!("  {}", p.label()));
+            if r.clicked() {
+                self.selection = Selection::Plane(p);
+                if matches!(self.editor, Some(Editor::PickPlane(_))) {
+                    self.plane_picked(p);
+                }
+            }
+            r.context_menu(|ui| {
+                if ui.button("Sketch").clicked() {
+                    ui.close_menu();
+                    self.start_sketch(p);
+                }
+                if ui.button("Normal To").clicked() {
+                    ui.close_menu();
+                    if let Some(f) = p.standard_frame() {
+                        self.camera.normal_to(&f);
+                    }
+                }
+            });
+        }
+        ui.label("  Origin");
+        ui.separator();
+
+        let rollback = self.doc.rollback.unwrap_or(usize::MAX);
+        let mut action: Option<(u32, &'static str)> = None;
+        let features: Vec<(usize, u32, String, bool, String)> = self
+            .doc
+            .features
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i, f.id, f.name.clone(), f.suppressed, icon(&f.kind).to_string()))
+            .collect();
+        for (i, id, name, suppressed, ic) in features {
+            if i == rollback {
+                rollback_bar(ui);
+            }
+            let rolled = i >= rollback;
+            let err = self.state.errors.get(&id).cloned();
+            if let Some((rid, buf)) = &mut self.rename {
+                if *rid == id {
+                    let r = ui.text_edit_singleline(buf);
+                    if r.lost_focus() {
+                        let (rid, buf) = self.rename.take().unwrap();
+                        if !buf.trim().is_empty() {
+                            if let Some(f) = self.doc.feature_mut(rid) {
+                                f.name = buf.trim().to_string();
+                            }
+                        }
+                    } else {
+                        r.request_focus();
+                    }
+                    continue;
+                }
+            }
+            let mut text = RichText::new(format!("{ic} {name}"));
+            if suppressed || rolled {
+                text = text.color(Color32::GRAY).italics();
+            }
+            if err.is_some() {
+                text = RichText::new(format!("{ic} {name}  (!)")).color(Color32::from_rgb(200, 30, 30));
+            }
+            let sel = self.selection == Selection::Feature(id);
+            let r = ui.selectable_label(sel, text);
+            let r = match &err {
+                Some(e) => r.on_hover_text(e),
+                None => r,
+            };
+            // Migration and provenance notes.
+            let r = match self.doc.feature(id).and_then(|f| f.note.clone()) {
+                Some(n) => r.on_hover_text(n),
+                None => r,
+            };
+            if r.clicked() {
+                self.selection = Selection::Feature(id);
+                if matches!(self.editor, Some(Editor::PickPlane(_))) {
+                    if let Some(FeatureKind::Plane(_)) = self.doc.feature(id).map(|f| &f.kind) {
+                        self.plane_picked(PlaneRef::Feature(id));
+                    }
+                }
+            }
+            if r.double_clicked() {
+                action = Some((id, "edit"));
+            }
+            r.context_menu(|ui| {
+                let is_sketch = self.doc.sketch(id).is_some();
+                if ui.button(if is_sketch { "Edit Sketch" } else { "Edit Feature" }).clicked() {
+                    action = Some((id, "edit"));
+                    ui.close_menu();
+                }
+                if ui.button(if suppressed { "Unsuppress" } else { "Suppress" }).clicked() {
+                    action = Some((id, "suppress"));
+                    ui.close_menu();
+                }
+                if ui.button("Rename").clicked() {
+                    action = Some((id, "rename"));
+                    ui.close_menu();
+                }
+                if ui.button("Roll Back to Here").clicked() {
+                    action = Some((id, "rollback"));
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("Delete").clicked() {
+                    action = Some((id, "delete"));
+                    ui.close_menu();
+                }
+            });
+        }
+        if rollback <= self.doc.features.len() && self.doc.rollback.is_some() {
+            if rollback == self.doc.features.len() {
+                rollback_bar(ui);
+            }
+            if ui.button("Roll to End").clicked() {
+                self.doc.rollback = None;
+                self.rebuild();
+            }
+        }
+
+        if let Some((id, what)) = action {
+            match what {
+                "edit" => {
+                    let before = self.doc.clone();
+                    self.open_editor(id, before, false);
+                }
+                "suppress" => {
+                    if let Some(f) = self.doc.feature_mut(id) {
+                        f.suppressed = !f.suppressed;
+                    }
+                    self.rebuild();
+                }
+                "rename" => {
+                    let name = self.doc.feature(id).map(|f| f.name.clone()).unwrap_or_default();
+                    self.rename = Some((id, name));
+                }
+                "rollback" => {
+                    self.doc.rollback = self.doc.index_of(id);
+                    self.rebuild();
+                }
+                "delete" => {
+                    self.selection = Selection::Feature(id);
+                    self.delete_selected_feature();
+                }
+                _ => {}
+            }
+        }
+
+        if !self.state.variable_errors.is_empty() {
+            ui.separator();
+            for (n, e) in &self.state.variable_errors {
+                ui.colored_label(Color32::from_rgb(200, 30, 30), format!("Equation '{n}': {e}"));
+            }
+        }
+    }
+
+    fn dim_field(
+        ui: &mut egui::Ui,
+        label: &str,
+        dim: &mut Dim,
+        buf: &mut String,
+        vars: &std::collections::BTreeMap<String, f64>,
+    ) -> bool {
+        let mut changed = false;
+        ui.horizontal(|ui| {
+            ui.label(label);
+            let r = ui.add(egui::TextEdit::singleline(buf).desired_width(110.0));
+            if r.changed() {
+                let d = Dim::parse(buf);
+                if d.eval(vars).is_ok() {
+                    *dim = d;
+                    changed = true;
+                }
+            }
+            match Dim::parse(buf).eval(vars) {
+                Ok(v) if matches!(Dim::parse(buf), Dim::Expr(_)) => {
+                    ui.weak(format!("= {}", sketcher::format_num(v)));
+                }
+                Err(e) => {
+                    ui.colored_label(Color32::from_rgb(200, 30, 30), "!").on_hover_text(e.to_string());
+                }
+                _ => {}
+            }
+        });
+        changed
+    }
+
+    fn property_manager(&mut self, ui: &mut egui::Ui) {
+        let Some(editor) = &mut self.editor else { return };
+        match editor {
+            Editor::PickPlane(purpose) => {
+                ui.heading(if *purpose == PlanePurpose::Sketch { "Sketch" } else { "Plane" });
+                ui.label("Select a plane in the tree or a planar face in the graphics area.");
+                let mut picked = None;
+                for p in [PlaneRef::Front, PlaneRef::Top, PlaneRef::Right] {
+                    if ui.button(p.label()).clicked() {
+                        picked = Some(p);
+                    }
+                }
+                if ui.button("Cancel").clicked() {
+                    self.editor = None;
+                }
+                if let Some(p) = picked {
+                    self.plane_picked(p);
+                }
+            }
+            Editor::Feature { id, bufs, .. } => {
+                let id = *id;
+                let vars = self.state.variables.clone();
+                let sketch_names: HashMap<u32, String> =
+                    self.doc.features.iter().map(|f| (f.id, f.name.clone())).collect();
+                // Line entities of a revolve's sketch, offered as axis choices.
+                let axis_options: Vec<(usize, String)> = match self.doc.feature(id).map(|f| &f.kind) {
+                    Some(FeatureKind::Revolve(r)) => self
+                        .doc
+                        .sketch(r.sketch)
+                        .map(|sf| {
+                            sf.sketch
+                                .entities
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, e)| e.is_line())
+                                .map(|(i, e)| {
+                                    (
+                                        i,
+                                        format!(
+                                            "Line {}{}",
+                                            i + 1,
+                                            if e.construction { " (centerline)" } else { "" }
+                                        ),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
+                };
+                let Some(f) = self.doc.feature_mut(id) else {
+                    self.editor = None;
+                    return;
+                };
+                ui.heading(&f.name);
+                let mut changed = false;
+                match &mut f.kind {
+                    FeatureKind::Extrude(e) => {
+                        ui.label(format!(
+                            "Sketch: {}",
+                            sketch_names.get(&e.sketch).cloned().unwrap_or_default()
+                        ));
+                        egui::ComboBox::from_label("Operation")
+                            .selected_text(if e.op == BodyOp::Boss { "Boss" } else { "Cut" })
+                            .show_ui(ui, |ui| {
+                                changed |= ui.selectable_value(&mut e.op, BodyOp::Boss, "Boss").changed();
+                                changed |= ui.selectable_value(&mut e.op, BodyOp::Cut, "Cut").changed();
+                            });
+                        egui::ComboBox::from_label("End condition").selected_text(e.end.label()).show_ui(
+                            ui,
+                            |ui| {
+                                for c in EndCondition::ALL {
+                                    changed |= ui.selectable_value(&mut e.end, c, c.label()).changed();
+                                }
+                            },
+                        );
+                        if e.end.uses_depth() {
+                            changed |= Self::dim_field(
+                                ui,
+                                "Depth (mm)",
+                                &mut e.depth,
+                                bufs.entry("depth").or_default(),
+                                &vars,
+                            );
+                        }
+                        changed |= ui.checkbox(&mut e.reverse, "Reverse direction").changed();
+                    }
+                    FeatureKind::Revolve(r) => {
+                        ui.label(format!(
+                            "Sketch: {}",
+                            sketch_names.get(&r.sketch).cloned().unwrap_or_default()
+                        ));
+                        changed |= Self::dim_field(
+                            ui,
+                            "Angle (deg)",
+                            &mut r.angle,
+                            bufs.entry("angle").or_default(),
+                            &vars,
+                        );
+                        egui::ComboBox::from_label("Operation")
+                            .selected_text(if r.op == BodyOp::Boss { "Boss" } else { "Cut" })
+                            .show_ui(ui, |ui| {
+                                changed |= ui.selectable_value(&mut r.op, BodyOp::Boss, "Boss").changed();
+                                changed |= ui.selectable_value(&mut r.op, BodyOp::Cut, "Cut").changed();
+                            });
+                        let label = |e: &usize| {
+                            axis_options
+                                .iter()
+                                .find(|(i, _)| i == e)
+                                .map(|(_, l)| l.clone())
+                                .unwrap_or_else(|| "<missing>".into())
+                        };
+                        egui::ComboBox::from_label("Axis").selected_text(label(&r.axis)).show_ui(ui, |ui| {
+                            for (e, l) in &axis_options {
+                                changed |= ui.selectable_value(&mut r.axis, *e, l).changed();
+                            }
+                        });
+                    }
+                    FeatureKind::Plane(p) => {
+                        ui.label(format!("Base: {}", p.base.label()));
+                        changed |= Self::dim_field(
+                            ui,
+                            "Offset (mm)",
+                            &mut p.offset,
+                            bufs.entry("offset").or_default(),
+                            &vars,
+                        );
+                        changed |= ui.checkbox(&mut p.flip, "Flip offset").changed();
+                    }
+                    FeatureKind::LinearPattern(p) => {
+                        let names: Vec<String> =
+                            p.features.iter().filter_map(|i| sketch_names.get(i).cloned()).collect();
+                        ui.label(format!("Features: {}", names.join(", ")));
+                        egui::ComboBox::from_label("Direction").selected_text(p.direction.label()).show_ui(
+                            ui,
+                            |ui| {
+                                for a in [Axis::X, Axis::Y, Axis::Z] {
+                                    changed |=
+                                        ui.selectable_value(&mut p.direction, a, format!("{a:?}")).changed();
+                                }
+                            },
+                        );
+                        changed |= Self::dim_field(
+                            ui,
+                            "Spacing (mm)",
+                            &mut p.spacing,
+                            bufs.entry("spacing").or_default(),
+                            &vars,
+                        );
+                        changed |= Self::dim_field(
+                            ui,
+                            "Instances",
+                            &mut p.count,
+                            bufs.entry("count").or_default(),
+                            &vars,
+                        );
+                    }
+                    FeatureKind::CircularPattern(p) => {
+                        let names: Vec<String> =
+                            p.features.iter().filter_map(|i| sketch_names.get(i).cloned()).collect();
+                        ui.label(format!("Features: {}", names.join(", ")));
+                        egui::ComboBox::from_label("Axis").selected_text(p.axis.label()).show_ui(ui, |ui| {
+                            for a in [Axis::X, Axis::Y, Axis::Z] {
+                                changed |= ui.selectable_value(&mut p.axis, a, format!("{a:?}")).changed();
+                            }
+                        });
+                        changed |= Self::dim_field(
+                            ui,
+                            "Total angle (deg)",
+                            &mut p.total_angle,
+                            bufs.entry("angle").or_default(),
+                            &vars,
+                        );
+                        changed |= Self::dim_field(
+                            ui,
+                            "Instances",
+                            &mut p.count,
+                            bufs.entry("count").or_default(),
+                            &vars,
+                        );
+                    }
+                    FeatureKind::ImportedBody(ib) => {
+                        ui.label(format!("Geometry imported from {}.", ib.source));
+                        if !ib.replaces.is_empty() {
+                            ui.label(format!("Stands in for: {}", ib.replaces.join(", ")));
+                        }
+                        ui.label(format!("{} faces", ib.faces.len()));
+                        ui.weak("Features above it are parametric; this body is fixed geometry.");
+                    }
+                    FeatureKind::Fillet(fl) => {
+                        changed |= Self::dim_field(
+                            ui,
+                            "Radius (mm)",
+                            &mut fl.radius,
+                            bufs.entry("radius").or_default(),
+                            &vars,
+                        );
+                        ui.label(format!("{} edge(s) selected.", fl.edges.len()));
+                        ui.weak("Click edges in the graphics area to add or remove them.");
+                        if !fl.edges.is_empty() && ui.button("Clear selection").clicked() {
+                            fl.edges.clear();
+                            changed = true;
+                        }
+                    }
+                    FeatureKind::Chamfer(ch) => {
+                        changed |= Self::dim_field(
+                            ui,
+                            "Distance (mm)",
+                            &mut ch.distance,
+                            bufs.entry("distance").or_default(),
+                            &vars,
+                        );
+                        ui.label(format!("{} edge(s) selected.", ch.edges.len()));
+                        ui.weak("Click edges in the graphics area to add or remove them.");
+                        if !ch.edges.is_empty() && ui.button("Clear selection").clicked() {
+                            ch.edges.clear();
+                            changed = true;
+                        }
+                    }
+                    FeatureKind::Shell(sh) => {
+                        changed |= Self::dim_field(
+                            ui,
+                            "Thickness (mm)",
+                            &mut sh.thickness,
+                            bufs.entry("thickness").or_default(),
+                            &vars,
+                        );
+                        ui.label(format!("{} face(s) to remove.", sh.remove.len()));
+                        ui.weak("Click faces to open them; leave none for a closed hollow part.");
+                        if !sh.remove.is_empty() && ui.button("Clear selection").clicked() {
+                            sh.remove.clear();
+                            changed = true;
+                        }
+                    }
+                    FeatureKind::Sketch(_) => {}
+                }
+                if let Some(e) = self.state.errors.get(&id) {
+                    ui.colored_label(Color32::from_rgb(200, 30, 30), e);
+                }
+                ui.separator();
+                let mut close: Option<bool> = None;
+                ui.horizontal(|ui| {
+                    if ui.button(RichText::new("  OK  ").strong()).clicked() {
+                        close = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = Some(false);
+                    }
+                });
+                if changed {
+                    self.rebuild();
+                }
+                if let Some(ok) = close {
+                    self.finish_editor(ok);
+                }
+            }
+        }
+    }
+
+    /// Closes the feature PropertyManager: OK keeps the edit, Cancel restores the model.
+    fn finish_editor(&mut self, ok: bool) {
+        if let Some(Editor::Feature { before, is_new, .. }) = self.editor.take() {
+            if !ok {
+                self.doc = before;
+                if is_new {
+                    self.selection = Selection::None;
+                }
+            }
+        }
+        self.rebuild();
+    }
+
+    fn sketch_manager(&mut self, ui: &mut egui::Ui) {
+        let Some(s) = &mut self.sketch else { return };
+        let Some(sf) = self.doc.sketch_mut(s.feature) else {
+            self.sketch = None;
+            return;
+        };
+        ui.heading("Sketch");
+        let color = if !s.status.converged {
+            Color32::from_rgb(200, 30, 30)
+        } else if s.status.dof == 0 {
+            Color32::BLACK
+        } else {
+            Color32::from_rgb(20, 60, 230)
+        };
+        ui.colored_label(color, s.status.status_text());
+        ui.label(format!("Tool: {}", s.tool.label()));
+        ui.horizontal_wrapped(|ui| {
+            for t in [
+                Tool::Select,
+                Tool::Line,
+                Tool::Centerline,
+                Tool::Rectangle,
+                Tool::Circle,
+                Tool::Arc,
+                Tool::Dimension,
+            ] {
+                if ui.selectable_label(s.tool == t, t.label()).clicked() {
+                    s.set_tool(t);
+                }
+            }
+        });
+        ui.separator();
+
+        // Dimension editor.
+        let mut solve = false;
+        if let Some((ci, text)) = &mut s.dim_edit {
+            let ci = *ci;
+            if let Some(c) = sf.sketch.constraints.get(ci).copied() {
+                ui.label(RichText::new(format!("Modify {}", c.label())).strong());
+                let r = ui.add(
+                    egui::TextEdit::singleline(text).desired_width(140.0).hint_text("value or =expression"),
+                );
+                ui.weak("Enter a number, or =name to link a global variable.");
+                if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    let d = Dim::parse(text);
+                    match d.eval(&self.state.variables) {
+                        Ok(v) => {
+                            sf.sketch.constraints[ci].set_value(v);
+                            sf.set_driven(
+                                ci,
+                                match d {
+                                    Dim::Expr(e) => Some(e),
+                                    Dim::Value(_) => None,
+                                },
+                            );
+                            solve = true;
+                        }
+                        Err(e) => {
+                            self.status = format!("Invalid dimension: {e}");
+                        }
+                    }
+                }
+                ui.separator();
+            } else {
+                s.dim_edit = None;
+            }
+        }
+
+        // Relations for the selection.
+        let rels = s.available_relations(&sf.sketch);
+        if !rels.is_empty() {
+            ui.label(RichText::new("Add Relations").strong());
+            ui.horizontal_wrapped(|ui| {
+                for (name, c) in rels {
+                    if ui.button(name).clicked() {
+                        sf.sketch.add_constraint(c);
+                        solve = true;
+                    }
+                }
+            });
+        }
+        let ents = s.selected_entities();
+        if !ents.is_empty() {
+            let all_cons = ents.iter().all(|&e| sf.sketch.entities[e].construction);
+            let mut cons = all_cons;
+            if ui.checkbox(&mut cons, "For construction").changed() {
+                for &e in &ents {
+                    sf.sketch.entities[e].construction = cons;
+                }
+            }
+        }
+        if !s.selection.is_empty() && ui.button("Delete Selected  (Del)").clicked() {
+            s.delete_selection(sf);
+        }
+        ui.separator();
+
+        // Existing relations.
+        egui::CollapsingHeader::new(format!("Relations ({})", sf.sketch.constraints.len()))
+            .default_open(false)
+            .show(ui, |ui| {
+                let mut del = None;
+                for (ci, c) in sf.sketch.constraints.iter().enumerate() {
+                    let bad = s.status.unsatisfied.contains(&ci);
+                    ui.horizontal(|ui| {
+                        let mut t = RichText::new(match c.value() {
+                            Some(v) => format!(
+                                "{} = {}",
+                                c.label(),
+                                sketcher::format_num(sketcher::display_value(c, v))
+                            ),
+                            None => c.label().to_string(),
+                        });
+                        if bad {
+                            t = t.color(Color32::from_rgb(200, 30, 30));
+                        }
+                        if ui.selectable_label(s.selection.contains(&SkSel::Constraint(ci)), t).clicked() {
+                            s.selection = vec![SkSel::Constraint(ci)];
+                        }
+                        let is_origin =
+                            matches!(c, anvil_sketch::Constraint::Fix { p: anvil_sketch::ORIGIN, .. });
+                        if !is_origin && ui.small_button("x").clicked() {
+                            del = Some(ci);
+                        }
+                    });
+                }
+                if let Some(ci) = del {
+                    sf.delete_constraint(ci);
+                    s.selection.clear();
+                    s.dim_edit = None;
+                    solve = true;
+                }
+            });
+        if solve {
+            s.status = sf.sketch.solve();
+        }
+        ui.separator();
+        let mut exit = false;
+        ui.horizontal(|ui| {
+            if ui.button(RichText::new("Exit Sketch").strong()).clicked() {
+                exit = true;
+            }
+        });
+        ui.weak("Middle-drag: rotate. Ctrl+middle or right-drag: pan. Wheel: zoom. Esc: cancel tool.");
+        if exit {
+            self.exit_sketch();
+        }
+    }
+
+    // ----- UI: viewport ---------------------------------------------------------------
+
+    fn viewport(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.available_rect_before_wrap();
+        self.view_rect = rect;
+        let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+
+        // Background gradient.
+        let mut mesh = egui::Mesh::default();
+        let (top, bottom) = (Color32::from_rgb(200, 214, 232), Color32::from_rgb(250, 251, 253));
+        mesh.colored_vertex(rect.left_top(), top);
+        mesh.colored_vertex(rect.right_top(), top);
+        mesh.colored_vertex(rect.right_bottom(), bottom);
+        mesh.colored_vertex(rect.left_bottom(), bottom);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+
+        if self.fit_pending && rect.width() > 10.0 {
+            let mut b = self.state.body.bounds();
+            if b.is_empty() {
+                for f in self.state.frames.values() {
+                    b.add(f.origin);
+                }
+            }
+            self.camera.fit(&b, rect);
+            self.fit_pending = false;
+        }
+
+        // Camera navigation.
+        let (scroll, mods, middle, secondary_down, delta, pointer_in) = ui.input(|i| {
+            (
+                i.smooth_scroll_delta.y,
+                i.modifiers,
+                i.pointer.button_down(egui::PointerButton::Middle),
+                i.pointer.button_down(egui::PointerButton::Secondary),
+                i.pointer.delta(),
+                i.pointer.hover_pos().is_some_and(|p| rect.contains(p)),
+            )
+        });
+        if pointer_in && scroll != 0.0 {
+            if let Some(p) = resp.hover_pos() {
+                self.camera.zoom_at((-scroll as f64 * 0.0025).exp(), p, rect);
+            }
+        }
+        if resp.dragged_by(egui::PointerButton::Middle)
+            || (middle && resp.hovered() && delta != egui::Vec2::ZERO)
+        {
+            if mods.ctrl {
+                self.camera.pan(delta.x as f64, delta.y as f64, rect);
+            } else if mods.shift {
+                self.camera.zoom_at((delta.y as f64 * 0.01).exp(), rect.center(), rect);
+            } else {
+                self.camera.orbit(delta.x as f64, delta.y as f64);
+            }
+        }
+        if resp.dragged_by(egui::PointerButton::Secondary) && secondary_down {
+            self.camera.pan(delta.x as f64, delta.y as f64, rect);
+        }
+
+        // Picking edges or faces for a fillet, chamfer or shell being edited.
+        if let (Some((fid, kind)), true) = (self.pick_target(), self.sketch.is_none()) {
+            let clicked = resp.clicked_by(egui::PointerButton::Primary);
+            match kind {
+                PickKind::Edges => {
+                    let hit = resp.hover_pos().and_then(|m| self.nearest_edge(m, rect));
+                    self.hover_edge = hit;
+                    if self.hover_face.is_some() {
+                        self.hover_face = None;
+                        self.scene_dirty = true;
+                    }
+                    if let (true, Some(e)) = (clicked, hit) {
+                        self.toggle_pick(fid, Some(e), None);
+                    }
+                }
+                PickKind::Faces => {
+                    let hit = resp
+                        .hover_pos()
+                        .and_then(|p| {
+                            let (o, d) = self.camera.ray(p, rect);
+                            self.pick_body.as_ref()?.solid.raycast(o, d)
+                        })
+                        .map(|h| h.tag.id);
+                    if hit != self.hover_face {
+                        self.hover_face = hit;
+                        self.scene_dirty = true;
+                    }
+                    if let (true, Some(f)) = (clicked, hit) {
+                        self.toggle_pick(fid, None, Some(f));
+                    }
+                }
+            }
+        } else if self.sketch.is_none() {
+            self.hover_edge = None;
+            let hover = resp
+                .hover_pos()
+                .and_then(|p| {
+                    let (o, d) = self.camera.ray(p, rect);
+                    self.state.body.raycast(o, d)
+                })
+                .map(|h| h.tag.id);
+            if hover != self.hover_face {
+                self.hover_face = hover;
+                self.scene_dirty = true;
+            }
+            if resp.clicked_by(egui::PointerButton::Primary) {
+                match hover {
+                    Some(f) => {
+                        self.selection = Selection::Face(f);
+                        if matches!(self.editor, Some(Editor::PickPlane(_))) {
+                            if self.state.body.planar_face_frame(f).is_some() {
+                                self.plane_picked(PlaneRef::Face(f));
+                            } else {
+                                self.status = "That face is not planar.".into();
+                            }
+                        }
+                    }
+                    None => self.selection = Selection::None,
+                }
+                self.scene_dirty = true;
+            }
+            if resp.double_clicked() {
+                if let Some(f) = hover {
+                    // Double-clicking a face edits the feature that made it.
+                    if self.doc.feature(f.feature).is_some() {
+                        let before = self.doc.clone();
+                        self.open_editor(f.feature, before, false);
+                    }
+                }
+            }
+        } else if self.hover_face.is_some() {
+            self.hover_face = None;
+            self.scene_dirty = true;
+        }
+
+        // Upload and draw the model.
+        if self.scene_dirty {
+            let shell_faces =
+                match self.pick_target().and_then(|(id, _)| self.doc.feature(id)).map(|f| &f.kind) {
+                    Some(FeatureKind::Shell(s)) => Some(s.remove.clone()),
+                    _ => None,
+                };
+            let selected: Vec<FaceId> = if let Some(faces) = shell_faces {
+                faces
+            } else {
+                match self.selection {
+                    Selection::Face(f) => vec![f],
+                    Selection::Feature(id) if self.pick_body.is_none() => {
+                        self.state.body.face_ids().into_iter().filter(|f| f.feature == id).collect()
+                    }
+                    _ => vec![],
+                }
+            };
+            let hover = if self.sketch.is_some() { None } else { self.hover_face };
+            let data = SceneData::build(&self.mesh, &self.edges, hover, &selected);
+            self.renderer.lock().unwrap().set_scene(data);
+            self.scene_dirty = false;
+        }
+        let mvp = self.camera.mvp(rect);
+        let view = self.camera.back;
+        let light = self.camera.back * 1.0 + self.camera.up * 0.45 + self.camera.right * 0.25;
+        let edges = self.show_edges;
+        let renderer = self.renderer.clone();
+        let cb = egui::PaintCallback {
+            rect,
+            callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
+                renderer.lock().unwrap().paint(painter.gl(), &mvp, view, light, edges);
+            })),
+        };
+        painter.add(cb);
+
+        // Overlays: planes, sketches, edges picked for a fillet or chamfer.
+        self.draw_planes(&painter, rect);
+        self.draw_model_sketches(&painter, rect);
+        self.draw_picked_edges(&painter, rect);
+
+        // Sketch interaction.
+        if let Some(s) = &mut self.sketch {
+            if let Some(sf) = self.doc.sketch_mut(s.feature) {
+                let out = s.handle(sf, &resp, &self.camera, rect, ui.ctx());
+                self.dragging = out.dragging;
+                s.draw(sf, &painter, &self.camera, rect);
+            }
+        } else {
+            self.dragging = false;
+        }
+
+        // View cube-ish triad.
+        let o = rect.left_bottom() + egui::vec2(40.0, -40.0);
+        for (axis, color, name) in [
+            (Vec3::X, Color32::from_rgb(210, 40, 40), "X"),
+            (Vec3::Y, Color32::from_rgb(40, 160, 40), "Y"),
+            (Vec3::Z, Color32::from_rgb(40, 70, 220), "Z"),
+        ] {
+            let d = egui::vec2(axis.dot(self.camera.right) as f32, -axis.dot(self.camera.up) as f32) * 28.0;
+            painter.line_segment([o, o + d], Stroke::new(2.0_f32, color));
+            painter.text(
+                o + d * 1.2,
+                egui::Align2::CENTER_CENTER,
+                name,
+                egui::FontId::proportional(11.0),
+                color,
+            );
+        }
+        if let Some(e) = &self.renderer.lock().unwrap().error {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                format!("OpenGL error: {e}"),
+                egui::FontId::proportional(14.0),
+                Color32::RED,
+            );
+        }
+    }
+
+    /// The model edge nearest the cursor (within a few pixels) on the pick body.
+    fn nearest_edge(&self, m: egui::Pos2, rect: egui::Rect) -> Option<EdgeRef> {
+        let pb = self.pick_body.as_ref()?;
+        let mut best: Option<(f32, EdgeRef)> = None;
+        for e in &pb.edges {
+            let (a, b) = (self.camera.project(e.seg[0], rect), self.camera.project(e.seg[1], rect));
+            let ab = b - a;
+            let t =
+                if ab.length_sq() < 1e-6 { 0.0 } else { ((m - a).dot(ab) / ab.length_sq()).clamp(0.0, 1.0) };
+            let d = (a + ab * t - m).length();
+            if d < 8.0 && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, e.faces));
+            }
+        }
+        best.map(|b| b.1)
+    }
+
+    /// Adds or removes an edge or face from the fillet, chamfer or shell being edited.
+    fn toggle_pick(&mut self, id: u32, edge: Option<EdgeRef>, face: Option<FaceId>) {
+        let toggle = |list: &mut Vec<EdgeRef>, e: EdgeRef| match list.iter().position(|x| *x == e) {
+            Some(i) => {
+                list.remove(i);
+            }
+            None => list.push(e),
+        };
+        if let Some(f) = self.doc.feature_mut(id) {
+            match (&mut f.kind, edge, face) {
+                (FeatureKind::Fillet(fl), Some(e), _) => toggle(&mut fl.edges, e),
+                (FeatureKind::Chamfer(ch), Some(e), _) => toggle(&mut ch.edges, e),
+                (FeatureKind::Shell(sh), _, Some(face)) => match sh.remove.iter().position(|x| *x == face) {
+                    Some(i) => {
+                        sh.remove.remove(i);
+                    }
+                    None => sh.remove.push(face),
+                },
+                _ => {}
+            }
+        }
+        self.rebuild();
+    }
+
+    fn draw_picked_edges(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let (Some((id, PickKind::Edges)), Some(pb)) = (self.pick_target(), &self.pick_body) else { return };
+        let chosen: &[EdgeRef] = match self.doc.feature(id).map(|f| &f.kind) {
+            Some(FeatureKind::Fillet(f)) => &f.edges,
+            Some(FeatureKind::Chamfer(c)) => &c.edges,
+            _ => &[],
+        };
+        for e in &pb.edges {
+            let color = if chosen.contains(&e.faces) {
+                Color32::from_rgb(255, 120, 0)
+            } else if self.hover_edge == Some(e.faces) {
+                Color32::from_rgb(255, 200, 40)
+            } else {
+                continue;
+            };
+            let (a, b) = (self.camera.project(e.seg[0], rect), self.camera.project(e.seg[1], rect));
+            painter.line_segment([a, b], Stroke::new(3.0_f32, color));
+        }
+    }
+
+    fn draw_planes(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let sel_frame = match self.selection {
+            Selection::Plane(p) => p.standard_frame(),
+            Selection::Feature(id) => match self.doc.feature(id).map(|f| &f.kind) {
+                Some(FeatureKind::Plane(_)) => self.state.frames.get(&id).copied(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(f) = sel_frame else { return };
+        let b = self.state.body.bounds();
+        let s = if b.is_empty() { 50.0 } else { (b.diagonal() * 0.6).max(20.0) };
+        let corners = [(-s, -s), (s, -s), (s, s), (-s, s)];
+        let pts: Vec<egui::Pos2> =
+            corners.iter().map(|&(x, y)| self.camera.project(f.to_world(Vec2 { x, y }), rect)).collect();
+        painter.add(egui::Shape::convex_polygon(
+            pts.clone(),
+            Color32::from_rgba_unmultiplied(80, 140, 255, 40),
+            Stroke::new(1.5_f32, Color32::from_rgb(60, 110, 230)),
+        ));
+    }
+
+    fn draw_model_sketches(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let consumed: Vec<u32> = self
+            .doc
+            .features
+            .iter()
+            .filter(|f| !f.suppressed)
+            .flat_map(|f| match &f.kind {
+                FeatureKind::Extrude(e) => vec![e.sketch],
+                FeatureKind::Revolve(r) => vec![r.sketch],
+                _ => vec![],
+            })
+            .collect();
+        for f in &self.doc.features {
+            let FeatureKind::Sketch(sf) = &f.kind else { continue };
+            if self.sketch.as_ref().is_some_and(|s| s.feature == f.id) || f.suppressed {
+                continue;
+            }
+            let selected = self.selection == Selection::Feature(f.id);
+            if consumed.contains(&f.id) && !selected {
+                continue;
+            }
+            let Some(frame) = self.state.frames.get(&f.id) else { continue };
+            let color =
+                if selected { Color32::from_rgb(40, 110, 240) } else { Color32::from_rgb(90, 90, 100) };
+            sketcher::draw_sketch_geometry(&sf.sketch, frame, painter, &self.camera, rect, &|_| color, 1.4);
+        }
+    }
+
+    // ----- UI: windows -------------------------------------------------------------------
+
+    fn windows(&mut self, ctx: &egui::Context) {
+        let mut open = self.windows.properties;
+        egui::Window::new("Properties").open(&mut open).default_width(460.0).show(ctx, |ui| {
+            ui.label(RichText::new("Material").strong());
+            let current = self
+                .doc
+                .material
+                .as_ref()
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| "<not specified>".into());
+            egui::ComboBox::from_id_salt("material").selected_text(current).show_ui(ui, |ui| {
+                if ui.selectable_label(self.doc.material.is_none(), "<not specified>").clicked() {
+                    self.doc.material = None;
+                }
+                for m in Material::library() {
+                    let sel = self.doc.material.as_ref().is_some_and(|c| c.name == m.name);
+                    if ui.selectable_label(sel, format!("{}  ({} g/cm³)", m.name, m.density)).clicked() {
+                        self.doc.material = Some(m);
+                    }
+                }
+            });
+            if let Some(m) = &mut self.doc.material {
+                ui.horizontal(|ui| {
+                    ui.label("Density (g/cm³)");
+                    ui.add(egui::DragValue::new(&mut m.density).speed(0.01).range(0.0..=100.0));
+                });
+            }
+            ui.separator();
+            ui.label(RichText::new("Custom Properties").strong());
+            let mut del = None;
+            egui::Grid::new("props").striped(true).num_columns(4).show(ui, |ui| {
+                ui.strong("Property Name");
+                ui.strong("Type");
+                ui.strong("Value / Text Expression");
+                ui.end_row();
+                for (i, p) in self.doc.custom_properties.iter_mut().enumerate() {
+                    ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(120.0));
+                    egui::ComboBox::from_id_salt(("ptype", i))
+                        .selected_text(p.kind.label())
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            for k in PropertyKind::ALL {
+                                ui.selectable_value(&mut p.kind, k, k.label());
+                            }
+                        });
+                    match p.kind {
+                        PropertyKind::YesNo => {
+                            let mut b = p.value.eq_ignore_ascii_case("yes");
+                            if ui.checkbox(&mut b, "").changed() {
+                                p.value = if b { "Yes".into() } else { "No".into() };
+                            }
+                        }
+                        _ => {
+                            ui.add(egui::TextEdit::singleline(&mut p.value).desired_width(180.0));
+                        }
+                    }
+                    if ui.small_button("x").clicked() {
+                        del = Some(i);
+                    }
+                    ui.end_row();
+                }
+            });
+            if let Some(i) = del {
+                self.doc.custom_properties.remove(i);
+            }
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.new_prop)
+                        .hint_text("new property name")
+                        .desired_width(160.0),
+                );
+                if ui.button("Add").clicked() && !self.new_prop.trim().is_empty() {
+                    self.doc.custom_properties.push(CustomProperty {
+                        name: self.new_prop.trim().into(),
+                        kind: PropertyKind::Text,
+                        value: String::new(),
+                    });
+                    self.new_prop.clear();
+                }
+            });
+            ui.separator();
+            let m = self.state.mass_report(&self.doc);
+            ui.weak(format!(
+                "Evaluated: Volume = {:.2} mm³{}",
+                m.props.volume,
+                m.mass.map(|g| format!(", Mass = {g:.2} g")).unwrap_or_default()
+            ));
+        });
+        self.windows.properties = open;
+
+        let mut open = self.windows.equations;
+        let mut changed = false;
+        egui::Window::new("Equations - Global Variables").open(&mut open).default_width(420.0).show(
+            ctx,
+            |ui| {
+                let mut del = None;
+                egui::Grid::new("vars").striped(true).num_columns(4).show(ui, |ui| {
+                    ui.strong("Name");
+                    ui.strong("Value / Equation");
+                    ui.strong("Evaluates to");
+                    ui.end_row();
+                    for (i, v) in self.doc.variables.iter_mut().enumerate() {
+                        changed |=
+                            ui.add(egui::TextEdit::singleline(&mut v.name).desired_width(100.0)).changed();
+                        changed |=
+                            ui.add(egui::TextEdit::singleline(&mut v.expr).desired_width(140.0)).changed();
+                        match (self.state.variables.get(&v.name), self.state.variable_errors.get(&v.name)) {
+                            (Some(x), _) => {
+                                ui.label(sketcher::format_num(*x));
+                            }
+                            (_, Some(e)) => {
+                                ui.colored_label(Color32::from_rgb(200, 30, 30), "error").on_hover_text(e);
+                            }
+                            _ => {
+                                ui.label("");
+                            }
+                        }
+                        if ui.small_button("x").clicked() {
+                            del = Some(i);
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(i) = del {
+                    self.doc.variables.remove(i);
+                    changed = true;
+                }
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_var)
+                            .hint_text("new variable")
+                            .desired_width(120.0),
+                    );
+                    if ui.button("Add").clicked() && !self.new_var.trim().is_empty() {
+                        self.doc.variables.push(GlobalVariable {
+                            name: self.new_var.trim().into(),
+                            expr: "0".into(),
+                            comment: String::new(),
+                        });
+                        self.new_var.clear();
+                        changed = true;
+                    }
+                });
+                ui.weak("Link a dimension to a variable by typing =name in its value box.");
+            },
+        );
+        self.windows.equations = open;
+        if changed {
+            self.rebuild();
+        }
+
+        let mut open = self.windows.mass;
+        egui::Window::new("Mass Properties").open(&mut open).show(ctx, |ui| {
+            let m = self.state.mass_report(&self.doc);
+            let b = self.state.body.bounds();
+            egui::Grid::new("mass").num_columns(2).show(ui, |ui| {
+                ui.label("Material");
+                ui.label(
+                    self.doc
+                        .material
+                        .as_ref()
+                        .map(|m| m.name.clone())
+                        .unwrap_or_else(|| "<not specified>".into()),
+                );
+                ui.end_row();
+                ui.label("Mass");
+                ui.label(m.mass.map(|g| format!("{g:.3} g")).unwrap_or_else(|| "assign a material".into()));
+                ui.end_row();
+                ui.label("Volume");
+                ui.label(format!("{:.3} mm³", m.props.volume));
+                ui.end_row();
+                ui.label("Surface area");
+                ui.label(format!("{:.3} mm²", m.props.surface_area));
+                ui.end_row();
+                let c = m.props.centroid;
+                ui.label("Center of mass");
+                ui.label(format!("X = {:.3}  Y = {:.3}  Z = {:.3} mm", c.x, c.y, c.z));
+                ui.end_row();
+                if !b.is_empty() {
+                    let s = b.max - b.min;
+                    ui.label("Bounding box");
+                    ui.label(format!("{:.3} x {:.3} x {:.3} mm", s.x, s.y, s.z));
+                    ui.end_row();
+                }
+            });
+            ui.weak("Curved faces are faceted to 0.01 mm chord tolerance.");
+        });
+        self.windows.mass = open;
+
+        let mut open = self.windows.about;
+        egui::Window::new("About AnvilCAD").open(&mut open).show(ctx, |ui| {
+            ui.heading(format!("AnvilCAD {}", env!("CARGO_PKG_VERSION")));
+            ui.label("Free and open source parametric 3D CAD, written in Rust.");
+            ui.label("Licensed under the MIT license.");
+        });
+        self.windows.about = open;
+
+        if let Some((title, body)) = self.message.clone() {
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_max_width(420.0);
+                    ui.label(body);
+                    if ui.button("OK").clicked() {
+                        self.message = None;
+                    }
+                });
+        }
+
+        if let Some(action) = self.confirm {
+            egui::Window::new("Unsaved changes")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("Save changes to {}?", self.part_name()));
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            self.confirm = None;
+                            self.save(false);
+                            if !self.is_dirty() {
+                                self.perform(action);
+                            }
+                        }
+                        if ui.button("Don't Save").clicked() {
+                            self.confirm = None;
+                            self.perform(action);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.confirm = None;
+                        }
+                    });
+                });
+        }
+    }
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let ctrl = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, k));
+        if ctrl(Key::Z) {
+            self.undo();
+        }
+        if ctrl(Key::Y) {
+            self.redo();
+        }
+        if ctrl(Key::S) {
+            self.save(false);
+        }
+        if ctrl(Key::O) {
+            self.request(PendingAction::Open);
+        }
+        if ctrl(Key::N) {
+            self.request(PendingAction::New);
+        }
+        if ctrl(Key::B) {
+            self.rebuild();
+        }
+        let keys = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
+        for (k, v) in keys.iter().zip(StdView::ALL) {
+            if ctrl(*k) {
+                self.camera.set_view(v);
+                self.fit_pending = true;
+            }
+        }
+        if ctrl(Key::Num8) {
+            if let Some(s) = &self.sketch {
+                let f = s.frame;
+                self.camera.normal_to(&f);
+            }
+        }
+        let (f, del, esc, arrows) = ctx.input(|i| {
+            (
+                i.key_pressed(Key::F),
+                i.key_pressed(Key::Delete),
+                i.key_pressed(Key::Escape),
+                (
+                    i.key_pressed(Key::ArrowLeft) as i32 - i.key_pressed(Key::ArrowRight) as i32,
+                    i.key_pressed(Key::ArrowUp) as i32 - i.key_pressed(Key::ArrowDown) as i32,
+                ),
+            )
+        });
+        if f {
+            self.fit_pending = true;
+        }
+        if arrows != (0, 0) {
+            self.camera.orbit(arrows.0 as f64 * -20.0, arrows.1 as f64 * -20.0);
+        }
+        if self.sketch.is_none() {
+            if del && matches!(self.selection, Selection::Feature(_)) && self.editor.is_none() {
+                self.delete_selected_feature();
+            }
+            if esc {
+                if matches!(self.editor, Some(Editor::PickPlane(_))) {
+                    self.editor = None;
+                } else if self.editor.is_none() {
+                    self.selection = Selection::None;
+                    self.scene_dirty = true;
+                }
+            }
+        }
+    }
+
+    fn handle_screenshot(&mut self, ctx: &egui::Context) {
+        let Some((path, frames)) = &mut self.screenshot else { return };
+        *frames += 1;
+        if *frames == 8 {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        }
+        let path = path.clone();
+        let shot = ctx.input(|i| {
+            i.raw.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(img) = shot {
+            let file = std::fs::File::create(&path).expect("create screenshot");
+            let mut enc =
+                png::Encoder::new(std::io::BufWriter::new(file), img.size[0] as u32, img.size[1] as u32);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut w = enc.write_header().expect("png header");
+            w.write_image_data(img.as_raw()).expect("png data");
+            drop(w);
+            self.allow_close = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        ctx.request_repaint();
+    }
+}
+
+fn icon(k: &FeatureKind) -> &'static str {
+    match k {
+        FeatureKind::Sketch(_) => "[S]",
+        FeatureKind::Extrude(e) if e.op == BodyOp::Cut => "[C]",
+        FeatureKind::Extrude(_) => "[E]",
+        FeatureKind::Revolve(_) => "[R]",
+        FeatureKind::Plane(_) => "[P]",
+        FeatureKind::LinearPattern(_) => "[L]",
+        FeatureKind::CircularPattern(_) => "[O]",
+        FeatureKind::ImportedBody(_) => "[I]",
+        FeatureKind::Fillet(_) => "[F]",
+        FeatureKind::Chamfer(_) => "[Ch]",
+        FeatureKind::Shell(_) => "[Sh]",
+    }
+}
+
+fn rollback_bar(ui: &mut egui::Ui) {
+    let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), Sense::hover());
+    ui.painter().rect_filled(r.shrink2(egui::vec2(0.0, 1.5)), 1.0, Color32::from_rgb(40, 80, 200));
+}
+
+impl AnvilApp {
+    /// Runs one UI frame. Separate from `eframe::App::update` so tests can drive it.
+    pub fn frame(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.is_dirty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(PendingAction::Exit);
+        }
+        if self.allow_close && self.screenshot.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        let title = self.title();
+        if title != self.last_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.last_title = title;
+        }
+
+        self.shortcuts(ctx);
+
+        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
+            self.menu_bar(ui);
+        });
+        egui::TopBottomPanel::top("commands").show(ctx, |ui| {
+            self.command_manager(ui);
+        });
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(&self.status);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label("MMGS");
+                    if let Some(s) = &self.sketch {
+                        ui.separator();
+                        ui.label(s.status.status_text());
+                        ui.label("Editing sketch");
+                    }
+                });
+            });
+        });
+        egui::SidePanel::left("tree").resizable(true).default_width(270.0).show(ctx, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                if self.sketch.is_some() {
+                    self.sketch_manager(ui);
+                } else if self.editor.is_some() {
+                    self.property_manager(ui);
+                } else {
+                    self.feature_tree(ui);
+                }
+            });
+        });
+        egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+            self.viewport(ui);
+        });
+        self.windows(ctx);
+        self.commit_if_changed();
+        self.handle_screenshot(ctx);
+    }
+}
+
+impl eframe::App for AnvilApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame(ctx);
+    }
+
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let Some(gl) = gl {
+            self.renderer.lock().unwrap().destroy(gl);
+        }
+    }
+}
+
+/// End-to-end UI tests: real egui frames driven by synthetic mouse input (no window or GPU).
+#[cfg(test)]
+mod ui_tests {
+    use super::*;
+    use anvil_kernel::v2;
+    use anvil_sketch::{Constraint, Geom, ORIGIN};
+    use eframe::egui::{vec2, Event, PointerButton, Pos2, RawInput, Rect};
+
+    struct Harness {
+        ctx: egui::Context,
+        app: AnvilApp,
+    }
+
+    impl Harness {
+        fn new() -> Harness {
+            let ctx = egui::Context::default();
+            let app = AnvilApp::new(&ctx, None, None, None);
+            let mut h = Harness { ctx, app };
+            h.step(vec![]);
+            h.step(vec![]);
+            h
+        }
+
+        fn step(&mut self, events: Vec<Event>) {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))),
+                events,
+                ..Default::default()
+            };
+            let app = &mut self.app;
+            let _ = self.ctx.run(input, |ctx| app.frame(ctx));
+        }
+
+        fn button(p: Pos2, pressed: bool) -> Event {
+            Event::PointerButton {
+                pos: p,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }
+        }
+
+        fn click(&mut self, p: Pos2) {
+            self.step(vec![Event::PointerMoved(p)]);
+            self.step(vec![Self::button(p, true)]);
+            self.step(vec![Self::button(p, false)]);
+            self.step(vec![]);
+        }
+
+        fn drag(&mut self, from: Pos2, to: Pos2) {
+            self.step(vec![Event::PointerMoved(from)]);
+            self.step(vec![Self::button(from, true)]);
+            for i in 1..=8 {
+                let t = i as f32 / 8.0;
+                self.step(vec![Event::PointerMoved(from + (to - from) * t)]);
+            }
+            self.step(vec![Self::button(to, false)]);
+            self.step(vec![]);
+        }
+
+        /// Screen position of a point in the open sketch.
+        fn screen(&self, x: f64, y: f64) -> Pos2 {
+            let s = self.app.sketch.as_ref().expect("sketch open");
+            self.app.camera.project(s.frame.to_world(v2(x, y)), self.app.view_rect)
+        }
+
+        fn tool(&mut self, t: Tool) {
+            self.app.sketch.as_mut().unwrap().set_tool(t);
+            self.step(vec![]);
+        }
+
+        fn sketch(&self) -> &anvil_sketch::Sketch {
+            let id = self.app.sketch.as_ref().unwrap().feature;
+            &self.app.doc.sketch(id).unwrap().sketch
+        }
+    }
+
+    fn line_ends(sk: &anvil_sketch::Sketch, e: usize) -> (anvil_kernel::Vec2, anvil_kernel::Vec2) {
+        match sk.entities[e].geom {
+            Geom::Line { a, b } => (sk.pos(a), sk.pos(b)),
+            _ => panic!("not a line"),
+        }
+    }
+
+    #[test]
+    fn sketch_plate_with_hole_and_extrude() {
+        let mut h = Harness::new();
+        h.app.start_sketch(PlaneRef::Front);
+        h.step(vec![]);
+        assert!(h.app.view_rect.width() > 100.0);
+
+        h.tool(Tool::Rectangle);
+        let (a, b) = (h.screen(-20.0, -10.0), h.screen(20.0, 10.0));
+        h.click(a);
+        h.click(b);
+        assert_eq!(h.sketch().entities.len(), 4, "rectangle creates four lines");
+
+        // Circle centered by clicking on the origin, which snaps to it.
+        h.tool(Tool::Circle);
+        let (c, r) = (h.screen(0.0, 0.0), h.screen(5.0, 0.0));
+        h.click(c);
+        h.click(r);
+        let sk = h.sketch();
+        assert_eq!(sk.entities.len(), 5);
+        match sk.entities[4].geom {
+            Geom::Circle { c, r } => {
+                assert_eq!(c, ORIGIN, "circle center snapped to the origin");
+                assert!((r - 5.0).abs() < 0.3, "radius {r}");
+            }
+            _ => panic!("expected a circle"),
+        }
+
+        // Smart Dimension on the bottom edge: pick the line, then click to place.
+        h.tool(Tool::Dimension);
+        let (mid, place) = (h.screen(0.0, -10.0), h.screen(0.0, -16.0));
+        h.click(mid);
+        h.click(place);
+        assert!(h.sketch().constraints.iter().any(|c| matches!(c, Constraint::Length { line: 0, .. })));
+
+        h.app.exit_sketch();
+        h.step(vec![]);
+        h.app.cmd_extrude(BodyOp::Boss);
+        h.step(vec![]);
+        h.app.finish_editor(true);
+        h.step(vec![]);
+
+        let st = &h.app.state;
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        let w = 40.0;
+        let v = st.body.mass_properties().volume;
+        let expected = (w * 20.0 - std::f64::consts::PI * 25.0) * 10.0;
+        assert!((v - expected).abs() / expected < 0.05, "volume {v} vs {expected}");
+        assert_eq!(st.body.open_edges(), 0);
+
+        // Undo takes the extrude back out.
+        h.app.undo();
+        h.step(vec![]);
+        assert!(h.app.state.body.is_empty());
+        h.app.redo();
+        h.step(vec![]);
+        assert!(!h.app.state.body.is_empty());
+    }
+
+    #[test]
+    fn dragging_a_corner_keeps_the_rectangle() {
+        let mut h = Harness::new();
+        h.app.start_sketch(PlaneRef::Top);
+        h.step(vec![]);
+        h.tool(Tool::Rectangle);
+        let (a, b) = (h.screen(0.0, 0.0), h.screen(20.0, 10.0));
+        h.click(a);
+        h.click(b);
+        h.tool(Tool::Select);
+        let (from, to) = (h.screen(20.0, 10.0), h.screen(30.0, 18.0));
+        h.drag(from, to);
+
+        let sk = h.sketch();
+        for e in 0..4 {
+            let (p, q) = line_ends(sk, e);
+            let d = q - p;
+            assert!(d.x.abs() < 1e-6 || d.y.abs() < 1e-6, "line {e} is no longer axis aligned: {d:?}");
+        }
+        let far = sk.points.iter().map(|p| p.x + p.y).fold(f64::MIN, f64::max);
+        assert!((far - 48.0).abs() < 1.0, "corner did not follow the drag: {far}");
+    }
+
+    #[test]
+    fn click_face_then_sketch_on_it() {
+        let mut h = Harness::new();
+        h.app.load_document(crate::sample::sample_part(), None);
+        for _ in 0..3 {
+            h.step(vec![]);
+        }
+        // A point on the plate's top face, clear of the holes and the boss.
+        let p = h.app.camera.project(anvil_kernel::v3(35.0, 10.0, 0.0), h.app.view_rect);
+        h.click(p);
+        let Selection::Face(face) = h.app.selection else {
+            panic!("expected a face selection, got {:?}", h.app.selection)
+        };
+        assert_eq!(face.index, FaceId::END_CAP, "top cap of the base extrude");
+        h.app.cmd_sketch();
+        h.step(vec![]);
+        let s = h.app.sketch.as_ref().expect("sketch started on the face");
+        assert!((s.frame.origin.y - 10.0).abs() < 1e-9);
+        assert!((s.frame.z - anvil_kernel::Vec3::Y).length() < 1e-9);
+    }
+
+    /// A 40 x 20 x 10 block (sketch on Top, extruded 10 up).
+    fn block_doc() -> (Document, u32) {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        sf.sketch.add_rectangle(v2(-20.0, -10.0), v2(20.0, 10.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let ex = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        (doc, ex)
+    }
+
+    #[test]
+    fn fillet_by_clicking_edges() {
+        let mut h = Harness::new();
+        let (doc, ex) = block_doc();
+        h.app.load_document(doc, None);
+        for _ in 0..3 {
+            h.step(vec![]);
+        }
+        h.app.cmd_edge_treatment(false);
+        h.step(vec![]);
+        // Pick a top edge: between the end cap and a side face of the extrude.
+        let target = h
+            .app
+            .pick_body
+            .as_ref()
+            .unwrap()
+            .edges
+            .iter()
+            .find(|e| {
+                let f = e.faces;
+                f.a.feature == ex
+                    && f.b.feature == ex
+                    && (f.a.index == FaceId::END_CAP || f.b.index == FaceId::END_CAP)
+            })
+            .copied()
+            .expect("a top edge");
+        let mid = (target.seg[0] + target.seg[1]) * 0.5;
+        let p = h.app.camera.project(mid, h.app.view_rect);
+        h.click(p);
+        let id = match &h.app.editor {
+            Some(Editor::Feature { id, .. }) => *id,
+            _ => panic!("fillet editor not open"),
+        };
+        let edges = |h: &Harness| match &h.app.doc.feature(id).unwrap().kind {
+            FeatureKind::Fillet(f) => f.edges.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(edges(&h), vec![target.faces], "clicking the edge selects it");
+        // Clicking again deselects, a third click selects it again.
+        h.click(p);
+        assert!(edges(&h).is_empty());
+        h.click(p);
+        assert_eq!(edges(&h).len(), 1);
+
+        let before = h.app.pick_body.as_ref().unwrap().solid.mass_properties().volume;
+        h.app.finish_editor(true);
+        h.step(vec![]);
+        assert!(h.app.state.errors.is_empty(), "{:?}", h.app.state.errors);
+        assert!(h.app.pick_body.is_none());
+        let len = (target.seg[0] - target.seg[1]).length();
+        let removed = before - h.app.state.body.mass_properties().volume;
+        // Corner area (1 - pi/4) r^2 with r = 2, along the whole edge. The rounding arc is
+        // faceted in 10-degree chords, which over-cuts this small region by about 2%.
+        let expected = (1.0 - std::f64::consts::PI / 4.0) * 4.0 * len;
+        assert!((removed - expected).abs() / expected < 0.03, "removed {removed}, expected {expected}");
+    }
+
+    #[test]
+    fn shell_from_selected_face() {
+        let mut h = Harness::new();
+        let (doc, ex) = block_doc();
+        h.app.load_document(doc, None);
+        for _ in 0..3 {
+            h.step(vec![]);
+        }
+        // Select the top face, then Shell: it becomes the open face.
+        h.app.selection = Selection::Face(FaceId { feature: ex, index: FaceId::END_CAP });
+        h.app.cmd_shell();
+        h.step(vec![]);
+        h.app.finish_editor(true);
+        h.step(vec![]);
+        assert!(h.app.state.errors.is_empty(), "{:?}", h.app.state.errors);
+        let v = h.app.state.body.mass_properties().volume;
+        let expected = 40.0 * 20.0 * 10.0 - 38.0 * 18.0 * 9.0;
+        assert!((v - expected).abs() < 1e-4, "{v} vs {expected}");
+    }
+
+    #[test]
+    fn line_chain_closes_into_profile() {
+        let mut h = Harness::new();
+        h.app.start_sketch(PlaneRef::Right);
+        h.step(vec![]);
+        h.tool(Tool::Line);
+        let pts = [(0.0, 0.0), (30.0, 0.0), (30.0, 12.0), (10.0, 25.0), (0.0, 0.0)];
+        for (x, y) in pts {
+            let p = h.screen(x, y);
+            h.click(p);
+        }
+        let sk = h.sketch();
+        assert_eq!(sk.entities.len(), 4);
+        // Nearly horizontal first segment got an automatic horizontal relation.
+        assert!(sk.constraints.iter().any(|c| matches!(c, Constraint::Horizontal { line: 0 })));
+        let profiles = sk.profiles().expect("closed profile");
+        assert_eq!(profiles.len(), 1);
+    }
+}

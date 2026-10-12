@@ -1,0 +1,12 @@
+[package]
+name = "anvil-model"
+description = "AnvilCAD parametric part model: feature tree, equations, custom properties, rebuild"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anvil-kernel.workspace = true
+anvil-sketch.workspace = true

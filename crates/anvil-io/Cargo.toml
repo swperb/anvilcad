@@ -1,0 +1,9 @@
+[package]
+name = "anvil-io"
+description = "AnvilCAD import/export: STL, OBJ, STEP, and SOLIDWORKS file detection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anvil-kernel.workspace = true

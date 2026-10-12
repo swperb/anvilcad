@@ -1,0 +1,13 @@
+[package]
+name = "anvil-sketch"
+description = "AnvilCAD 2D sketcher: entities, geometric constraints, solver, profile extraction"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+anvil-kernel.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
