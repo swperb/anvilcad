@@ -6,6 +6,7 @@
 
 pub mod document;
 pub mod equations;
+pub mod exact;
 pub mod rebuild;
 
 pub use document::*;

@@ -146,3 +146,31 @@ mod tests {
         assert!(st.body.mass_properties().volume > 30000.0);
     }
 }
+
+#[cfg(test)]
+mod exact_tests {
+    /// The sample part builds on the exact kernel up to the first fillet on a curved
+    /// edge, then hands over to the faceted kernel, and still matches the volume the
+    /// faceted kernel alone produces (38845.67 mm^3 before the exact kernel existed).
+    #[test]
+    fn sample_part_builds_exactly_then_hands_over() {
+        let mut doc = super::sample_part();
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        let exact: Vec<&str> = doc
+            .features
+            .iter()
+            .filter(|f| st.exact_features.contains(&f.id))
+            .map(|f| f.name.as_str())
+            .collect();
+        for name in ["Boss-Extrude1", "Cut-Extrude1", "Boss-Extrude2", "LPattern1", "Fillet1"] {
+            assert!(exact.contains(&name), "{name} was not built exactly: {exact:?}");
+        }
+        let (from, why) = st.faceted_from.clone().expect("hands over at the curved-edge fillet");
+        let name = doc.features.iter().find(|f| f.id == from).map(|f| f.name.clone());
+        assert_eq!(name.as_deref(), Some("Fillet2"), "{why}");
+        let v = st.body.mass_properties().volume;
+        assert!((v - 38845.67).abs() / 38845.67 < 1e-3, "{v}");
+        assert_eq!(st.body.open_edges(), 0);
+    }
+}

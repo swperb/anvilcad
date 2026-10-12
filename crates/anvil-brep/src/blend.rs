@@ -26,8 +26,16 @@ fn invalid<T>(msg: impl Into<String>) -> Result<T> {
     Err(KernelError::InvalidInput(msg.into()))
 }
 
-/// Blends one edge. New faces are tagged with `owner`.
-pub fn blend_edge(solid: &Solid, edge: EdgeId, blend: Blend, owner: u32) -> Result<Vec<Solid>> {
+/// Blends one edge. New faces are tagged with `owner`, and the tool's three side
+/// faces get the tags `tag_base`, `tag_base + 2` (the round or bevel face) and
+/// `tag_base + 4`, so callers can give blend faces stable names.
+pub fn blend_edge(
+    solid: &Solid,
+    edge: EdgeId,
+    blend: Blend,
+    owner: u32,
+    tag_base: u32,
+) -> Result<Vec<Solid>> {
     let size = match blend {
         Blend::Fillet(r) | Blend::Chamfer(r) => r,
     };
@@ -110,7 +118,8 @@ pub fn blend_edge(solid: &Solid, edge: EdgeId, blend: Blend, owner: u32) -> Resu
         Blend::Chamfer(_) => segs.push(Segment::Line { a, b }),
     }
     segs.push(Segment::Line { a: b, b: DVec2::ZERO });
-    let regions = build_regions(&[Loop2::new(segs)])?;
+    let tags = vec![tag_base, tag_base + 2, tag_base + 4];
+    let regions = build_regions(&[Loop2::with_tags(segs, tags)])?;
 
     // Extend past an end only where the far side is open (convex) or solid
     // (concave), so the extension changes nothing but avoids slivers.
@@ -177,7 +186,8 @@ mod tests {
     #[test]
     fn fillet_one_cube_edge() {
         let c = cube(10.0);
-        let r = blend_edge(&c, edge(&c, DVec3::new(5.0, 0.0, 10.0)), Blend::Fillet(2.0), 7).expect("fillet");
+        let r =
+            blend_edge(&c, edge(&c, DVec3::new(5.0, 0.0, 10.0)), Blend::Fillet(2.0), 7, 0).expect("fillet");
         assert_eq!(r.len(), 1);
         let exact = 1000.0 - (4.0 - PI) * 10.0;
         assert!((volume(&r) - exact).abs() < 0.05, "{}", volume(&r));
@@ -188,8 +198,8 @@ mod tests {
     #[test]
     fn chamfer_one_cube_edge() {
         let c = cube(10.0);
-        let r =
-            blend_edge(&c, edge(&c, DVec3::new(10.0, 5.0, 10.0)), Blend::Chamfer(3.0), 1).expect("chamfer");
+        let r = blend_edge(&c, edge(&c, DVec3::new(10.0, 5.0, 10.0)), Blend::Chamfer(3.0), 1, 0)
+            .expect("chamfer");
         assert!((volume(&r) - (1000.0 - 4.5 * 10.0)).abs() < 1e-6);
     }
 
@@ -203,7 +213,7 @@ mod tests {
             DVec3::new(0.0, 5.0, 10.0),
         ] {
             let e = edge(&s, mid);
-            s = blend_edge(&s, e, Blend::Fillet(2.0), 1).expect("fillet").remove(0);
+            s = blend_edge(&s, e, Blend::Fillet(2.0), 1, 0).expect("fillet").remove(0);
         }
         // Four straight runs of fillet section plus four mitred corners.
         let v = volume(std::slice::from_ref(&s));
@@ -217,7 +227,7 @@ mod tests {
         let mut s = cube(10.0);
         for mid in [DVec3::new(5.0, 0.0, 10.0), DVec3::new(0.0, 5.0, 10.0), DVec3::new(0.0, 0.0, 5.0)] {
             let e = edge(&s, mid);
-            s = blend_edge(&s, e, Blend::Chamfer(2.0), 1).expect("chamfer").remove(0);
+            s = blend_edge(&s, e, Blend::Chamfer(2.0), 1, 0).expect("chamfer").remove(0);
         }
         let v = volume(std::slice::from_ref(&s));
         assert!(v < 1000.0 - 3.0 * 2.0 * 6.0 && v > 1000.0 - 3.0 * 2.0 * 10.0, "{v}");
@@ -228,7 +238,7 @@ mod tests {
         let mut s = cube(10.0);
         for mid in [DVec3::new(5.0, 0.0, 10.0), DVec3::new(0.0, 5.0, 10.0), DVec3::new(0.0, 0.0, 5.0)] {
             let e = edge(&s, mid);
-            s = blend_edge(&s, e, Blend::Fillet(2.0), 1).expect("fillet").remove(0);
+            s = blend_edge(&s, e, Blend::Fillet(2.0), 1, 0).expect("fillet").remove(0);
         }
         let v = volume(std::slice::from_ref(&s));
         let section = 4.0 - PI;
@@ -250,7 +260,8 @@ mod tests {
             5.0,
         );
         let before = volume(std::slice::from_ref(&l));
-        let r = blend_edge(&l, edge(&l, DVec3::new(4.0, 4.0, 2.5)), Blend::Fillet(2.0), 1).expect("fillet");
+        let r =
+            blend_edge(&l, edge(&l, DVec3::new(4.0, 4.0, 2.5)), Blend::Fillet(2.0), 1, 0).expect("fillet");
         assert_eq!(r.len(), 1);
         let exact = before + (4.0 - PI) * 5.0;
         assert!((volume(&r) - exact).abs() < 0.05, "{}", volume(&r));
@@ -260,12 +271,12 @@ mod tests {
     fn too_large_and_curved_edges_are_refused() {
         let c = cube(10.0);
         let e = edge(&c, DVec3::new(5.0, 0.0, 10.0));
-        assert!(matches!(blend_edge(&c, e, Blend::Fillet(20.0), 1), Err(KernelError::InvalidInput(_))));
-        assert!(blend_edge(&c, e, Blend::Fillet(-1.0), 1).is_err());
+        assert!(matches!(blend_edge(&c, e, Blend::Fillet(20.0), 1, 0), Err(KernelError::InvalidInput(_))));
+        assert!(blend_edge(&c, e, Blend::Fillet(-1.0), 1, 0).is_err());
         let l = Loop2::new(vec![Segment::circle(DVec2::ZERO, 3.0)]);
         let r = build_regions(&[l]).expect("region");
         let cyl = extrude::extrude(&Frame::world(), &r[0], 0.0, 5.0).expect("cyl");
         let rim = edge(&cyl, DVec3::new(3.0, 0.0, 5.0));
-        assert!(matches!(blend_edge(&cyl, rim, Blend::Fillet(1.0), 1), Err(KernelError::Unsupported(_))));
+        assert!(matches!(blend_edge(&cyl, rim, Blend::Fillet(1.0), 1, 0), Err(KernelError::Unsupported(_))));
     }
 }

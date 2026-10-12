@@ -155,11 +155,29 @@ impl Segment {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Loop2 {
     pub segments: Vec<Segment>,
+    /// A caller-chosen number per segment (for example the sketch entity it came
+    /// from). Faces swept from a segment carry its tag, which gives them a stable
+    /// name across rebuilds. Defaults to the segment's index.
+    #[serde(default)]
+    pub tags: Vec<u32>,
 }
 
 impl Loop2 {
     pub fn new(segments: Vec<Segment>) -> Self {
-        Self { segments }
+        let tags = (0..segments.len() as u32).collect();
+        Self { segments, tags }
+    }
+
+    /// A loop whose segments carry the given tags. Missing tags fall back to the
+    /// segment index.
+    pub fn with_tags(segments: Vec<Segment>, tags: Vec<u32>) -> Self {
+        let tags = (0..segments.len()).map(|i| tags.get(i).copied().unwrap_or(i as u32)).collect();
+        Self { segments, tags }
+    }
+
+    /// The tag of segment `i`.
+    pub fn tag(&self, i: usize) -> u32 {
+        self.tags.get(i).copied().unwrap_or(i as u32)
     }
 
     /// Positive when counter-clockwise.
@@ -168,7 +186,11 @@ impl Loop2 {
     }
 
     pub fn reversed(&self) -> Self {
-        Self { segments: self.segments.iter().rev().map(Segment::reversed).collect() }
+        let n = self.segments.len();
+        Self {
+            segments: self.segments.iter().rev().map(Segment::reversed).collect(),
+            tags: (0..n).rev().map(|i| self.tag(i)).collect(),
+        }
     }
 
     /// Closed polyline approximation (last point not repeated).

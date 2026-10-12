@@ -10,3 +10,5 @@ serde.workspace = true
 serde_json.workspace = true
 anvil-kernel.workspace = true
 anvil-sketch.workspace = true
+anvil-brep.workspace = true
+glam = "0.34"

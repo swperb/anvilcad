@@ -62,7 +62,9 @@ pub enum FaceTag {
     StartCap,
     /// The face at the far end of an extrusion.
     EndCap,
-    /// The side face swept from sketch segment `segment` of contour `contour`.
+    /// The side face swept from a profile segment: `contour` is the loop's index in
+    /// its region and `segment` is the segment's tag (its index unless the caller
+    /// tagged it, for example with a sketch entity id).
     Side { contour: u32, segment: u32 },
 }
 
@@ -133,6 +135,17 @@ impl Solid {
         Some(if c.reversed { (e.end, e.start) } else { (e.start, e.end) })
     }
 
+    /// The solid moved by the rigid motion `m` (an orthonormal frame read as a
+    /// rotation plus translation). Parameters are unchanged, so topology and
+    /// edge ranges carry over exactly.
+    pub fn transformed(&self, m: &crate::Frame) -> Solid {
+        Solid {
+            vertices: self.vertices.iter().map(|v| Vertex { point: m.apply_point(v.point) }).collect(),
+            edges: self.edges.iter().map(|e| Edge { curve: e.curve.moved(m), ..e.clone() }).collect(),
+            faces: self.faces.iter().map(|f| Face { surface: f.surface.moved(m), ..f.clone() }).collect(),
+        }
+    }
+
     /// The faces that use an edge.
     pub fn edge_faces(&self, edge: EdgeId) -> Vec<FaceId> {
         self.faces
@@ -171,5 +184,32 @@ impl Solid {
 
     pub fn face_by_tag(&self, tag: FaceTag) -> Option<FaceId> {
         self.faces.iter().position(|f| f.tag == tag).map(|i| FaceId(i as u32))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::extrude::extrude;
+    use crate::profile::{Loop2, Segment, build_regions};
+    use crate::{Frame, check};
+    use glam::{DVec2, DVec3};
+
+    #[test]
+    fn transformed_solid_stays_valid_and_keeps_tags() {
+        let l = Loop2::with_tags(vec![Segment::circle(DVec2::new(2.0, 0.0), 1.0)], vec![42]);
+        let r = build_regions(&[l]).expect("region");
+        let s = extrude(&Frame::world(), &r[0], 0.0, 3.0).expect("extrude");
+        let angle = 0.7f64;
+        let m = Frame {
+            origin: DVec3::new(5.0, -1.0, 2.0),
+            x: DVec3::new(angle.cos(), angle.sin(), 0.0),
+            y: DVec3::new(-angle.sin(), angle.cos(), 0.0),
+            z: DVec3::Z,
+        };
+        let t = s.transformed(&m);
+        check::validate(&t).expect("valid");
+        assert!(t.faces.iter().any(|f| f.tag == super::FaceTag::Side { contour: 0, segment: 42 }));
+        let c = t.vertices.iter().map(|v| v.point.z).fold(f64::INFINITY, f64::min);
+        assert!((c - 2.0).abs() < 1e-12);
     }
 }

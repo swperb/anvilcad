@@ -1,0 +1,192 @@
+//! Bridge to the exact kernel ([`anvil_brep`]).
+//!
+//! While every feature so far is one the exact kernel can build, the rebuild keeps
+//! exact bodies alongside the faceted body and regenerates the faceted body from them
+//! after each feature. Face names match the faceted kernel's: start cap 0, end cap 1,
+//! side faces `2 + sketch entity`, and blend faces `2 + 8k + 2` for the k-th edge.
+
+use crate::document::BodyOp;
+use anvil_brep as brep;
+use anvil_brep::boolean::{self, BoolOp};
+use anvil_brep::topo::{Face, FaceTag as BrepTag};
+use anvil_kernel::{
+    EdgeRef, FaceId, FaceTag, Frame, Loop2, Polygon, Profile, Seg2, Solid, SurfaceKind, Vec3,
+};
+use glam::{DVec2, DVec3};
+
+fn d3(v: Vec3) -> DVec3 {
+    DVec3::new(v.x, v.y, v.z)
+}
+
+fn v3(d: DVec3) -> Vec3 {
+    Vec3 { x: d.x, y: d.y, z: d.z }
+}
+
+pub fn frame(f: &Frame) -> brep::Frame {
+    brep::Frame { origin: d3(f.origin), x: d3(f.x), y: d3(f.y), z: d3(f.z) }
+}
+
+fn exact_loop(l: &Loop2) -> brep::Loop2 {
+    let mut segs = Vec::with_capacity(l.segs.len());
+    let mut tags = Vec::with_capacity(l.segs.len());
+    for s in &l.segs {
+        segs.push(match *s {
+            Seg2::Line { a, b, .. } => {
+                brep::Segment::Line { a: DVec2::new(a.x, a.y), b: DVec2::new(b.x, b.y) }
+            }
+            Seg2::Arc { center, radius, start, sweep, .. } => {
+                brep::Segment::Arc { center: DVec2::new(center.x, center.y), radius, start, sweep }
+            }
+        });
+        tags.push(s.source());
+    }
+    brep::Loop2::with_tags(segs, tags)
+}
+
+/// Exact regions for sketch profiles, validated by the exact kernel.
+pub fn regions(profiles: &[Profile]) -> Result<Vec<brep::Region>, String> {
+    let loops: Vec<brep::Loop2> = profiles.iter().flat_map(|p| p.loops()).map(exact_loop).collect();
+    brep::profile::build_regions(&loops).map_err(|e| e.to_string())
+}
+
+/// Extruded tool bodies, one per region, owned by `feature`.
+pub fn extrude(
+    profiles: &[Profile],
+    f: &Frame,
+    z0: f64,
+    z1: f64,
+    feature: u32,
+) -> Result<Vec<brep::Solid>, String> {
+    let regions = regions(profiles)?;
+    let mut tools = brep::extrude::extrude_regions(&frame(f), &regions, z0, z1).map_err(|e| e.to_string())?;
+    for t in &mut tools {
+        t.set_owner(feature);
+    }
+    Ok(tools)
+}
+
+fn boxes_touch(a: (DVec3, DVec3), b: (DVec3, DVec3)) -> bool {
+    let pad = 1e-6;
+    a.0.cmple(b.1 + pad).all() && b.0.cmple(a.1 + pad).all()
+}
+
+/// Applies a tool to the bodies: a boss merges with every body it touches, a cut is
+/// subtracted from every body.
+pub fn combine(bodies: &[brep::Solid], tool: &brep::Solid, op: BodyOp) -> Result<Vec<brep::Solid>, String> {
+    let touches = |a: &brep::Solid, b: &brep::Solid| match (a.bounds(), b.bounds()) {
+        (Some(x), Some(y)) => boxes_touch(x, y),
+        _ => false,
+    };
+    match op {
+        BodyOp::Boss => {
+            let mut merged = tool.clone();
+            let mut rest = Vec::new();
+            for body in bodies {
+                if !touches(body, &merged) {
+                    rest.push(body.clone());
+                    continue;
+                }
+                let r = boolean::boolean(body, &merged, BoolOp::Union).map_err(|e| e.to_string())?;
+                if r.len() == 1 {
+                    merged = r.into_iter().next().ok_or("empty union")?;
+                } else {
+                    rest.push(body.clone());
+                }
+            }
+            rest.push(merged);
+            Ok(rest)
+        }
+        BodyOp::Cut => {
+            if bodies.is_empty() {
+                return Err("there is no body to cut".into());
+            }
+            let mut out = Vec::new();
+            for body in bodies {
+                if touches(body, tool) {
+                    out.extend(boolean::boolean(body, tool, BoolOp::Subtract).map_err(|e| e.to_string())?);
+                } else {
+                    out.push(body.clone());
+                }
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// The faceted kernel's name for an exact face.
+pub fn face_id(face: &Face) -> FaceId {
+    let index = match face.tag {
+        BrepTag::StartCap => FaceId::START_CAP,
+        BrepTag::EndCap => FaceId::END_CAP,
+        BrepTag::Side { segment, .. } => 2 + segment,
+    };
+    FaceId { feature: face.owner, index }
+}
+
+fn surface_kind(face: &Face) -> SurfaceKind {
+    match face.surface {
+        brep::Surface::Plane { .. } => SurfaceKind::Plane,
+        brep::Surface::Cylinder { frame, radius } => {
+            SurfaceKind::Cylinder { axis_origin: v3(frame.origin), axis_dir: v3(frame.z), radius }
+        }
+    }
+}
+
+/// Edges of the exact bodies that separate the two named faces.
+fn find_edges(bodies: &[brep::Solid], e: &EdgeRef) -> Vec<(usize, brep::EdgeId)> {
+    let mut out = Vec::new();
+    for (bi, solid) in bodies.iter().enumerate() {
+        for ei in 0..solid.edges.len() {
+            let id = brep::EdgeId(ei as u32);
+            let faces = solid.edge_faces(id);
+            let names: Vec<FaceId> = faces.iter().filter_map(|f| solid.face(*f)).map(face_id).collect();
+            if names.len() == 2 && EdgeRef::new(names[0], names[1]) == *e {
+                out.push((bi, id));
+            }
+        }
+    }
+    out
+}
+
+/// Fillets or chamfers the named edges. Every run of an edge is blended.
+pub fn blend(
+    bodies: &[brep::Solid],
+    edges: &[EdgeRef],
+    kind: brep::blend::Blend,
+    feature: u32,
+) -> Result<Vec<brep::Solid>, String> {
+    if edges.is_empty() {
+        return Err("select at least one edge".into());
+    }
+    let mut bodies = bodies.to_vec();
+    for (k, e) in edges.iter().enumerate() {
+        let runs = find_edges(&bodies, e).len();
+        if runs == 0 {
+            return Err("an edge to blend no longer exists".into());
+        }
+        // Blending one run renumbers the body, so find the next run afresh each time.
+        for _ in 0..runs {
+            let Some(&(b, edge)) = find_edges(&bodies, e).first() else { break };
+            let result = brep::blend::blend_edge(&bodies[b], edge, kind, feature, 8 * k as u32)
+                .map_err(|err| err.to_string())?;
+            bodies.splice(b..=b, result);
+        }
+    }
+    Ok(bodies)
+}
+
+/// The faceted solid for exact bodies, with matching face names and surfaces.
+pub fn faceted(bodies: &[brep::Solid]) -> Result<Solid, String> {
+    let mut polys = Vec::new();
+    for solid in bodies {
+        let mesh =
+            brep::tess::tessellate(solid, &brep::tess::TessParams::default()).map_err(|e| e.to_string())?;
+        for (t, f) in mesh.triangles.iter().zip(&mesh.triangle_face) {
+            let Some(face) = solid.faces.get(*f as usize) else { continue };
+            let tag = FaceTag { id: face_id(face), surface: surface_kind(face) };
+            let verts = t.iter().map(|&i| v3(mesh.positions[i as usize])).collect();
+            polys.extend(Polygon::new(verts, tag));
+        }
+    }
+    Ok(Solid::new(polys))
+}

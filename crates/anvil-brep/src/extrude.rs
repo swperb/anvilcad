@@ -109,7 +109,7 @@ pub fn extrude(frame: &Frame, region: &Region, z0: f64, z1: f64) -> Result<Solid
                     coedges: vec![fwd(r.bottom[k]), fwd(r.vertical[next]), rev(r.top[k]), rev(r.vertical[k])],
                 },
                 inners: Vec::new(),
-                tag: FaceTag::Side { contour: ci as u32, segment: k as u32 },
+                tag: FaceTag::Side { contour: ci as u32, segment: contour.tag(k) },
                 owner: 0,
             });
         }

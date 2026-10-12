@@ -2,14 +2,22 @@
 //!
 //! A failing feature records an error and is skipped; later features still rebuild where
 //! they can, so one bad dimension never destroys the whole model.
+//!
+//! Two kernels work together. While every feature so far is one the exact kernel
+//! ([`anvil_brep`]) can build (extrudes, cuts, patterns, fillets and chamfers on straight
+//! edges between flat faces), the part is built exactly and the faceted body is
+//! regenerated from the exact result. The first feature the exact kernel cannot build
+//! (or declines) hands over to the faceted kernel, which carries on as before. A feature
+//! is never built worse than the faceted kernel alone would build it.
 
 use crate::document::*;
+use crate::exact;
 use anvil_kernel::blend::{blend_edges, EdgeTreatment};
 use anvil_kernel::build::{extrude, revolve};
 use anvil_kernel::shell::shell;
 use anvil_kernel::{FaceId, FaceTag, Frame, MassProperties, Polygon, Solid, SurfaceKind, Vec3};
 use anvil_sketch::{Geom, SolveResult};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Default, Clone)]
 pub struct BuildState {
@@ -23,6 +31,14 @@ pub struct BuildState {
     pub variable_errors: BTreeMap<String, String>,
     /// The tool body each solid feature contributed, used by patterns.
     tools: HashMap<u32, (Solid, BodyOp)>,
+    /// Exact bodies, while every feature so far was built exactly.
+    pub exact: Option<Vec<anvil_brep::Solid>>,
+    /// Features that were built on the exact kernel.
+    pub exact_features: BTreeSet<u32>,
+    /// The first feature that moved the part to the faceted kernel, and why.
+    pub faceted_from: Option<(u32, String)>,
+    /// The exact tool bodies each solid feature contributed, used by patterns.
+    exact_tools: HashMap<u32, (Vec<anvil_brep::Solid>, BodyOp)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -77,6 +93,43 @@ fn imported_solid(id: u32, ib: &ImportedBodyFeature) -> Result<Solid, String> {
     Ok(Solid::new(polys))
 }
 
+impl BuildState {
+    /// Runs one feature on the exact kernel. On success the faceted body is regenerated
+    /// from the exact result and `true` is returned. On failure the part moves to the
+    /// faceted kernel for good and the caller builds the feature there.
+    fn exact_step(
+        &mut self,
+        id: u32,
+        build: impl FnOnce(&[anvil_brep::Solid]) -> Result<Vec<anvil_brep::Solid>, String>,
+    ) -> bool {
+        let Some(bodies) = self.exact.as_ref() else {
+            return false;
+        };
+        let result = build(bodies).and_then(|new| {
+            let body = exact::faceted(&new)?;
+            Ok((new, body))
+        });
+        match result {
+            Ok((new, body)) => {
+                self.exact = Some(new);
+                self.body = body;
+                self.exact_features.insert(id);
+                true
+            }
+            Err(reason) => {
+                self.leave_exact(id, reason);
+                false
+            }
+        }
+    }
+
+    fn leave_exact(&mut self, id: u32, reason: String) {
+        if self.exact.take().is_some() {
+            self.faceted_from = Some((id, reason));
+        }
+    }
+}
+
 fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), String> {
     match op {
         BodyOp::Boss => *body = body.union(tool),
@@ -109,7 +162,7 @@ impl Document {
 
     /// Rebuilds every feature up to the rollback bar. Sketches are solved in place.
     pub fn rebuild(&mut self) -> BuildState {
-        let mut st = BuildState::default();
+        let mut st = BuildState { exact: Some(Vec::new()), ..BuildState::default() };
         let (vars, verrs) = self.evaluate_variables();
         st.variables = vars;
         st.variable_errors = verrs.into_iter().map(|(k, v)| (k, v.to_string())).collect();
@@ -191,7 +244,23 @@ impl Document {
                     }
                 };
                 let tool = extrude(&profiles, &frame, z0, z1, id).map_err(|e| e.to_string())?;
-                apply(&mut st.body, &tool, ef.op)?;
+                let mut exact_tools = None;
+                let done = st.exact_step(id, |bodies| {
+                    let tools = exact::extrude(&profiles, &frame, z0, z1, id)?;
+                    let mut out = bodies.to_vec();
+                    for t in &tools {
+                        out = exact::combine(&out, t, ef.op)?;
+                    }
+                    exact_tools = Some(tools);
+                    Ok(out)
+                });
+                if done {
+                    if let Some(t) = exact_tools {
+                        st.exact_tools.insert(id, (t, ef.op));
+                    }
+                } else {
+                    apply(&mut st.body, &tool, ef.op)?;
+                }
                 st.tools.insert(id, (tool, ef.op));
             }
             FeatureKind::Revolve(rf) => {
@@ -210,6 +279,7 @@ impl Document {
                 };
                 let ang = num(&rf.angle, "angle")?.to_radians();
                 let tool = revolve(&profiles, &frame, a, b - a, ang, id).map_err(|e| e.to_string())?;
+                st.leave_exact(id, "revolves use the faceted kernel".into());
                 apply(&mut st.body, &tool, rf.op)?;
                 st.tools.insert(id, (tool, rf.op));
             }
@@ -217,6 +287,13 @@ impl Document {
                 let spacing = num(&pf.spacing, "spacing")?;
                 let count = num(&pf.count, "count")?.round().max(1.0) as usize;
                 let dir = pf.direction.dir();
+                let moves: Vec<Frame> = (1..count)
+                    .map(|k| Frame { origin: dir * (spacing * k as f64), ..Frame::WORLD })
+                    .collect();
+                let seeds = pattern_seeds(&pf.features, &st.exact_tools);
+                if st.exact_step(id, |b| exact_pattern(b, &seeds?, &moves)) {
+                    return Ok(());
+                }
                 for src in &pf.features {
                     let (tool, op) =
                         st.tools.get(src).cloned().ok_or("a seed feature is missing or failed")?;
@@ -235,6 +312,13 @@ impl Document {
                     total / (count.max(2) - 1) as f64
                 };
                 let axis = pf.axis.dir();
+                let moves: Vec<Frame> = (1..count)
+                    .map(|k| rotation_frame(pf.axis.origin(), axis, (step * k as f64).to_radians()))
+                    .collect();
+                let seeds = pattern_seeds(&pf.features, &st.exact_tools);
+                if st.exact_step(id, |b| exact_pattern(b, &seeds?, &moves)) {
+                    return Ok(());
+                }
                 for src in &pf.features {
                     let (tool, op) =
                         st.tools.get(src).cloned().ok_or("a seed feature is missing or failed")?;
@@ -245,20 +329,30 @@ impl Document {
                 }
             }
             FeatureKind::ImportedBody(ib) => {
+                st.leave_exact(id, "imported bodies are meshes".into());
                 st.body = imported_solid(id, &ib)?;
             }
             FeatureKind::Fillet(f) => {
                 let radius = num(&f.radius, "radius")?;
+                let fillet = anvil_brep::blend::Blend::Fillet(radius);
+                if st.exact_step(id, |b| exact::blend(b, &f.edges, fillet, id)) {
+                    return Ok(());
+                }
                 st.body = blend_edges(&st.body, &f.edges, EdgeTreatment::Fillet { radius }, id)
                     .map_err(|e| e.to_string())?;
             }
             FeatureKind::Chamfer(c) => {
                 let distance = num(&c.distance, "distance")?;
+                let chamfer = anvil_brep::blend::Blend::Chamfer(distance);
+                if st.exact_step(id, |b| exact::blend(b, &c.edges, chamfer, id)) {
+                    return Ok(());
+                }
                 st.body = blend_edges(&st.body, &c.edges, EdgeTreatment::Chamfer { distance }, id)
                     .map_err(|e| e.to_string())?;
             }
             FeatureKind::Shell(s) => {
                 let thickness = num(&s.thickness, "thickness")?;
+                st.leave_exact(id, "shells use the faceted kernel".into());
                 st.body = shell(&st.body, &s.remove, thickness, id).map_err(|e| e.to_string())?;
             }
         }
@@ -283,6 +377,37 @@ impl Document {
         let profiles = sf.sketch.profiles().map_err(|e| e.to_string())?;
         Ok((frame, profiles))
     }
+}
+
+type ExactSeeds = Vec<(Vec<anvil_brep::Solid>, BodyOp)>;
+
+/// The exact tool bodies of a pattern's seed features.
+fn pattern_seeds(
+    seeds: &[u32],
+    tools: &HashMap<u32, (Vec<anvil_brep::Solid>, BodyOp)>,
+) -> Result<ExactSeeds, String> {
+    seeds
+        .iter()
+        .map(|s| tools.get(s).cloned().ok_or_else(|| "a seed feature was not built exactly".to_string()))
+        .collect()
+}
+
+/// Applies a copy of every seed tool moved by each frame, in order.
+fn exact_pattern(
+    bodies: &[anvil_brep::Solid],
+    seeds: &ExactSeeds,
+    moves: &[Frame],
+) -> Result<Vec<anvil_brep::Solid>, String> {
+    let mut out = bodies.to_vec();
+    for (tools, op) in seeds {
+        for m in moves {
+            let m = exact::frame(m);
+            for t in tools {
+                out = exact::combine(&out, &t.transformed(&m), *op)?;
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// If the sketch's non-construction geometry has exactly two loose ends and both lie on the

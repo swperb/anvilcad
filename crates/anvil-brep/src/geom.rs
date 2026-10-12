@@ -44,6 +44,27 @@ impl Frame {
         DVec3::new(d.dot(self.x), d.dot(self.y), d.dot(self.z))
     }
 
+    /// Maps a point given in this frame's coordinates to world coordinates; used
+    /// as a rigid motion when the frame is orthonormal.
+    pub fn apply_point(&self, p: DVec3) -> DVec3 {
+        self.to_world3(p)
+    }
+
+    /// Rotates a direction by this frame's axes.
+    pub fn apply_dir(&self, d: DVec3) -> DVec3 {
+        self.x * d.x + self.y * d.y + self.z * d.z
+    }
+
+    /// This frame moved by the rigid motion `m`.
+    pub fn moved(&self, m: &Frame) -> Frame {
+        Frame {
+            origin: m.apply_point(self.origin),
+            x: m.apply_dir(self.x),
+            y: m.apply_dir(self.y),
+            z: m.apply_dir(self.z),
+        }
+    }
+
     /// The same frame moved `dz` along its normal.
     pub fn offset(&self, dz: f64) -> Self {
         Self { origin: self.origin + self.z * dz, ..*self }
@@ -75,6 +96,17 @@ impl Curve {
             Curve::Ellipse { frame, a, b } => {
                 frame.origin + frame.x * (a * t.cos()) + frame.y * (b * t.sin())
             }
+        }
+    }
+
+    /// The curve moved by the rigid motion `m`.
+    pub fn moved(&self, m: &Frame) -> Curve {
+        match *self {
+            Curve::Line { origin, dir } => {
+                Curve::Line { origin: m.apply_point(origin), dir: m.apply_dir(dir) }
+            }
+            Curve::Circle { frame, radius } => Curve::Circle { frame: frame.moved(m), radius },
+            Curve::Ellipse { frame, a, b } => Curve::Ellipse { frame: frame.moved(m), a, b },
         }
     }
 
@@ -247,6 +279,14 @@ impl Surface {
     pub fn frame(&self) -> &Frame {
         match self {
             Surface::Plane { frame } | Surface::Cylinder { frame, .. } => frame,
+        }
+    }
+
+    /// The surface moved by the rigid motion `m`.
+    pub fn moved(&self, m: &Frame) -> Surface {
+        match *self {
+            Surface::Plane { frame } => Surface::Plane { frame: frame.moved(m) },
+            Surface::Cylinder { frame, radius } => Surface::Cylinder { frame: frame.moved(m), radius },
         }
     }
 

@@ -132,8 +132,10 @@ dependencies = [
 name = "anvil-model"
 version = "0.1.0"
 dependencies = [
+ "anvil-brep",
  "anvil-kernel",
  "anvil-sketch",
+ "glam",
  "serde",
  "serde_json",
 ]
