@@ -160,7 +160,7 @@
           </li>
           <li class="card">
             <h3>Files and export</h3>
-            <p>Native <code>.anvprt</code> parts are versioned JSON, written atomically. Export to STEP AP214, STL and OBJ. Every change can be undone and redone.</p>
+            <p>Native <code>.anvprt</code> parts are versioned JSON, written atomically. Import STEP parts (exact solids for plane and cylinder bodies, meshes for everything else). Export to STEP AP214 with exact geometry when the part is exact, plus STL and OBJ. Every change can be undone and redone.</p>
           </li>
         </ul>
       </div>
@@ -239,7 +239,7 @@
       <div class="wrap">
         <header class="section-head">
           <p class="label">06 / Architecture</p>
-          <h2 id="architecture-title">Seven crates, dependencies point one way</h2>
+          <h2 id="architecture-title">Eight crates, dependencies point one way</h2>
           <p class="lede">Geometry knows nothing about the UI, and each crate can be tested on its own.</p>
         </header>
         <ol class="stack">
@@ -252,8 +252,12 @@
             <p>SOLIDWORKS to AnvilCAD converter. Runs on Windows with SOLIDWORKS installed.</p>
           </li>
           <li class="layer">
+            <p class="crate"><code>anvil-step</code></p>
+            <p>STEP reader and exact STEP export. Imports bodies as exact solids where it can, and as watertight meshes otherwise.</p>
+          </li>
+          <li class="layer">
             <p class="crate"><code>anvil-io</code></p>
-            <p>Export to STEP AP214, STL and OBJ.</p>
+            <p>Faceted STEP, STL and OBJ export.</p>
           </li>
           <li class="layer">
             <p class="crate"><code>anvil-model</code></p>
@@ -286,7 +290,7 @@
           <li><span class="mono step">next</span><div><h3>A wider exact kernel</h3><p>Exact analytic coverage for more surfaces (cones, tori, spheres), and blends on curved edges and vertices.</p></div></li>
           <li><span class="mono step">then</span><div><h3>More part features</h3><p>Holes, mirror, sweep, loft and multi-body parts.</p></div></li>
           <li><span class="mono step">then</span><div><h3>Assemblies and drawings</h3><p>Parts positioned together, and 2D drawings made from them.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>STEP import</h3><p>Bring in parts from other CAD systems.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>More STEP</h3><p>Assembly placement, colours and names, and exact import of cones, spheres and tori.</p></div></li>
           <li><span class="mono step">then</span><div><h3>Scripting API</h3><p>Drive AnvilCAD from code.</p></div></li>
           <li class="future"><span class="mono step">later</span><div><h3>CAM</h3><p>Toolpath generation, tracked as a separate feature request rather than a planned milestone.</p></div></li>
         </ol>

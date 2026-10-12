@@ -329,8 +329,21 @@ impl Document {
                 }
             }
             FeatureKind::ImportedBody(ib) => {
-                st.leave_exact(id, "imported bodies are meshes".into());
-                st.body = imported_solid(id, &ib)?;
+                let mesh = imported_solid(id, &ib)?;
+                match &ib.exact {
+                    Some(exact) => {
+                        let mut body = exact.clone();
+                        body.set_owner(id);
+                        let adds = ib.adds;
+                        if st.exact_step(id, |bodies| {
+                            Ok(if adds { bodies.iter().cloned().chain([body]).collect() } else { vec![body] })
+                        }) {
+                            return Ok(());
+                        }
+                    }
+                    None => st.leave_exact(id, "imported bodies without exact geometry are meshes".into()),
+                }
+                st.body = if ib.adds && !st.body.is_empty() { st.body.union(&mesh) } else { mesh };
             }
             FeatureKind::Fillet(f) => {
                 let radius = num(&f.radius, "radius")?;

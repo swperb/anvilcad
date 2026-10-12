@@ -279,10 +279,21 @@ impl AnvilApp {
             PendingAction::Open => {
                 if let Some(p) = rfd::FileDialog::new()
                     .add_filter(
-                        "AnvilCAD and SOLIDWORKS files",
-                        &["anvprt", "anvprtdot", "fprt", "sldprt", "sldasm", "slddrw", "prtdot"],
+                        "AnvilCAD, STEP and SOLIDWORKS files",
+                        &[
+                            "anvprt",
+                            "anvprtdot",
+                            "fprt",
+                            "step",
+                            "stp",
+                            "sldprt",
+                            "sldasm",
+                            "slddrw",
+                            "prtdot",
+                        ],
                     )
                     .add_filter("AnvilCAD part", &["anvprt"])
+                    .add_filter("STEP", &["step", "stp"])
                     .add_filter("AnvilCAD part template", &["anvprtdot"])
                     .add_filter("SOLIDWORKS", &["sldprt", "sldasm", "slddrw", "prtdot", "asmdot", "drwdot"])
                     .pick_file()
@@ -308,11 +319,35 @@ impl AnvilApp {
             }
             Ok(None) => {}
         }
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if ext == "step" || ext == "stp" {
+            self.import_step(p);
+            return;
+        }
         let is_template = p.extension().map(|e| e.eq_ignore_ascii_case(PART_TEMPLATE_EXT)).unwrap_or(false);
         match Document::load(p) {
             Ok(d) if is_template => self.load_document(Document::from_template(&d), None),
             Ok(d) => self.load_document(d, Some(p.to_path_buf())),
             Err(e) => self.message = Some(("Open failed".into(), format!("{}: {e}", p.display()))),
+        }
+    }
+
+    /// Opens a STEP file as a new, unsaved part made of imported bodies.
+    fn import_step(&mut self, p: &Path) {
+        let text = match std::fs::read(p) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) => {
+                self.message = Some(("Import failed".into(), format!("{}: {e}", p.display())));
+                return;
+            }
+        };
+        let source = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        match anvil_model::step::document_from_step(&text, &source) {
+            Ok((doc, report)) => {
+                self.load_document(doc, None);
+                self.message = Some(("STEP import".into(), report.summary()));
+            }
+            Err(e) => self.message = Some(("Import failed".into(), format!("{}: {e}", p.display()))),
         }
     }
 
@@ -360,8 +395,19 @@ impl AnvilApp {
             .set_file_name(format!("{}.step", self.part_name()))
             .save_file()
         {
-            match anvil_io::export_by_extension(&self.state.body, &path, &self.part_name()) {
-                Ok(()) => self.status = format!("Exported {}", path.display()),
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            // Exact geometry when the whole part was built exactly, facets otherwise.
+            let exact = (ext == "step" || ext == "stp")
+                .then(|| anvil_model::step::exact_step(&self.state, &self.part_name()))
+                .flatten();
+            let result = match exact {
+                Some(text) => std::fs::write(&path, text).map(|()| " (exact geometry)"),
+                None => {
+                    anvil_io::export_by_extension(&self.state.body, &path, &self.part_name()).map(|()| "")
+                }
+            };
+            match result {
+                Ok(how) => self.status = format!("Exported {}{how}", path.display()),
                 Err(e) => self.message = Some(("Export failed".into(), e.to_string())),
             }
         }

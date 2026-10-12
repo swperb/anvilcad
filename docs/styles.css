@@ -378,12 +378,13 @@ h1 {
 @media (min-width: 640px) { .layer { grid-template-columns: 170px 1fr; align-items: baseline; } }
 .layer .crate code { background: none; padding: 0; font-weight: 500; color: var(--ink); font-size: 0.92rem; }
 .layer p:last-child { color: var(--ink-soft); font-size: 0.95rem; }
-.layer:nth-child(2) { border-left-color: color-mix(in srgb, var(--oxide) 83%, var(--steel)); }
-.layer:nth-child(3) { border-left-color: color-mix(in srgb, var(--oxide) 67%, var(--steel)); }
-.layer:nth-child(4) { border-left-color: color-mix(in srgb, var(--oxide) 50%, var(--steel)); }
-.layer:nth-child(5) { border-left-color: color-mix(in srgb, var(--oxide) 33%, var(--steel)); }
-.layer:nth-child(6) { border-left-color: color-mix(in srgb, var(--oxide) 17%, var(--steel)); }
-.layer:nth-child(7) { border-left-color: var(--steel); }
+.layer:nth-child(2) { border-left-color: color-mix(in srgb, var(--oxide) 86%, var(--steel)); }
+.layer:nth-child(3) { border-left-color: color-mix(in srgb, var(--oxide) 71%, var(--steel)); }
+.layer:nth-child(4) { border-left-color: color-mix(in srgb, var(--oxide) 57%, var(--steel)); }
+.layer:nth-child(5) { border-left-color: color-mix(in srgb, var(--oxide) 43%, var(--steel)); }
+.layer:nth-child(6) { border-left-color: color-mix(in srgb, var(--oxide) 29%, var(--steel)); }
+.layer:nth-child(7) { border-left-color: color-mix(in srgb, var(--oxide) 14%, var(--steel)); }
+.layer:nth-child(8) { border-left-color: var(--steel); }
 
 /* Roadmap */
 .roadmap {

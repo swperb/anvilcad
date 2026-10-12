@@ -173,4 +173,24 @@ mod exact_tests {
         assert!((v - 38845.67).abs() / 38845.67 < 1e-3, "{v}");
         assert_eq!(st.body.open_edges(), 0);
     }
+
+    /// The sample part is not all exact, so its STEP export is faceted. Importing that
+    /// file back must give the same, closed solid.
+    #[test]
+    fn faceted_step_export_imports_back() {
+        let mut doc = super::sample_part();
+        let st = doc.rebuild();
+        assert!(anvil_model::step::exact_step(&st, "sample").is_none());
+        let text = anvil_io::step::write(&st.body, "sample");
+        if let Ok(dir) = std::env::var("ANVIL_DUMP_STEP") {
+            let _ = std::fs::write(std::path::Path::new(&dir).join("sample-faceted.step"), &text);
+        }
+        let (mut part, report) = anvil_model::step::document_from_step(&text, "sample.step").expect("import");
+        assert_eq!((report.bodies, report.exact), (1, 0));
+        let back = part.rebuild();
+        assert!(back.errors.is_empty(), "{:?}", back.errors);
+        assert_eq!(back.body.open_edges(), 0);
+        let (a, b) = (st.body.mass_properties().volume, back.body.mass_properties().volume);
+        assert!((a - b).abs() / a < 1e-9, "{a} vs {b}");
+    }
 }

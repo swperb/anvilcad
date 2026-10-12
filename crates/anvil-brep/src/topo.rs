@@ -66,6 +66,9 @@ pub enum FaceTag {
     /// its region and `segment` is the segment's tag (its index unless the caller
     /// tagged it, for example with a sketch entity id).
     Side { contour: u32, segment: u32 },
+    /// A face read from another system (for example a STEP file), numbered in the
+    /// order the source listed its faces.
+    Imported { index: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

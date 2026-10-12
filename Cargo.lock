@@ -135,6 +135,7 @@ dependencies = [
  "anvil-brep",
  "anvil-kernel",
  "anvil-sketch",
+ "anvil-step",
  "glam",
  "serde",
  "serde_json",
@@ -147,6 +148,17 @@ dependencies = [
  "anvil-kernel",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "anvil-step"
+version = "0.1.0"
+dependencies = [
+ "anvil-brep",
+ "glam",
+ "proptest",
+ "spade",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

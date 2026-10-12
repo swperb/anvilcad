@@ -1150,7 +1150,14 @@ fn capture_bodies(model: &Disp, source: &str, precise: bool) -> ComResult<Option
             }
         }
     }
-    Ok(Some(ImportedBodyFeature { source: source.to_string(), replaces: Vec::new(), vertices, faces }))
+    Ok(Some(ImportedBodyFeature {
+        source: source.to_string(),
+        replaces: Vec::new(),
+        vertices,
+        faces,
+        exact: None,
+        adds: false,
+    }))
 }
 
 fn is_planar(face: &Disp) -> bool {

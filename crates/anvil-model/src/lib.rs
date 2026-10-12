@@ -8,6 +8,7 @@ pub mod document;
 pub mod equations;
 pub mod exact;
 pub mod rebuild;
+pub mod step;
 
 pub use document::*;
 pub use rebuild::{BuildState, MassReport};
@@ -58,6 +59,42 @@ mod tests {
             op: BodyOp::Boss,
         }));
         (doc, sk, ex)
+    }
+
+    /// Export a part exactly, import it back, and keep modelling on the imported body:
+    /// a hole sketched on an imported face is cut on the exact kernel.
+    #[test]
+    fn step_round_trip_stays_exact() {
+        let (mut doc, _, _) = sample_doc();
+        let st = doc.rebuild();
+        let text = crate::step::exact_step(&st, "plate").expect("the plate is exact");
+        let (mut part, report) = crate::step::document_from_step(&text, "plate.step").expect("import");
+        assert_eq!((report.bodies, report.exact), (1, 1), "{}", report.summary());
+        let st = part.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert!((st.body.mass_properties().volume - 8000.0).abs() < 1e-6);
+
+        let face = st.body.face_at(anvil_kernel::v3(5.0, 5.0, 10.0), 1e-6).expect("top face");
+        let mut sf = SketchFeature::new(PlaneRef::Face(face));
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        sf.sketch.add_circle(c, 3.0);
+        let sk = part.add_feature(FeatureKind::Sketch(sf));
+        let cut = part.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::ThroughAll,
+            depth: Dim::Value(1.0),
+            reverse: false,
+            op: BodyOp::Cut,
+        }));
+        let st = part.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert!(st.exact_features.contains(&cut), "the cut fell back: {:?}", st.faceted_from);
+        let v = st.body.mass_properties().volume;
+        let exact = 8000.0 - PI * 9.0 * 10.0;
+        assert!((v - exact).abs() / exact < 1e-3, "{v}");
+        // Exporting again keeps the exact geometry, hole included.
+        let again = crate::step::exact_step(&st, "plate").expect("still exact");
+        assert!(again.contains("CYLINDRICAL_SURFACE"));
     }
 
     #[test]
@@ -220,7 +257,14 @@ mod import_tests {
             .iter()
             .map(|q| ImportedFace { planar: true, triangles: vec![[q[0], q[1], q[2]], [q[0], q[2], q[3]]] })
             .collect();
-        ImportedBodyFeature { source: "test".into(), replaces: vec!["Fillet1".into()], vertices: v, faces }
+        ImportedBodyFeature {
+            source: "test".into(),
+            replaces: vec!["Fillet1".into()],
+            vertices: v,
+            faces,
+            exact: None,
+            adds: false,
+        }
     }
 
     #[test]

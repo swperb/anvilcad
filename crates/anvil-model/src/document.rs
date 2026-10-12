@@ -286,6 +286,15 @@ pub struct ImportedBodyFeature {
     pub replaces: Vec<String>,
     pub vertices: Vec<[f64; 3]>,
     pub faces: Vec<ImportedFace>,
+    /// The body as an exact solid, when the source geometry allowed it (faces tagged in
+    /// the same order as `faces`). Later features then build on the exact kernel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact: Option<anvil_brep::Solid>,
+    /// False (the default): the body replaces everything built so far, as when it
+    /// stands in for a source system's geometry at this point in the tree. True: the
+    /// body is added alongside existing bodies, as for each body of an imported file.
+    #[serde(default)]
+    pub adds: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

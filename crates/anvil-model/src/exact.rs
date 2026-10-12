@@ -119,6 +119,7 @@ pub fn face_id(face: &Face) -> FaceId {
         BrepTag::StartCap => FaceId::START_CAP,
         BrepTag::EndCap => FaceId::END_CAP,
         BrepTag::Side { segment, .. } => 2 + segment,
+        BrepTag::Imported { index } => index,
     };
     FaceId { feature: face.owner, index }
 }

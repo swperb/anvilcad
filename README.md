@@ -45,7 +45,12 @@ system are still ahead; see the roadmap.
 
 **Files**
 - Native part format `.anvprt` (versioned JSON, written atomically)
-- Export to STEP AP214, STL (binary) and OBJ
+- STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
+  B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes and
+  cylinders import as exact solids, so features added to them build exactly; everything
+  else imports as a watertight mesh body. Open a `.step` or `.stp` file to start a part.
+- Export to STEP AP214 (exact geometry whenever the whole part was built exactly, facets
+  otherwise), STL (binary) and OBJ
 - SOLIDWORKS files are identified and explained (see below)
 
 **Application**
@@ -113,7 +118,9 @@ crates/
   anvil-sketch   2D sketcher: entities, constraints, solver, profile extraction
   anvil-model    parametric part document: feature tree, rebuild, equations,
                  materials, custom properties, file format
-  anvil-io       STEP / STL / OBJ export, SOLIDWORKS file identification
+  anvil-step     STEP reader (ISO 10303-21, never panics on malformed files), B-rep
+                 import as exact solids or meshes, exact AP214 export
+  anvil-io       faceted STEP / STL / OBJ export, SOLIDWORKS file identification
   anvil-app      desktop application (egui + wgpu: Metal, Vulkan, DX12)
   anvil-migrate  anvil-migrate: SOLIDWORKS to AnvilCAD converter (Windows; talks to
                  SOLIDWORKS through late-bound COM automation)
@@ -196,7 +203,8 @@ Part loads a model that uses most features.
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
    custom properties
-4. STEP import; then SOLIDWORKS format research for the five-year compatibility window
+4. STEP: assembly placement, colours and names, exact import of cones, spheres and tori;
+   then SOLIDWORKS format research for the five-year compatibility window
 5. A scripting and plugin API
 6. CAM (tracked as a feature request in the issues)
 

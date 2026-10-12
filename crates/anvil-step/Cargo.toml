@@ -1,0 +1,23 @@
+[package]
+name = "anvil-step"
+description = "STEP (ISO 10303-21) import and exact export for AnvilCAD"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+anvil-brep.workspace = true
+glam = { version = "0.34", features = ["serde"] }
+spade = "2.15"
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1.11"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
