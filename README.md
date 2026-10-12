@@ -1,6 +1,6 @@
 # AnvilCAD
 
-Free and open source parametric 3D CAD, written in Rust, with its own geometry kernel.
+Free and open source parametric 3D CAD, written in Rust, with its own geometry kernels.
 The workflow follows SOLIDWORKS conventions: a FeatureManager tree, sketches on planes or
 faces, fully defined sketches, extrudes and revolves, equations, custom properties and
 templates.
@@ -29,8 +29,8 @@ system are still ahead; see the roadmap.
 - Revolved Boss and Revolved Cut about any sketch line
 - Linear Pattern and Circular Pattern (about any axis)
 - Fillet (constant radius) and Chamfer (equal distance) on straight edges between flat
-  faces and on circular edges where a flat face meets a cylinder (boss tops, hole rims,
-  boss roots); convex edges are rounded off, concave edges are filled in
+  faces (built exactly) and on circular edges where a flat face meets a cylinder (boss
+  tops, hole rims, boss roots); convex edges are rounded off, concave edges are filled in
 - Shell to a uniform wall thickness, with any faces opened
 - Reference planes offset from planes or faces
 - Sketch on Front/Top/Right planes, reference planes, or any planar model face
@@ -105,26 +105,45 @@ explains how to migrate them.
 
 ```
 crates/
-  anvil-kernel   geometry kernel: math, profiles, triangulation, B-rep solids,
-                 booleans (BSP), extrude/revolve, mass properties, picking
+  anvil-brep     exact kernel: analytic curves (line, circle, ellipse) and surfaces
+                 (plane, cylinder), exact booleans, extrude, fillets and chamfers,
+                 topology checks, watertight tessellation
+  anvil-kernel   faceted kernel: math, profiles, triangulation, polygon B-rep solids,
+                 booleans (BSP), extrude/revolve, shell, mass properties, picking
   anvil-sketch   2D sketcher: entities, constraints, solver, profile extraction
   anvil-model    parametric part document: feature tree, rebuild, equations,
                  materials, custom properties, file format
   anvil-io       STEP / STL / OBJ export, SOLIDWORKS file identification
-  anvil-app      desktop application (egui + OpenGL)
+  anvil-app      desktop application (egui + wgpu: Metal, Vulkan, DX12)
   anvil-migrate  anvil-migrate: SOLIDWORKS to AnvilCAD converter (Windows; talks to
                  SOLIDWORKS through late-bound COM automation)
 ```
 
 Kernel design notes:
-- Solids are boundary representations made of planar convex polygons. Every polygon
-  carries a face tag naming the model face it belongs to (feature id plus a stable index
-  derived from the sketch entity) and the exact surface it lies on (plane, cylinder,
-  surface of revolution).
-- Booleans use BSP trees (iterative, no recursion limits), then T-junctions are repaired so
-  results are watertight.
-- Curved faces are faceted at 0.01 mm chord tolerance. Exact curved-surface booleans are the
-  main kernel milestone ahead.
+- Two kernels work together. `anvil-brep` builds parts exactly: its curves and surfaces
+  are analytic, and its booleans intersect them exactly (plane-plane, plane-cylinder,
+  parallel cylinders, and equal-radius cylinders whose axes meet). `anvil-kernel` is a
+  faceted kernel that covers everything else.
+- The rebuild runs on the exact kernel while every feature so far is one it supports
+  (extrudes, cuts, patterns, fillets and chamfers on straight edges between flat faces).
+  After each exact feature the faceted body is regenerated from the exact result, so
+  display, picking, mass properties, export and later features work unchanged. The first
+  feature the exact kernel cannot build, or declines, hands the part over to the faceted
+  kernel for the rest of the tree. A feature is never built worse than the faceted kernel
+  alone would build it. On the bundled sample part the extrudes, cuts, linear pattern and
+  first fillet build exactly, and the result matches the faceted-only volume to 0.014%.
+- Face names are shared by both kernels: the feature id plus a stable index derived from
+  the sketch entity (0 start cap, 1 end cap, 2 + entity for side faces), so sketches on
+  faces and edge selections survive whichever kernel built the face.
+- Every exact solid passes a topology check (closed, consistently oriented, valid Euler
+  characteristic) before it is used. Exact booleans are tested with randomized boxes on an
+  integer grid, which makes faces, edges and corners coincide constantly, against exact
+  volumes. Operations the exact kernel cannot do yet (crossing cylinders of different
+  radii, bodies touching along an edge, internal voids) are reported, never guessed.
+- Faceted solids are planar convex polygons, each tagged with its face name and exact
+  surface. Their booleans use BSP trees (iterative, no recursion limits), then T-junctions
+  are repaired so results are watertight. Curved faces are faceted at 0.01 mm chord
+  tolerance.
 - The sketch solver minimises constraint residuals with a damped minimum-norm Gauss-Newton
   method, so under-defined sketches move as little as possible when edited.
 
@@ -170,14 +189,24 @@ Part loads a model that uses most features.
 
 ## Roadmap
 
-1. Kernel: exact NURBS/analytic B-rep with exact booleans; fillets on curved-to-curved
-   edges, spherical corner blends, variable-radius fillets, draft
+1. Kernel: extend the exact kernel to cones, tori, spheres and surfaces of revolution so
+   revolves, shells and curved-edge fillets build exactly; general cylinder-cylinder
+   intersections; fillets on curved-to-curved edges, spherical corner blends,
+   variable-radius fillets, draft; later NURBS
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
    custom properties
 4. STEP import; then SOLIDWORKS format research for the five-year compatibility window
 5. A scripting and plugin API
+6. CAM (tracked as a feature request in the issues)
+
+## History
+
+The exact kernel (`anvil-brep`) and the wgpu renderer began as a separate project,
+ferrocad, and were merged into AnvilCAD in October 2026.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option. Unless you state otherwise, any contribution intentionally submitted for inclusion
+in AnvilCAD shall be dual licensed as above, without any additional terms or conditions.

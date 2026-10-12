@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-labelledby="anvilcad-favicon-title">
+  <title id="anvilcad-favicon-title">AnvilCAD</title>
+  <rect width="32" height="32" rx="7" fill="#1C1917"/>
+  <g transform="translate(3.2 2.75) scale(0.533)">
+    <path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="#F5F5F4" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="22" y="7" width="13" height="5" rx="1.25" fill="#EA580C"/>
+  </g>
+</svg>

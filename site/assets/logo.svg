@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 236 48" width="236" height="48" role="img" aria-labelledby="anvilcad-logo-title">
+  <title id="anvilcad-logo-title">AnvilCAD</title>
+  <!-- Mark: anvil in side view (horn, face, waist, base) with hot stock on the face -->
+  <path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="22" y="7.5" width="13" height="4.5" rx="1.25" fill="#C2410C"/>
+  <!-- Wordmark: monoline geometric lowercase, x-height 20, stroke 4.5 -->
+  <g fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- a -->
+    <circle cx="69" cy="28" r="10"/>
+    <path d="M79 18 V38"/>
+    <!-- n -->
+    <path d="M88 18 V38 M88 28 A10 10 0 0 1 108 28 V38"/>
+    <!-- v -->
+    <path d="M116 18 L126 38 L136 18"/>
+    <!-- i -->
+    <path d="M144 18 V38"/>
+    <!-- l -->
+    <path d="M152 8 V38"/>
+    <!-- c -->
+    <path d="M177.07 20.93 A10 10 0 1 0 177.07 35.07"/>
+    <!-- a -->
+    <circle cx="192" cy="28" r="10"/>
+    <path d="M202 18 V38"/>
+    <!-- d -->
+    <circle cx="218" cy="28" r="10"/>
+    <path d="M228 8 V38"/>
+  </g>
+  <!-- dot of the i -->
+  <circle cx="144" cy="9.5" r="2.6" fill="currentColor"/>
+</svg>

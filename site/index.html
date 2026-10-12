@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AnvilCAD: open-source parametric 3D CAD in Rust</title>
+  <meta name="description" content="AnvilCAD is free, open-source parametric 3D CAD written in Rust, with its own geometry kernel and a workflow that follows SOLIDWORKS conventions. Early release (0.1).">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="site-header">
+    <div class="wrap header-row">
+      <a class="brand" href="#top" aria-label="AnvilCAD home">
+        <svg class="mark" viewBox="0 0 48 48" width="28" height="28" aria-hidden="true" focusable="false"><path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="22" y="7.5" width="13" height="4.5" rx="1.25" fill="#C2410C"/></svg>
+        <span>AnvilCAD</span>
+      </a>
+      <nav aria-label="Primary">
+        <ul class="nav-list">
+          <li><a href="#features">Features</a></li>
+          <li><a href="#kernels">Kernels</a></li>
+          <li><a href="#migrate">Migration</a></li>
+          <li><a href="#roadmap">Roadmap</a></li>
+          <li><a href="https://github.com/swperb/anvilcad">GitHub</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="label"><span class="status-dot" aria-hidden="true"></span>Status: early (0.1)</p>
+          <h1 id="hero-title">AnvilCAD</h1>
+          <p class="pitch">Free, open-source parametric 3D CAD written in Rust, with its own geometry kernel. If you know SOLIDWORKS, you already know the workflow: a FeatureManager tree, sketches on planes or faces, and fully defined sketches.</p>
+          <div class="cta-row">
+            <a class="btn btn-primary" href="https://github.com/swperb/anvilcad">View on GitHub</a>
+            <a class="btn btn-secondary" href="#roadmap">Roadmap</a>
+          </div>
+          <p class="fine">The source is public on GitHub under MIT OR Apache-2.0. There are no prebuilt downloads yet, so build from source with <code>cargo run --release -p anvil-app</code>. The binary is called <code>anvilcad</code>.</p>
+        </div>
+        <figure class="hero-art">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-labelledby="art-hero-title art-hero-desc">
+<title id="art-hero-title">Isometric drawing of a machined plate</title>
+<desc id="art-hero-desc">A rectangular plate with a through hole, a raised rectangular boss and a chamfered corner, dimensioned in millimetres on a faint drafting grid.</desc>
+<defs>
+<pattern id="art-g" width="30" height="30" patternUnits="userSpaceOnUse"><circle cx="15" cy="15" r="1" fill="currentColor"/></pattern>
+<radialGradient id="art-gf" cx="50%" cy="50%" r="55%"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+<mask id="art-gm"><rect width="1200" height="600" fill="url(#art-gf)"/></mask>
+<clipPath id="art-hc"><ellipse cx="603" cy="190.8" rx="57.3" ry="33.1"/></clipPath>
+</defs>
+<rect width="1200" height="600" fill="url(#art-g)" opacity="0.22" mask="url(#art-gm)"/>
+<g fill="none" stroke="currentColor" stroke-width="0.75" stroke-dasharray="2 5" opacity="0.4">
+<path d="M494.9 27 L1204.2 436.5"/>
+<path d="M765.1 27 L190.9 358.5"/>
+<path d="M866.4 257.1 L1082.6 132.3"/>
+<path d="M744.8 186.9 L413.8 -4.2"/>
+</g>
+<path d="M805.6 471.6 L805.6 424.8 L724.6 424.8 L724.6 471.6 Z" fill="#C2410C" fill-opacity="0.85"/>
+<path d="M744.8 186.9 L866.4 257.1 L751.6 323.4 L630 253.2 Z" fill="currentColor" fill-opacity="0.06"/>
+<path d="M805.6 471.6 L765.1 495 L724.6 471.6" fill="none" stroke="currentColor" stroke-width="0.75" stroke-dasharray="2 3" opacity="0.6"/>
+<g fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="6 4" opacity="0.45">
+<path d="M630 105 L1035.3 339 M630 105 L359.8 261 M630 105 L630 58.2"/>
+</g>
+<g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
+<path d="M630 58.2 L1035.3 292.2 L805.6 424.8 L724.6 424.8 L359.8 214.2 Z"/>
+<path d="M1035.3 292.2 L1035.3 339 L805.6 471.6 L724.6 471.6 L359.8 261 L359.8 214.2"/>
+<path d="M805.6 471.6 L805.6 424.8 M724.6 471.6 L724.6 424.8"/>
+<path d="M744.8 186.9 L866.4 257.1 L751.6 323.4 L630 253.2 Z"/>
+<path d="M866.4 257.1 L866.4 327.3 L751.6 393.6 L630 323.4 L630 253.2 M751.6 393.6 L751.6 323.4"/>
+<ellipse cx="603" cy="190.8" rx="57.3" ry="33.1"/>
+</g>
+<ellipse cx="603" cy="237.6" rx="57.3" ry="33.1" fill="none" stroke="currentColor" stroke-width="1.25" clip-path="url(#art-hc)" opacity="0.7"/>
+<g fill="none" stroke="#C2410C" stroke-width="1" stroke-dasharray="14 3 2 3">
+<path d="M542.2 155.7 L663.8 225.9 M663.8 155.7 L542.2 225.9"/>
+</g>
+<g fill="none" stroke="currentColor" stroke-width="1">
+<path d="M349.7 266.9 L272 311.7 M755 500.8 L677.3 545.7" stroke-width="0.75" opacity="0.6"/>
+<path d="M285.5 303.9 L690.8 537.9"/>
+<path d="M285.5 303.9 L291.8 311 L294.8 305.8 Z M690.8 537.9 L684.5 530.8 L681.5 536 Z" fill="currentColor" stroke="none"/>
+<path d="M1045.4 344.9 L1123.1 389.7 M775.2 500.8 L852.9 545.7" stroke-width="0.75" opacity="0.6"/>
+<path d="M1109.6 381.9 L839.4 537.9"/>
+<path d="M1109.6 381.9 L1100.3 383.8 L1103.3 389 Z M839.4 537.9 L848.7 536 L845.7 530.8 Z" fill="currentColor" stroke="none"/>
+</g>
+<g fill="none" stroke="currentColor" stroke-width="1">
+<path d="M870.4 327.3 H906.4 M870.4 257.1 H906.4" stroke-width="0.75" opacity="0.6"/>
+<path d="M900.4 327.3 L900.4 257.1"/><path d="M900.4 327.3 L903.4 318.3 L897.4 318.3 Z M900.4 257.1 L897.4 266.1 L903.4 266.1 Z" fill="currentColor" stroke="none"/>
+</g>
+<g fill="none" stroke="#C2410C" stroke-width="1"><path d="M545.7 190.8 L495.7 130.8 H425.7"/><path d="M545.7 190.8 L542.2 182 L537.6 185.8 Z" fill="#C2410C" stroke="none"/></g>
+<path d="M765.1 448.2 V533.6" fill="none" stroke="#C2410C" stroke-width="1"/>
+<circle cx="765.1" cy="448.2" r="2.5" fill="currentColor"/>
+<g fill="currentColor" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" letter-spacing="0.5">
+<text x="477.8" y="432.9" text-anchor="end">120</text>
+<text x="984.9" y="471.9" text-anchor="start">80</text>
+<text x="908.4" y="297.2">18</text>
+<text x="425.7" y="123.8" fill="#C2410C">&#216;24 THRU</text>
+<text x="765.1" y="550.6" text-anchor="middle" fill="#C2410C">C12 &#215; 45&#176;</text>
+</g>
+<g fill="none" stroke="currentColor" stroke-width="1.25" opacity="0.7" stroke-linecap="round">
+<path d="M110 520 L144.6 540"/><path d="M144.6 540 L139.8 534.3 L137.3 538.7 Z" fill="currentColor" stroke="none"/>
+<path d="M110 520 L75.4 540"/><path d="M75.4 540 L82.7 538.7 L80.2 534.3 Z" fill="currentColor" stroke="none"/>
+<path d="M110 520 L110 480"/><path d="M110 480 L107.5 487 L112.5 487 Z" fill="currentColor" stroke="none"/>
+</g>
+<g fill="currentColor" opacity="0.7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">
+<text x="156.8" y="551" text-anchor="middle">X</text>
+<text x="63.2" y="551" text-anchor="middle">Y</text>
+<text x="110" y="470" text-anchor="middle">Z</text>
+</g>
+</svg>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="label">01 / Capabilities</p>
+          <h2 id="features-title">What works today</h2>
+          <p class="lede">Every item here is in the code now. The workflow follows SOLIDWORKS conventions: pick a plane or a face, draw a sketch, define it fully, and turn it into a feature in the tree.</p>
+        </header>
+        <ul class="feature-grid">
+          <li class="card">
+            <h3>Sketcher</h3>
+            <p>Line, centerline, rectangle, circle and centerpoint arc, plus construction geometry. Drag points and circles and the relations stay satisfied.</p>
+          </li>
+          <li class="card">
+            <h3>Relations and Smart Dimension</h3>
+            <p>Relations including tangent, concentric and midpoint. Smart Dimension covers lengths, diameters, radii and angles. Degrees of freedom are reported as you go, and conflicting relations are highlighted.</p>
+          </li>
+          <li class="card">
+            <h3>Extrudes</h3>
+            <p>Extruded Boss and Extruded Cut with Blind, Mid Plane, Through All and Through All - Both end conditions.</p>
+          </li>
+          <li class="card">
+            <h3>Revolves and patterns</h3>
+            <p>Revolved Boss and Revolved Cut, plus Linear Pattern and Circular Pattern.</p>
+          </li>
+          <li class="card">
+            <h3>Fillet, Chamfer and Shell</h3>
+            <p>Fillets and chamfers on straight edges between flat faces, and on circular edges where a flat face meets a cylinder. Shell hollows a part to a uniform wall.</p>
+          </li>
+          <li class="card">
+            <h3>Planes and faces</h3>
+            <p>Sketch on the Front, Top or Right plane, on reference planes you add, or directly on a face of the model.</p>
+          </li>
+          <li class="card">
+            <h3>Variables and equations</h3>
+            <p>Global variables with equations. Type <code>=width</code> into any dimension to link it.</p>
+          </li>
+          <li class="card">
+            <h3>Materials and properties</h3>
+            <p>Assign a material to get mass properties. Custom properties and part templates are supported too.</p>
+          </li>
+          <li class="card">
+            <h3>Files and export</h3>
+            <p>Native <code>.anvprt</code> parts are versioned JSON, written atomically. Export to STEP AP214, STL and OBJ. Every change can be undone and redone.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section section-alt" id="screens" aria-labelledby="screens-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="label">02 / Screens</p>
+          <h2 id="screens-title">The app as it is</h2>
+          <p class="lede">An unedited capture of AnvilCAD with the bundled sample part open.</p>
+        </header>
+        <figure class="shot shot-main">
+          <img src="assets/screens/sample-part.jpg" width="1400" height="880" loading="lazy" alt="AnvilCAD window with the sample part: a rectangular aluminium plate with rounded corners, four mounting holes, a row of slots cut along one side, and a filleted round boss with a bore in the middle. The FeatureManager tree on the left lists the 6061 Alloy material, the Front, Top and Right planes, and the features from Sketch1 and Boss-Extrude1 through Cut-Extrude3, LPattern1 and Fillet1 to Fillet3. The toolbar shows Extruded Boss/Base, Revolved Boss/Base, Extruded Cut, Revolved Cut, Linear Pattern, Circular Pattern, Fillet, Chamfer, Shell and Reference Plane. The status bar reads Rebuild OK.">
+          <figcaption><span class="mono">fig. 1</span> The bundled sample part: extrudes, cuts, a linear pattern and fillets, with the FeatureManager tree on the left.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" id="kernels" aria-labelledby="kernels-title">
+      <div class="wrap two-col">
+        <header class="section-head">
+          <p class="label">03 / Kernels</p>
+          <h2 id="kernels-title">Two kernels, one rebuild</h2>
+          <p class="lede">Exact geometry where it is supported, a faceted fallback everywhere else.</p>
+        </header>
+        <div class="prose">
+          <p><code>anvil-brep</code> is an exact boundary-representation kernel. It works with exact lines, circles, ellipses, planes and cylinders, and does exact booleans and exact fillets and chamfers on straight edges. <code>anvil-kernel</code> is a faceted kernel that covers everything else: revolves, shells, fillets on curved edges and imported bodies. A rebuild uses the exact kernel for as long as every feature so far is one it supports, and hands over to the faceted kernel at the first feature it cannot build. A feature is never built worse than it was before.</p>
+          <p>On the bundled sample part, the extrudes, cuts, linear pattern and first fillet build exactly, and the result matches the faceted-only volume to within 0.014 percent.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section-alt" id="migrate" aria-labelledby="migrate-title">
+      <div class="wrap two-col">
+        <header class="section-head">
+          <p class="label">04 / Migration</p>
+          <h2 id="migrate-title">Bring your SOLIDWORKS parts</h2>
+          <p class="lede">Your feature tree comes with you, not just the shape.</p>
+        </header>
+        <div class="prose">
+          <p><code>anvil-migrate</code> converts SOLIDWORKS parts into AnvilCAD parts with their feature tree. It runs on a Windows machine with SOLIDWORKS installed and checks each translated feature by comparing its volume with what SOLIDWORKS reports. When a feature cannot be rebuilt yet, it comes across as an imported body at that point in the tree, and the features after it stay parametric.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="stability" aria-labelledby="stability-title">
+      <div class="wrap two-col">
+        <header class="section-head">
+          <p class="label">05 / Principles</p>
+          <h2 id="stability-title">Stability first</h2>
+          <p class="lede">A CAD tool that crashes or quietly produces a broken solid costs more than one that is slow. These rules are enforced in the code, not just written down.</p>
+        </header>
+        <ol class="rules">
+          <li>
+            <h3>Transactional edits</h3>
+            <p>An edit either applies completely or leaves the part as it was.</p>
+          </li>
+          <li>
+            <h3>Every exact solid is topology-checked</h3>
+            <p>Solids from the exact kernel are checked before they are used.</p>
+          </li>
+          <li>
+            <h3>Property-based tests on booleans</h3>
+            <p>Randomized boxes on an integer grid are combined and the results compared with exact volumes.</p>
+          </li>
+          <li>
+            <h3>UI tests on the real interface</h3>
+            <p>Tests drive the real UI with simulated mouse input, so sketching, dimensioning, dragging, face picking, extruding and undo are covered without opening a window.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section section-alt" id="architecture" aria-labelledby="architecture-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="label">06 / Architecture</p>
+          <h2 id="architecture-title">Seven crates, dependencies point one way</h2>
+          <p class="lede">Geometry knows nothing about the UI, and each crate can be tested on its own.</p>
+        </header>
+        <ol class="stack">
+          <li class="layer">
+            <p class="crate"><code>anvil-app</code></p>
+            <p>The desktop application, built on egui and drawn with wgpu: Metal on macOS, Vulkan or GL on Linux, DX12 or Vulkan on Windows.</p>
+          </li>
+          <li class="layer">
+            <p class="crate"><code>anvil-migrate</code></p>
+            <p>SOLIDWORKS to AnvilCAD converter. Runs on Windows with SOLIDWORKS installed.</p>
+          </li>
+          <li class="layer">
+            <p class="crate"><code>anvil-io</code></p>
+            <p>Export to STEP AP214, STL and OBJ.</p>
+          </li>
+          <li class="layer">
+            <p class="crate"><code>anvil-model</code></p>
+            <p>The parametric part: feature tree, rebuild, equations, materials, custom properties and the <code>.anvprt</code> file format.</p>
+          </li>
+          <li class="layer">
+            <p class="crate"><code>anvil-sketch</code></p>
+            <p>2D sketcher: entities, relations, the constraint solver and profile extraction.</p>
+          </li>
+          <li class="layer">
+            <p class="crate"><code>anvil-kernel</code></p>
+            <p>Faceted kernel for everything the exact kernel does not cover yet.</p>
+          </li>
+          <li class="layer">
+            <p class="crate"><code>anvil-brep</code></p>
+            <p>Exact boundary-representation kernel: exact curves and surfaces, booleans, straight-edge fillets and chamfers.</p>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" id="roadmap" aria-labelledby="roadmap-title">
+      <div class="wrap">
+        <header class="section-head">
+          <p class="label">07 / Roadmap</p>
+          <h2 id="roadmap-title">What comes next</h2>
+          <p class="lede">Roughly in order. Nothing here has a date attached.</p>
+        </header>
+        <ol class="roadmap">
+          <li><span class="mono step">next</span><div><h3>A wider exact kernel</h3><p>Exact analytic coverage for more surfaces (cones, tori, spheres), and blends on curved edges and vertices.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>More part features</h3><p>Holes, mirror, sweep, loft and multi-body parts.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>Assemblies and drawings</h3><p>Parts positioned together, and 2D drawings made from them.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>STEP import</h3><p>Bring in parts from other CAD systems.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>Scripting API</h3><p>Drive AnvilCAD from code.</p></div></li>
+          <li class="future"><span class="mono step">later</span><div><h3>CAM</h3><p>Toolpath generation, tracked as a separate feature request rather than a planned milestone.</p></div></li>
+        </ol>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-row">
+      <p class="brand-small">
+        <svg class="mark" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true" focusable="false"><path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="22" y="7.5" width="13" height="4.5" rx="1.25" fill="#C2410C"/></svg>
+        <span>AnvilCAD</span>
+      </p>
+      <p>Licensed under MIT OR Apache-2.0.</p>
+      <p><a href="https://github.com/swperb/anvilcad">github.com/swperb/anvilcad</a></p>
+    </div>
+  </footer>
+</body>
+</html>
