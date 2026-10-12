@@ -27,7 +27,7 @@ fn main() -> eframe::Result<()> {
     }
 
     let options = eframe::NativeOptions {
-        renderer: eframe::Renderer::Glow,
+        renderer: eframe::Renderer::Wgpu,
         depth_buffer: 24,
         multisampling: 4,
         viewport: eframe::egui::ViewportBuilder::default()
@@ -39,6 +39,12 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "AnvilCAD",
         options,
-        Box::new(move |cc| Ok(Box::new(app::AnvilApp::new(&cc.egui_ctx, open, screenshot, edit_sketch)))),
+        Box::new(move |cc| {
+            if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                // Must match the depth buffer and multisampling requested above.
+                render::install(rs, 4, eframe::egui_wgpu::depth_format_from_bits(24, 0));
+            }
+            Ok(Box::new(app::AnvilApp::new(&cc.egui_ctx, open, screenshot, edit_sketch)))
+        }),
     )
 }

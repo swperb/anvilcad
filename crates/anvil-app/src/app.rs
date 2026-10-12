@@ -1648,13 +1648,7 @@ impl AnvilApp {
         let view = self.camera.back;
         let light = self.camera.back * 1.0 + self.camera.up * 0.45 + self.camera.right * 0.25;
         let edges = self.show_edges;
-        let renderer = self.renderer.clone();
-        let cb = egui::PaintCallback {
-            rect,
-            callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
-                renderer.lock().unwrap().paint(painter.gl(), &mvp, view, light, edges);
-            })),
-        };
+        let cb = self.renderer.lock().unwrap().callback(rect, mvp, view, light, edges);
         painter.add(cb);
 
         // Overlays: planes, sketches, edges picked for a fillet or chamfer.
@@ -2233,11 +2227,7 @@ impl eframe::App for AnvilApp {
         self.frame(ctx);
     }
 
-    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
-        if let Some(gl) = gl {
-            self.renderer.lock().unwrap().destroy(gl);
-        }
-    }
+    fn on_exit(&mut self) {}
 }
 
 /// End-to-end UI tests: real egui frames driven by synthetic mouse input (no window or GPU).

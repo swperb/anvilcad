@@ -1,41 +1,65 @@
-//! OpenGL renderer for the shaded model and its edges.
+//! wgpu renderer for the shaded model and its edges. wgpu runs on Metal (macOS), Vulkan
+//! or OpenGL (Linux) and DX12 or Vulkan (Windows).
+//!
+//! The app keeps a [`Renderer`] holding the latest scene. Each frame it hands egui a
+//! paint callback; the GPU side ([`Gpu`]) lives in egui's callback resources, uploads a
+//! new scene when its version changes, and draws into egui's own render pass. Without a
+//! GPU (the UI tests) the callback is recorded but never run.
 
 use anvil_kernel::{FaceId, Mesh, Vec3};
-use eframe::glow::{self, HasContext};
+use eframe::egui;
+use eframe::egui_wgpu::{self, wgpu};
+use std::sync::Arc;
+use wgpu::util::DeviceExt;
 
-const VS: &str = r#"
-in vec3 a_pos;
-in vec3 a_normal;
-in vec3 a_color;
-uniform mat4 u_mvp;
-out vec3 v_normal;
-out vec3 v_color;
-void main() {
-    gl_Position = u_mvp * vec4(a_pos, 1.0);
-    v_normal = a_normal;
-    v_color = a_color;
+const SHADER: &str = r#"
+struct Uniforms {
+    mvp: mat4x4<f32>,
+    view: vec4<f32>,
+    light: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct VIn {
+    @location(0) pos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) color: vec3<f32>,
+};
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) normal: vec3<f32>,
+    @location(1) color: vec3<f32>,
+};
+
+@vertex
+fn vs(v: VIn) -> VOut {
+    var o: VOut;
+    var c = u.mvp * vec4<f32>(v.pos, 1.0);
+    // The camera produces OpenGL clip space (depth -w..w); wgpu wants 0..w.
+    c.z = (c.z + c.w) * 0.5;
+    o.clip = c;
+    o.normal = v.normal;
+    o.color = v.color;
+    return o;
 }
-"#;
 
-const FS: &str = r#"
-precision mediump float;
-in vec3 v_normal;
-in vec3 v_color;
-uniform vec3 u_light;
-uniform vec3 u_view;
-uniform float u_flat;
-out vec4 out_color;
-void main() {
-    if (u_flat > 0.5) {
-        out_color = vec4(v_color, 1.0);
-        return;
+@fragment
+fn fs_shaded(i: VOut) -> @location(0) vec4<f32> {
+    var n = normalize(i.normal);
+    let view = normalize(u.view.xyz);
+    if (dot(n, view) < 0.0) {
+        n = -n;
     }
-    vec3 n = normalize(v_normal);
-    if (dot(n, u_view) < 0.0) n = -n;
-    float diff = max(dot(n, u_light), 0.0);
-    vec3 h = normalize(u_light + u_view);
-    float spec = pow(max(dot(n, h), 0.0), 48.0) * 0.25;
-    out_color = vec4(v_color * (0.38 + 0.62 * diff) + vec3(spec), 1.0);
+    let light = normalize(u.light.xyz);
+    let diff = max(dot(n, light), 0.0);
+    let h = normalize(light + view);
+    let spec = pow(max(dot(n, h), 0.0), 48.0) * 0.25;
+    return vec4<f32>(i.color * (0.38 + 0.62 * diff) + vec3<f32>(spec), 1.0);
+}
+
+@fragment
+fn fs_flat(i: VOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(i.color, 1.0);
 }
 "#;
 
@@ -82,155 +106,225 @@ impl SceneData {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct Uniforms {
+    mvp: [f32; 16],
+    view: [f32; 4],
+    light: [f32; 4],
+}
+
+/// The app-side handle: the latest scene and its version.
+#[derive(Default)]
 pub struct Renderer {
-    program: Option<glow::Program>,
-    vao: Option<glow::VertexArray>,
-    tri_buf: Option<glow::Buffer>,
-    edge_buf: Option<glow::Buffer>,
-    tri_count: i32,
-    edge_count: i32,
-    pending: Option<SceneData>,
+    scene: Option<Arc<SceneData>>,
+    version: u64,
+    /// Shown in the viewport if drawing is impossible. wgpu reports pipeline errors
+    /// through the device, so this stays empty in normal use.
     pub error: Option<String>,
 }
 
 impl Renderer {
     pub fn new() -> Renderer {
-        Renderer {
-            program: None,
-            vao: None,
-            tri_buf: None,
-            edge_buf: None,
-            tri_count: 0,
-            edge_count: 0,
-            pending: None,
-            error: None,
-        }
+        Renderer::default()
     }
 
     pub fn set_scene(&mut self, data: SceneData) {
-        self.pending = Some(data);
+        self.scene = Some(Arc::new(data));
+        self.version += 1;
     }
 
-    unsafe fn init(&mut self, gl: &glow::Context) -> Result<(), String> {
-        let version = eframe::egui_glow::ShaderVersion::get(gl);
-        let header = version.version_declaration();
-        let program = gl.create_program()?;
-        let mut shaders = Vec::new();
-        for (kind, src) in [(glow::VERTEX_SHADER, VS), (glow::FRAGMENT_SHADER, FS)] {
-            let sh = gl.create_shader(kind)?;
-            gl.shader_source(sh, &format!("{header}\n{src}"));
-            gl.compile_shader(sh);
-            if !gl.get_shader_compile_status(sh) {
-                return Err(gl.get_shader_info_log(sh));
-            }
-            gl.attach_shader(program, sh);
-            shaders.push(sh);
+    /// A paint callback drawing the scene into `rect` with the given camera.
+    pub fn callback(
+        &self,
+        rect: egui::Rect,
+        mvp: [f32; 16],
+        view_dir: Vec3,
+        light: Vec3,
+        edges: bool,
+    ) -> egui::PaintCallback {
+        let v = view_dir.to_f32();
+        let l = light.normalized().to_f32();
+        egui_wgpu::Callback::new_paint_callback(
+            rect,
+            Draw {
+                scene: self.scene.clone(),
+                version: self.version,
+                uniforms: Uniforms { mvp, view: [v[0], v[1], v[2], 0.0], light: [l[0], l[1], l[2], 0.0] },
+                edges,
+            },
+        )
+    }
+}
+
+struct Draw {
+    scene: Option<Arc<SceneData>>,
+    version: u64,
+    uniforms: Uniforms,
+    edges: bool,
+}
+
+/// GPU resources, stored in egui's callback resources.
+pub struct Gpu {
+    shaded: wgpu::RenderPipeline,
+    flat: wgpu::RenderPipeline,
+    uniforms: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    tris: Option<(wgpu::Buffer, u32)>,
+    edges: Option<(wgpu::Buffer, u32)>,
+    version: u64,
+}
+
+/// Creates the GPU resources. `msaa` and `depth` must match egui's render pass.
+pub fn install(rs: &egui_wgpu::RenderState, msaa: u32, depth: Option<wgpu::TextureFormat>) {
+    let gpu = Gpu::new(&rs.device, rs.target_format, msaa, depth);
+    rs.renderer.write().callback_resources.insert(gpu);
+}
+
+impl Gpu {
+    fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        msaa: u32,
+        depth: Option<wgpu::TextureFormat>,
+    ) -> Gpu {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("anvilcad model"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("anvilcad uniforms"),
+            size: std::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("anvilcad uniforms"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("anvilcad uniforms"),
+            layout: &bgl,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() }],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("anvilcad"),
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
+        });
+        let attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
+        let pipeline = |fs: &str, topology, bias: wgpu::DepthBiasState| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(fs),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: 9 * 4,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &attrs,
+                    }],
+                },
+                primitive: wgpu::PrimitiveState { topology, ..Default::default() },
+                depth_stencil: depth.map(|format| wgpu::DepthStencilState {
+                    format,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: Default::default(),
+                    bias,
+                }),
+                multisample: wgpu::MultisampleState { count: msaa.max(1), ..Default::default() },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fs),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            })
+        };
+        // Faces sit slightly behind their edges so the edges always win the depth test.
+        let face_bias = wgpu::DepthBiasState { constant: 2, slope_scale: 1.0, clamp: 0.0 };
+        Gpu {
+            shaded: pipeline("fs_shaded", wgpu::PrimitiveTopology::TriangleList, face_bias),
+            flat: pipeline("fs_flat", wgpu::PrimitiveTopology::LineList, Default::default()),
+            uniforms,
+            bind_group,
+            tris: None,
+            edges: None,
+            version: u64::MAX,
         }
-        gl.bind_attrib_location(program, 0, "a_pos");
-        gl.bind_attrib_location(program, 1, "a_normal");
-        gl.bind_attrib_location(program, 2, "a_color");
-        gl.link_program(program);
-        if !gl.get_program_link_status(program) {
-            return Err(gl.get_program_info_log(program));
-        }
-        for sh in shaders {
-            gl.detach_shader(program, sh);
-            gl.delete_shader(sh);
-        }
-        self.program = Some(program);
-        self.vao = Some(gl.create_vertex_array()?);
-        self.tri_buf = Some(gl.create_buffer()?);
-        self.edge_buf = Some(gl.create_buffer()?);
-        Ok(())
     }
 
-    unsafe fn bind_layout(&self, gl: &glow::Context, buf: glow::Buffer) {
-        gl.bind_buffer(glow::ARRAY_BUFFER, Some(buf));
-        let stride = 9 * 4;
-        for (i, off) in [(0u32, 0i32), (1, 12), (2, 24)] {
-            gl.enable_vertex_attrib_array(i);
-            gl.vertex_attrib_pointer_f32(i, 3, glow::FLOAT, false, stride, off);
+    fn upload(&mut self, device: &wgpu::Device, scene: Option<&SceneData>, version: u64) {
+        let buffer = |data: &[f32]| {
+            (!data.is_empty()).then(|| {
+                let b = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("anvilcad scene"),
+                    contents: bytemuck::cast_slice(data),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                (b, (data.len() / 9) as u32)
+            })
+        };
+        self.tris = scene.and_then(|s| buffer(&s.tris));
+        self.edges = scene.and_then(|s| buffer(&s.edges));
+        self.version = version;
+    }
+}
+
+impl egui_wgpu::CallbackTrait for Draw {
+    fn prepare(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        _screen: &egui_wgpu::ScreenDescriptor,
+        _encoder: &mut wgpu::CommandEncoder,
+        resources: &mut egui_wgpu::CallbackResources,
+    ) -> Vec<wgpu::CommandBuffer> {
+        if let Some(gpu) = resources.get_mut::<Gpu>() {
+            if gpu.version != self.version {
+                gpu.upload(device, self.scene.as_deref(), self.version);
+            }
+            queue.write_buffer(&gpu.uniforms, 0, bytemuck::bytes_of(&self.uniforms));
         }
+        Vec::new()
     }
 
-    /// Draws into the current viewport. Called from the egui paint callback.
-    pub fn paint(&mut self, gl: &glow::Context, mvp: &[f32; 16], view_dir: Vec3, light: Vec3, edges: bool) {
-        unsafe {
-            if self.program.is_none() && self.error.is_none() {
-                if let Err(e) = self.init(gl) {
-                    self.error = Some(e);
-                }
-            }
-            let (Some(program), Some(vao), Some(tb), Some(eb)) =
-                (self.program, self.vao, self.tri_buf, self.edge_buf)
-            else {
-                return;
-            };
-            gl.bind_vertex_array(Some(vao));
-            if let Some(data) = self.pending.take() {
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(tb));
-                gl.buffer_data_u8_slice(
-                    glow::ARRAY_BUFFER,
-                    bytemuck::cast_slice(&data.tris),
-                    glow::DYNAMIC_DRAW,
-                );
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(eb));
-                gl.buffer_data_u8_slice(
-                    glow::ARRAY_BUFFER,
-                    bytemuck::cast_slice(&data.edges),
-                    glow::DYNAMIC_DRAW,
-                );
-                self.tri_count = (data.tris.len() / 9) as i32;
-                self.edge_count = (data.edges.len() / 9) as i32;
-            }
-
-            gl.use_program(Some(program));
-            let loc = |n: &str| gl.get_uniform_location(program, n);
-            gl.uniform_matrix_4_f32_slice(loc("u_mvp").as_ref(), false, mvp);
-            let v = view_dir.to_f32();
-            let l = light.normalized().to_f32();
-            gl.uniform_3_f32(loc("u_view").as_ref(), v[0], v[1], v[2]);
-            gl.uniform_3_f32(loc("u_light").as_ref(), l[0], l[1], l[2]);
-
-            gl.enable(glow::DEPTH_TEST);
-            gl.depth_func(glow::LEQUAL);
-            gl.depth_mask(true);
-            gl.clear(glow::DEPTH_BUFFER_BIT);
-            gl.disable(glow::CULL_FACE);
-            gl.disable(glow::BLEND);
-
-            if self.tri_count > 0 {
-                gl.enable(glow::POLYGON_OFFSET_FILL);
-                gl.polygon_offset(1.0, 1.0);
-                gl.uniform_1_f32(loc("u_flat").as_ref(), 0.0);
-                self.bind_layout(gl, tb);
-                gl.draw_arrays(glow::TRIANGLES, 0, self.tri_count);
-                gl.disable(glow::POLYGON_OFFSET_FILL);
-            }
-            if edges && self.edge_count > 0 {
-                gl.uniform_1_f32(loc("u_flat").as_ref(), 1.0);
-                self.bind_layout(gl, eb);
-                gl.draw_arrays(glow::LINES, 0, self.edge_count);
-            }
-
-            gl.disable(glow::DEPTH_TEST);
-            gl.enable(glow::BLEND);
-            gl.bind_vertex_array(None);
-            gl.bind_buffer(glow::ARRAY_BUFFER, None);
-            gl.use_program(None);
+    fn paint(
+        &self,
+        _info: egui::PaintCallbackInfo,
+        pass: &mut wgpu::RenderPass<'static>,
+        resources: &egui_wgpu::CallbackResources,
+    ) {
+        let Some(gpu) = resources.get::<Gpu>() else { return };
+        pass.set_bind_group(0, &gpu.bind_group, &[]);
+        if let Some((buf, n)) = &gpu.tris {
+            pass.set_pipeline(&gpu.shaded);
+            pass.set_vertex_buffer(0, buf.slice(..));
+            pass.draw(0..*n, 0..1);
         }
-    }
-
-    pub fn destroy(&mut self, gl: &glow::Context) {
-        unsafe {
-            if let Some(p) = self.program.take() {
-                gl.delete_program(p);
-            }
-            if let Some(v) = self.vao.take() {
-                gl.delete_vertex_array(v);
-            }
-            for b in [self.tri_buf.take(), self.edge_buf.take()].into_iter().flatten() {
-                gl.delete_buffer(b);
+        if self.edges {
+            if let Some((buf, n)) = &gpu.edges {
+                pass.set_pipeline(&gpu.flat);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..*n, 0..1);
             }
         }
     }

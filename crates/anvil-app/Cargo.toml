@@ -14,7 +14,7 @@ anvil-kernel.workspace = true
 anvil-sketch.workspace = true
 anvil-model.workspace = true
 anvil-io.workspace = true
-eframe = { version = "=0.31.1", default-features = false, features = ["glow", "default_fonts", "wayland", "x11"] }
+eframe = { version = "=0.31.1", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
 bytemuck = "1"
 rfd = "0.15"
 png = "0.17"
