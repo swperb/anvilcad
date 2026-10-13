@@ -16,7 +16,13 @@ use std::sync::Arc;
 
 /// The kernel surface for a face, given its boundary loops in order (running so the
 /// face lies to their left seen from the side its normal points to) and its sense.
-fn surface(s: &shapes::Surface, loops: &[Vec<DVec3>], same_sense: bool) -> Option<Surface> {
+/// `singular` holds the points of the face's vertex loops (a cone's apex, say).
+fn surface(
+    s: &shapes::Surface,
+    loops: &[Vec<DVec3>],
+    singular: &[DVec3],
+    same_sense: bool,
+) -> Option<Surface> {
     let all: Vec<DVec3> = loops.iter().flatten().copied().collect();
     let points = &all[..];
     match s {
@@ -25,8 +31,13 @@ fn surface(s: &shapes::Surface, loops: &[Vec<DVec3>], same_sense: bool) -> Optio
             Some(Surface::Cylinder { frame: *frame, radius: *radius })
         }
         shapes::Surface::Cone { frame, radius, semi_angle } => {
-            // Move the origin to the middle of the face, so the radius there sets the
-            // parameter scale and is never zero; faces that reach the apex are refused.
+            // A negative angle (outside the standard, but written) is the same cone with
+            // its axis turned round.
+            let (frame, semi_angle) = if *semi_angle < 0.0 {
+                (&Frame { origin: frame.origin, x: frame.x, y: -frame.y, z: -frame.z }, &-*semi_angle)
+            } else {
+                (frame, semi_angle)
+            };
             let tan = semi_angle.tan();
             if !(1e-6..1e6).contains(&tan) {
                 return None;
@@ -38,14 +49,54 @@ fn surface(s: &shapes::Surface, loops: &[Vec<DVec3>], same_sense: bool) -> Optio
             }
             let at = |z: f64| radius + z * tan;
             let tol = 1e-6 * radius.abs().max(1.0);
+            if at(lo) < -tol || at(hi) < -tol {
+                return None; // Past the apex, on the other nappe.
+            }
+            // A face that reaches the apex: a vertex loop or a boundary point there, or a
+            // single loop that goes once round the axis (so the apex is inside it).
+            let tip = frame.origin - frame.z * (radius / tan);
+            let near_tip = |p: &DVec3| (*p - tip).length() < 1e-6 * radius.abs().max(1.0) + 1e-9;
+            let winds = |l: &[DVec3]| {
+                let angle = |p: &DVec3| {
+                    let q = frame.to_local(*p);
+                    q.y.atan2(q.x)
+                };
+                let n = l.len();
+                let turn: f64 = (0..n)
+                    .map(|i| {
+                        let d = angle(&l[(i + 1) % n]) - angle(&l[i]);
+                        d - TAU * (d / TAU).round()
+                    })
+                    .sum();
+                turn.abs() > std::f64::consts::PI
+            };
+            let reaches = singular.iter().any(near_tip)
+                || points.iter().any(near_tip)
+                || (loops.len() == 1 && winds(&loops[0]));
+            if reaches {
+                // Laid out across the axis; the origin goes to the face's widest rim.
+                let far = if at(hi) >= at(lo) { hi } else { lo };
+                if at(far) <= tol {
+                    return None;
+                }
+                return Some(Surface::Cone {
+                    frame: frame.with_origin(frame.origin + frame.z * far),
+                    radius: at(far),
+                    half_angle: *semi_angle,
+                    apex: true,
+                });
+            }
             if at(lo) <= tol || at(hi) <= tol {
                 return None;
             }
+            // Otherwise the origin goes to the middle of the face, so the radius there
+            // sets the parameter scale.
             let mid = 0.5 * (lo + hi);
             Some(Surface::Cone {
                 frame: frame.with_origin(frame.origin + frame.z * mid),
                 radius: at(mid),
                 half_angle: *semi_angle,
+                apex: false,
             })
         }
         shapes::Surface::Torus { frame, major, minor } => {
@@ -203,7 +254,17 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
     let surfaces: Vec<Option<Surface>> = body
         .faces
         .iter()
-        .map(|f| f.surface.as_ref().and_then(|s| surface(s, &face_loops(f), f.same_sense)))
+        .map(|f| {
+            let singular: Vec<DVec3> = f
+                .bounds
+                .iter()
+                .filter_map(|b| match b.kind {
+                    LoopKind::Vertex(v) => model.vertices.get(&v).copied(),
+                    _ => None,
+                })
+                .collect();
+            f.surface.as_ref().and_then(|s| surface(s, &face_loops(f), &singular, f.same_sense))
+        })
         .collect();
     let mut edge_faces: HashMap<u64, Vec<usize>> = HashMap::new();
     for (fi, f) in body.faces.iter().enumerate() {
@@ -264,14 +325,31 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                 other.to_lowercase().replace('_', " ")
             ),
         })?;
+        // On a cone laid out across its axis the apex is an ordinary point of the face:
+        // its vertex loop goes, and so does any seam running up to it (an edge used both
+        // ways in the face), which would be a slit in that layout.
+        let across_axis = matches!(surf, Surface::Cone { apex: true, .. });
+        let mut uses: HashMap<u64, usize> = HashMap::new();
+        for b in &f.bounds {
+            if let LoopKind::Edges(edges) = &b.kind {
+                for oe in edges {
+                    *uses.entry(oe.edge).or_default() += 1;
+                }
+            }
+        }
         let mut loops: Vec<(Loop, f64)> = Vec::new();
         for b in &f.bounds {
-            let LoopKind::Edges(edges) = &b.kind else {
-                return Err("face bounded by a vertex or polygon loop".into());
+            let edges = match &b.kind {
+                LoopKind::Edges(edges) => edges,
+                LoopKind::Vertex(_) if across_axis => continue,
+                _ => return Err("face bounded by a vertex or polygon loop".into()),
             };
             let mut coedges = Vec::with_capacity(edges.len());
             let mut pts = Vec::new();
             for oe in edges {
+                if across_axis && uses.get(&oe.edge).copied().unwrap_or(0) > 1 {
+                    continue;
+                }
                 let e = model.edges.get(&oe.edge).ok_or("edge missing")?;
                 let id = match eids.get(&oe.edge) {
                     Some(id) => *id,
@@ -335,6 +413,9 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                 coedges.push(Coedge { edge: id, reversed: !oe.forward });
                 let ed = solid.edge(id).ok_or("edge missing")?;
                 pts.extend(ed.curve.sample(ed.t0, ed.t1, 0.1, 0.3));
+            }
+            if coedges.is_empty() {
+                continue; // Only seams to the apex, now gone.
             }
             if !b.orientation {
                 coedges.reverse();

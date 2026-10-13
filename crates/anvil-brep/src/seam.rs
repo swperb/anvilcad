@@ -288,7 +288,7 @@ pub(crate) mod tests {
         let surface = if half_angle == 0.0 {
             Surface::Cylinder { frame, radius: r }
         } else {
-            Surface::Cone { frame, radius: r, half_angle }
+            Surface::Cone { frame, radius: r, half_angle, apex: false }
         };
         let plane = |f: Frame| Surface::Plane { frame: f };
         let tag = |i| FaceTag::Imported { index: i };

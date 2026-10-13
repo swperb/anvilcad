@@ -290,7 +290,19 @@ pub enum Surface {
     /// The cone with axis `frame.z` whose radius is `radius` at `frame.origin` and
     /// grows by `tan(half_angle)` per unit along the axis. Its natural normal points
     /// away from the axis. `radius` is kept positive (the origin is never the apex).
-    Cone { frame: Frame, radius: f64, half_angle: f64 },
+    ///
+    /// Parameters are the angle round the axis and the height along it, unless
+    /// `apex` is set: then they are the point projected along the axis onto the plane
+    /// across it (mirrored, to keep the normal's side), for faces that reach the apex
+    /// (a drill point, say). Each point of the
+    /// cone projects to its own spot, and the apex to the middle, with no seam.
+    Cone {
+        frame: Frame,
+        radius: f64,
+        half_angle: f64,
+        #[serde(default)]
+        apex: bool,
+    },
     /// The ring torus around axis `frame.z`: a tube of radius `minor` whose centre runs
     /// round a circle of radius `major` (larger than `minor`) in the plane of
     /// `frame.x` and `frame.y`. Its natural normal points out of the tube.
@@ -360,8 +372,8 @@ impl Surface {
         match *self {
             Surface::Plane { frame } => Surface::Plane { frame: frame.moved(m) },
             Surface::Cylinder { frame, radius } => Surface::Cylinder { frame: frame.moved(m), radius },
-            Surface::Cone { frame, radius, half_angle } => {
-                Surface::Cone { frame: frame.moved(m), radius, half_angle }
+            Surface::Cone { frame, radius, half_angle, apex } => {
+                Surface::Cone { frame: frame.moved(m), radius, half_angle, apex }
             }
             Surface::Torus { frame, major, minor, v_mid } => {
                 Surface::Torus { frame: frame.moved(m), major, minor, v_mid }
@@ -400,7 +412,7 @@ impl Surface {
     /// nappe the cone's faces lie on.
     pub fn cone_offset(&self, p: DVec3) -> f64 {
         match self {
-            Surface::Cone { frame, radius, half_angle } => {
+            Surface::Cone { frame, radius, half_angle, .. } => {
                 let l = frame.to_local(p);
                 let rho = DVec2::new(l.x, l.y).length();
                 (rho - radius - l.z * half_angle.tan()) * half_angle.cos()
@@ -429,9 +441,11 @@ impl Surface {
             }
             // `u` is the angle scaled by the radius at the origin, so generators are
             // straight lines and circles are horizontal lines in parameter space.
-            Surface::Cone { frame, radius, .. } => {
+            Surface::Cone { frame, radius, apex, .. } => {
                 let l = frame.to_local(p);
-                DVec2::new(l.y.atan2(l.x) * radius, l.z)
+                // Mirrored, so counter-clockwise in parameters is about the natural normal,
+                // which leans away from `frame.z`.
+                if *apex { DVec2::new(l.x, -l.y) } else { DVec2::new(l.y.atan2(l.x) * radius, l.z) }
             }
             // `u` is the angle around the axis times `major`, `v` the angle around the
             // tube (relative to `v_mid`) times `minor`.
@@ -456,7 +470,12 @@ impl Surface {
                 let t = uv.x / radius;
                 frame.origin + (frame.x * t.cos() + frame.y * t.sin()) * *radius + frame.z * uv.y
             }
-            Surface::Cone { frame, radius, half_angle } => {
+            Surface::Cone { frame, radius, half_angle, apex: true } => {
+                // Back up the axis to the height where the cone has this radius.
+                let z = (uv.length() - radius) / half_angle.tan();
+                frame.origin + frame.x * uv.x - frame.y * uv.y + frame.z * z
+            }
+            Surface::Cone { frame, radius, half_angle, apex: false } => {
                 let t = uv.x / radius;
                 let r = Self::cone_radius(*radius, *half_angle, uv.y);
                 frame.origin + (frame.x * t.cos() + frame.y * t.sin()) * r + frame.z * uv.y
@@ -479,6 +498,7 @@ impl Surface {
     pub fn u_period(&self) -> Option<f64> {
         match self {
             Surface::Plane { .. } | Surface::Sphere { .. } => None,
+            Surface::Cone { apex: true, .. } => None,
             Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => Some(TAU * radius),
             Surface::Torus { major, .. } => Some(TAU * major),
         }
@@ -497,8 +517,8 @@ impl Surface {
                     && (ra - rb).abs() < tol
             }
             (
-                Surface::Cone { frame: a, radius: ra, half_angle: ha },
-                Surface::Cone { frame: b, radius: rb, half_angle: hb },
+                Surface::Cone { frame: a, radius: ra, half_angle: ha, .. },
+                Surface::Cone { frame: b, radius: rb, half_angle: hb, .. },
             ) => {
                 // Same axis line, same apex and same opening.
                 let (aa, ab) = (cone_apex(a, *ra, *ha), cone_apex(b, *rb, *hb));

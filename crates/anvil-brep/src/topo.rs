@@ -182,6 +182,14 @@ impl Solid {
                 }
             }
         }
+        // A cone face that reaches its apex runs on to it.
+        for f in &self.faces {
+            if let Surface::Cone { frame, radius, half_angle, apex: true } = f.surface {
+                let tip = crate::geom::cone_apex(&frame, radius, half_angle);
+                lo = lo.min(tip);
+                hi = hi.max(tip);
+            }
+        }
         // Torus and sphere faces bulge past their edges by up to their radius.
         let pad = self
             .faces

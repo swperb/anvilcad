@@ -191,11 +191,14 @@ fn cone_frustum_is_meshed_accurately() {
     let (r0, r1, h) = (10.0, 5.0, 8.0);
     let imp = import(&frustum(r0, r1, h)).expect("import");
     let b = &imp.bodies[0];
-    assert!(b.exact.is_none(), "cones are not exact yet");
     assert!(watertight(&b.mesh), "frustum mesh has gaps");
     let v = mesh_volume(&b.mesh);
     let exact = PI * h * (r0 * r0 + r0 * r1 + r1 * r1) / 3.0;
     assert!((v - exact).abs() / exact < 0.005, "{v} vs {exact}");
+    // The fixture writes a negative cone angle (narrowing along its axis); it is read
+    // as the same cone turned round, and comes in exact.
+    let solid = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+    assert!((exact_volume(solid) - exact).abs() / exact < 3e-3, "{}", exact_volume(solid));
     assert_eq!(imp.length_unit, "millimetre (assumed)");
     assert!(b.mesh.faces[0].planar && !b.mesh.faces[2].planar);
 }
@@ -371,6 +374,58 @@ fn cone_with_apex_is_closed() {
     assert!(watertight(m), "pointed cone mesh has gaps");
     let exact = PI * r * r * h / 3.0;
     assert!((mesh_volume(m) - exact).abs() / exact < 0.005, "{}", mesh_volume(m));
+    // The apex is written as a vertex loop; the cone still comes in exact, laid out
+    // across its axis, with the apex as an ordinary point of its face.
+    let b = &imp.bodies[0];
+    let solid = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+    assert!(solid.faces.iter().any(|f| matches!(f.surface, anvil_brep::Surface::Cone { apex: true, .. })));
+    let v = exact_volume(solid);
+    assert!((v - exact).abs() / exact < 3e-3, "{v} vs {exact}");
+}
+
+/// A drill point sunk into a block: the cone face that reaches its apex exports with
+/// a single loop round the axis and comes back exact.
+#[test]
+fn drill_point_socket_round_trips_exactly() {
+    use anvil_brep::topo::{Coedge, Edge, Face, FaceTag, Loop};
+    let (r, h) = (5.0, 10.0);
+    let mut cone = anvil_brep::Solid::default();
+    let top = Frame { origin: DVec3::new(0.0, 0.0, h), ..Frame::world() };
+    let v = cone.add_vertex(DVec3::new(r, 0.0, h));
+    let e = cone.add_edge(Edge {
+        curve: anvil_brep::Curve::Circle { frame: top, radius: r },
+        start: v,
+        end: v,
+        t0: 0.0,
+        t1: std::f64::consts::TAU,
+    });
+    let l = |reversed| Loop { coedges: vec![Coedge { edge: e, reversed }] };
+    let half_angle = (r / h).atan();
+    let surface = anvil_brep::Surface::Cone { frame: top, radius: r, half_angle, apex: true };
+    for (i, (surface, reversed)) in
+        [(surface, true), (anvil_brep::Surface::Plane { frame: top }, false)].into_iter().enumerate()
+    {
+        cone.add_face(Face {
+            surface,
+            reversed: false,
+            outer: l(reversed),
+            inners: vec![],
+            tag: FaceTag::Imported { index: i as u32 },
+            owner: 0,
+        });
+    }
+    let block = prism(&rect(-10.0, -10.0, 10.0, 10.0), &Frame::world(), -10.0, 4.0);
+    let socket = boolean(&block, &cone, BoolOp::Subtract).expect("cut").remove(0);
+    let imp = round_trip(&socket);
+    let b = &imp.bodies[0];
+    let exact = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+    check::validate(exact).expect("valid");
+    assert!(exact.faces.iter().any(|f| matches!(f.surface, anvil_brep::Surface::Cone { apex: true, .. })));
+    let v = exact_volume(&socket);
+    assert!((exact_volume(exact) - v).abs() / v < 1e-6);
+    let want = 20.0 * 20.0 * 14.0 - PI * 4.0 * 4.0 / 3.0;
+    assert!((v - want).abs() / want < 1e-4, "{v} vs {want}");
+    assert!(watertight(&b.mesh));
 }
 
 /// A hole drilled across a shaft: its entry and exit edges are spline curves, which

@@ -32,18 +32,18 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
         (Surface::Cylinder { frame: fa, radius: ra }, Surface::Cylinder { frame: fb, radius: rb }) => {
             cylinder_cylinder(fa, *ra, fb, *rb, tol)
         }
-        (Surface::Plane { frame: fp }, Surface::Cone { frame, radius, half_angle })
-        | (Surface::Cone { frame, radius, half_angle }, Surface::Plane { frame: fp }) => {
+        (Surface::Plane { frame: fp }, Surface::Cone { frame, radius, half_angle, .. })
+        | (Surface::Cone { frame, radius, half_angle, .. }, Surface::Plane { frame: fp }) => {
             plane_cone(fp, frame, *radius, *half_angle, tol)
         }
-        (Surface::Cylinder { frame: fc, radius: rc }, Surface::Cone { frame, radius, half_angle })
-        | (Surface::Cone { frame, radius, half_angle }, Surface::Cylinder { frame: fc, radius: rc }) => {
+        (Surface::Cylinder { frame: fc, radius: rc }, Surface::Cone { frame, radius, half_angle, .. })
+        | (Surface::Cone { frame, radius, half_angle, .. }, Surface::Cylinder { frame: fc, radius: rc }) => {
             // A cylinder is a cone that does not open.
             coaxial_cones(frame, *radius, *half_angle, fc, *rc, 0.0, tol)
         }
         (
-            Surface::Cone { frame: fa, radius: ra, half_angle: ha },
-            Surface::Cone { frame: fb, radius: rb, half_angle: hb },
+            Surface::Cone { frame: fa, radius: ra, half_angle: ha, .. },
+            Surface::Cone { frame: fb, radius: rb, half_angle: hb, .. },
         ) => coaxial_cones(fa, *ra, *ha, fb, *rb, *hb, tol),
         (Surface::Sphere { frame, radius }, other) | (other, Surface::Sphere { frame, radius }) => {
             sphere_with(frame.origin, *radius, other, tol)
@@ -239,7 +239,7 @@ fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) ->
 }
 
 fn cone_surface(frame: &Frame, radius: f64, half_angle: f64) -> Surface {
-    Surface::Cone { frame: *frame, radius, half_angle }
+    Surface::Cone { frame: *frame, radius, half_angle, apex: false }
 }
 
 /// Two surfaces of revolution about the same axis, each given as a cone (a
@@ -421,7 +421,7 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
         (Curve::Line { origin, dir }, Surface::Cylinder { frame, radius }) => {
             line_cylinder(*origin, *dir, frame, *radius, tol)
         }
-        (Curve::Line { origin, dir }, Surface::Cone { frame, radius, half_angle }) => {
+        (Curve::Line { origin, dir }, Surface::Cone { frame, radius, half_angle, .. }) => {
             line_cone(*origin, *dir, frame, *radius, *half_angle, tol)
         }
         (Curve::Circle { frame: cf, radius }, Surface::Plane { frame }) => {
@@ -689,7 +689,7 @@ mod tests {
     }
 
     fn cone(half_angle: f64) -> Surface {
-        Surface::Cone { frame: Frame::world(), radius: 2.0, half_angle }
+        Surface::Cone { frame: Frame::world(), radius: 2.0, half_angle, apex: false }
     }
 
     #[test]
@@ -731,6 +731,7 @@ mod tests {
             frame: Frame { origin: DVec3::new(0.0, 0.0, 4.0), x: DVec3::X, y: DVec3::NEG_Y, z: DVec3::NEG_Z },
             radius: 2.5,
             half_angle: 0.2,
+            apex: false,
         };
         let Ok(Ssi::Curves(cs)) = surfaces(&c, &other, 1e-6) else { panic!() };
         assert_eq!(cs.len(), 1);
@@ -765,7 +766,7 @@ mod tests {
         let Ok(Ssi::Curves(cs)) = surfaces(&c, &t, 1e-6) else { panic!() };
         assert_eq!(cs.len(), 2);
         on_torus(&cs, &c);
-        let k = Surface::Cone { frame: Frame::world(), radius: 6.0, half_angle: 0.3 };
+        let k = Surface::Cone { frame: Frame::world(), radius: 6.0, half_angle: 0.3, apex: false };
         let Ok(Ssi::Curves(cs)) = surfaces(&t, &k, 1e-6) else { panic!() };
         assert_eq!(cs.len(), 2);
         on_torus(&cs, &k);

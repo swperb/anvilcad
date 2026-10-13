@@ -150,7 +150,8 @@ Kernel design notes:
   planes (a hole drilled across a shaft, say) is traced; a torus meets planes and surfaces
   on its own axis in exact circles, and so does a sphere (any axis through its centre).
   Sphere faces are laid out by stereographic projection from the point opposite the
-  face, so they have no poles or seams to handle. Traced curves are found this way: each straight line of one
+  face, and cone faces that reach their apex (drill points) by projection along the
+  axis, so neither has poles or seams to handle. Traced curves are found this way: each straight line of one
   surface meets the other at the roots of a quadratic, so every traced point is exact,
   and the points are joined into a cubic B-spline refined until it stays within 1e-7 mm
   of both surfaces. `anvil-kernel` is a faceted kernel that covers everything else.
@@ -227,13 +228,13 @@ Part loads a model that uses most features.
 
 ## Roadmap
 
-1. Kernel: cones that come to a point, surfaces of revolution, torus intersections off
-   its axis, so revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
+1. Kernel: surfaces of revolution and B-spline surfaces, torus intersections off its
+   axis, so revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
    variable-radius fillets, draft; later NURBS
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
    custom properties
-4. STEP: assembly placement, colours and names, exact import of cones that come to a point and of files written to a looser tolerance;
+4. STEP: assembly placement, colours and names, exact import of B-spline surfaces and of files written to a looser tolerance;
    then SOLIDWORKS format research for the five-year compatibility window
 5. A scripting and plugin API
 6. CAM (tracked as a feature request in the issues)

@@ -180,7 +180,9 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         // A sphere's parameters are lengths near the face's middle, at its own radius.
         let step_angle =
             if matches!(face.surface, Surface::Sphere { .. }) { step_for(scale) } else { step_for(radius) };
-        let mut du = scale * step_angle;
+        // A cone laid out across its axis has lengths for parameters, like a sphere.
+        let across_axis = matches!(face.surface, Surface::Cone { apex: true, .. });
+        let mut du = if across_axis { radius * step_angle } else { scale * step_angle };
         let all: Vec<DVec2> = loops_uv.iter().flatten().copied().collect();
         let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
         for p in &all {
@@ -194,7 +196,9 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
             _ => radius * step_angle,
         };
         // Cylinders and cones are straight along `v`, so a few rows do; a sphere is not.
-        let dv = if matches!(face.surface, Surface::Sphere { .. }) {
+        let dv = if across_axis {
+            du
+        } else if matches!(face.surface, Surface::Sphere { .. }) {
             v_step
         } else {
             v_step.max((hi.y - lo.y) / 64.0)
@@ -221,27 +225,54 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
                     })
                 })
             };
-            for i in 1..nu {
-                for j in 0..=nv {
-                    let q = DVec2::new(lo.x + du * i as f64, lo.y + dv * j as f64);
-                    let inside =
-                        loops_uv.iter().filter(|l| crate::profile::point_in_polygon(q, l)).count() % 2 == 1;
-                    if !inside || near_boundary(q) {
-                        continue;
-                    }
-                    let h = cdt
-                        .insert(Point2::new(q.x, q.y))
-                        .map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
-                    let hi = h.index();
-                    if vmap.len() <= hi {
-                        vmap.resize(hi + 1, None);
-                    }
-                    if vmap[hi].is_none() {
-                        let p = face.surface.eval_uv(q);
-                        vmap[hi] = Some(mesh.positions.len() as u32);
-                        mesh.positions.push(p);
-                        mesh.normals.push(face.normal_at(p));
-                    }
+            // Candidate points: a grid, or on a cone laid out across its axis, rings round
+            // the apex with enough points on each to keep the angle step (a square grid
+            // would leave the tight curvature near the tip too coarse).
+            let candidates: Vec<DVec2> = if across_axis {
+                let reach = loops_uv.iter().flatten().map(|q| q.length()).fold(0.0, f64::max);
+                let per_turn = (TAU / step_angle).ceil().max(8.0);
+                let mut dr = du;
+                while (reach / dr) * (per_turn + TAU * reach / dr) > 200_000.0 {
+                    dr *= 1.5;
+                }
+                let mut pts = vec![DVec2::ZERO];
+                let rings = (reach / dr).ceil() as usize;
+                for k in 1..rings {
+                    let rho = dr * k as f64;
+                    let n = per_turn.max((TAU * rho / dr).ceil()) as usize;
+                    // Stagger alternate rings so triangles between them are not slivers.
+                    let shift = if k % 2 == 0 { 0.5 } else { 0.0 };
+                    pts.extend((0..n).map(|j| {
+                        let a = TAU * (j as f64 + shift) / n as f64;
+                        DVec2::new(a.cos(), a.sin()) * rho
+                    }));
+                }
+                pts
+            } else {
+                (1..nu)
+                    .flat_map(|i| {
+                        (0..=nv).map(move |j| DVec2::new(lo.x + du * i as f64, lo.y + dv * j as f64))
+                    })
+                    .collect()
+            };
+            for q in candidates {
+                let inside =
+                    loops_uv.iter().filter(|l| crate::profile::point_in_polygon(q, l)).count() % 2 == 1;
+                if !inside || near_boundary(q) {
+                    continue;
+                }
+                let h = cdt
+                    .insert(Point2::new(q.x, q.y))
+                    .map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
+                let hi = h.index();
+                if vmap.len() <= hi {
+                    vmap.resize(hi + 1, None);
+                }
+                if vmap[hi].is_none() {
+                    let p = face.surface.eval_uv(q);
+                    vmap[hi] = Some(mesh.positions.len() as u32);
+                    mesh.positions.push(p);
+                    mesh.normals.push(face.normal_at(p));
                 }
             }
         }
@@ -340,6 +371,7 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
             })
             .collect(),
         Surface::Sphere { .. } => pts.iter().map(|p| surface.uv(*p)).collect(),
+        Surface::Cone { apex: true, .. } => pts.iter().map(|p| surface.uv(*p)).collect(),
         Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Torus { .. } => {
             let period = surface.u_period().unwrap_or(TAU);
             let mut prev: Option<f64> = None;

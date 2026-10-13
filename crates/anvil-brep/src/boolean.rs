@@ -184,6 +184,12 @@ fn face_info(solid: &Solid, face: &Face) -> FaceInfo {
     // The box is only a quick rejection test, so it errs wide: sampled curves fall
     // short of their true extremes (by r(1 - cos(step / 2))), and torus and sphere faces
     // bulge past their boundary (a fillet's crown, say) by up to their radius.
+    // A cone face laid out across its axis runs on to the apex.
+    if let Surface::Cone { frame, radius, half_angle, apex: true } = face.surface {
+        let tip = crate::geom::cone_apex(&frame, radius, half_angle);
+        lo = lo.min(tip);
+        hi = hi.max(tip);
+    }
     let pad = match face.surface {
         Surface::Torus { minor, .. } => minor,
         Surface::Sphere { radius, .. } => radius,

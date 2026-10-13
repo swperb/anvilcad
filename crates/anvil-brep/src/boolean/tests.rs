@@ -490,3 +490,82 @@ fn hole_drilled_sideways_through_a_dome() {
     assert!(close(volume(&d) + volume(&i), whole, 3e-3), "{} + {}", volume(&d), volume(&i));
     assert!(volume(&i) > 10.0);
 }
+
+/// A pointed cone with its apex at the origin, opening up to radius `r` at height `h`,
+/// closed by a flat top: one cone face laid out across its axis, over a disc.
+fn pointed_cone(r: f64, h: f64) -> Solid {
+    use crate::topo::{Coedge, Edge, Face, FaceTag, Loop};
+    let mut s = Solid::default();
+    let top = Frame { origin: DVec3::new(0.0, 0.0, h), ..Frame::world() };
+    let v = s.add_vertex(DVec3::new(r, 0.0, h));
+    let e = s.add_edge(Edge {
+        curve: Curve::Circle { frame: top, radius: r },
+        start: v,
+        end: v,
+        t0: 0.0,
+        t1: std::f64::consts::TAU,
+    });
+    let l = |reversed| Loop { coedges: vec![Coedge { edge: e, reversed }] };
+    s.add_face(Face {
+        surface: Surface::Cone { frame: top, radius: r, half_angle: (r / h).atan(), apex: true },
+        reversed: false,
+        outer: l(true),
+        inners: vec![],
+        tag: FaceTag::Imported { index: 0 },
+        owner: 0,
+    });
+    s.add_face(Face {
+        surface: Surface::Plane { frame: top },
+        reversed: false,
+        outer: l(false),
+        inners: vec![],
+        tag: FaceTag::Imported { index: 1 },
+        owner: 0,
+    });
+    s
+}
+
+#[test]
+fn pointed_cone_tessellates_closed() {
+    let c = pointed_cone(5.0, 10.0);
+    check::validate(&c).expect("valid");
+    let m = tess::tessellate(&c, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+    assert!(m.is_watertight());
+    let want = PI * 25.0 * 10.0 / 3.0;
+    let v = mass::properties(&m).volume;
+    assert!(close(v, want, 1e-4), "{v} vs {want}");
+    assert!(close(volume(&[c]), want, 3e-3));
+}
+
+#[test]
+fn drill_point_socket() {
+    // The cone's tip sunk 4 deep into a block: the block loses a small cone.
+    let c = pointed_cone(5.0, 10.0);
+    let block = cuboid(DVec3::new(-10.0, -10.0, -10.0), DVec3::new(10.0, 10.0, 4.0));
+    let d = boolean(&block, &c, BoolOp::Subtract).expect("subtract");
+    assert_eq!(d.len(), 1);
+    let tip = PI * 2.0 * 2.0 * 4.0 / 3.0;
+    let want = 20.0 * 20.0 * 14.0 - tip;
+    assert!(close(volume(&d), want, 1e-4), "{} vs {want}", volume(&d));
+    let i = boolean(&block, &c, BoolOp::Intersect).expect("intersect");
+    assert!(close(volume(&i), tip, 3e-3), "{} vs {tip}", volume(&i));
+}
+
+#[test]
+fn pointed_cone_cut_at_an_angle() {
+    let c = pointed_cone(5.0, 10.0);
+    let whole = volume(std::slice::from_ref(&c));
+    let b = cuboid(DVec3::new(-20.0, -20.0, 0.0), DVec3::new(20.0, 20.0, 20.0));
+    let angle = 0.3f64;
+    let m = Frame {
+        origin: DVec3::new(0.0, 0.0, 6.0),
+        x: DVec3::X,
+        y: DVec3::new(0.0, angle.cos(), angle.sin()),
+        z: DVec3::new(0.0, -angle.sin(), angle.cos()),
+    };
+    let b = b.transformed(&m);
+    let d = boolean(&c, &b, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&c, &b, BoolOp::Intersect).expect("intersect");
+    assert!(close(volume(&d) + volume(&i), whole, 3e-3), "{} + {}", volume(&d), volume(&i));
+    assert!(d[0].edges.iter().any(|e| matches!(e.curve, Curve::Spline(_))));
+}

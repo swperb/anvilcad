@@ -75,7 +75,7 @@ fn on_sweep_nappe(s: &Surface, v: f64) -> bool {
 /// True when `p` lies on the nappe of `s` its faces use.
 fn on_nappe(s: &Surface, p: DVec3) -> bool {
     match *s {
-        Surface::Cone { frame, radius, half_angle } => {
+        Surface::Cone { frame, radius, half_angle, .. } => {
             radius + frame.to_local(p).z * half_angle.tan() > -1e-9
         }
         _ => true,
@@ -101,7 +101,7 @@ fn quadric(s: &Surface, o: DVec3, d: DVec3) -> (f64, f64, f64) {
                 lo.x * lo.x + lo.y * lo.y - radius * radius,
             )
         }
-        Surface::Cone { frame, radius, half_angle } => {
+        Surface::Cone { frame, radius, half_angle, .. } => {
             let k = half_angle.tan();
             let lo = frame.to_local(o);
             let ld = DVec3::new(d.dot(frame.x), d.dot(frame.y), d.dot(frame.z));
@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn oblique_plane_through_a_cone() {
-        let cone = Surface::Cone { frame: Frame::world(), radius: 2.0, half_angle: 0.3 };
+        let cone = Surface::Cone { frame: Frame::world(), radius: 2.0, half_angle: 0.3, apex: false };
         let plane = Surface::Plane {
             frame: Frame::new(DVec3::new(0.0, 0.0, 1.0), DVec3::new(0.3, 0.0, 1.0), DVec3::X).expect("frame"),
         };
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn cylinder_into_a_cone() {
-        let cone = Surface::Cone { frame: Frame::world(), radius: 6.0, half_angle: 0.4 };
+        let cone = Surface::Cone { frame: Frame::world(), radius: 6.0, half_angle: 0.4, apex: false };
         let pin = cyl(DVec3::new(0.0, 0.0, 2.0), DVec3::X, 1.0);
         let cs = intersect(&cone, &pin).expect("curves");
         assert_eq!(cs.len(), 2);
