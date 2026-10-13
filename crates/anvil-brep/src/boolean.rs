@@ -373,9 +373,7 @@ impl<'a> Engine<'a> {
                 let mid = self.edges[e].at(0.5);
                 if self.locate(o, g, mid) == Loc::Inside {
                     if !planar {
-                        return Err(KernelError::Unsupported(
-                            "overlapping coincident cylindrical faces".into(),
-                        ));
+                        return Err(KernelError::Unsupported("overlapping coincident curved faces".into()));
                     }
                     self.cuts[o][g].insert(e);
                 }

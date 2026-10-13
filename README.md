@@ -46,8 +46,8 @@ system are still ahead; see the roadmap.
 **Files**
 - Native part format `.anvprt` (versioned JSON, written atomically)
 - STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
-  B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes and
-  cylinders import as exact solids, so features added to them build exactly; everything
+  B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes,
+  cylinders and cones import as exact solids, so features added to them build exactly; everything
   else imports as a watertight mesh body. AP242 tessellated bodies (triangulated faces)
   import as meshes too. Open a `.step` or `.stp` file to start a part.
 - Export to STEP AP214 (exact geometry whenever the whole part was built exactly, facets
@@ -211,7 +211,7 @@ Part loads a model that uses most features.
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
    custom properties
-4. STEP: assembly placement, colours and names, exact import of cones, spheres and tori;
+4. STEP: assembly placement, colours and names, exact import of spheres, tori and general intersection curves;
    then SOLIDWORKS format research for the five-year compatibility window
 5. A scripting and plugin API
 6. CAM (tracked as a feature request in the issues)

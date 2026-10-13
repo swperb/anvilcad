@@ -130,6 +130,9 @@ fn surface_kind(face: &Face) -> SurfaceKind {
         brep::Surface::Cylinder { frame, radius } => {
             SurfaceKind::Cylinder { axis_origin: v3(frame.origin), axis_dir: v3(frame.z), radius }
         }
+        brep::Surface::Cone { frame, .. } => {
+            SurfaceKind::Revolved { axis_origin: v3(frame.origin), axis_dir: v3(frame.z) }
+        }
     }
 }
 

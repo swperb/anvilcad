@@ -1,5 +1,5 @@
-//! Converts a read body to an exact `anvil-brep` solid when every face is a plane or
-//! cylinder bounded by lines, circles and ellipses.
+//! Converts a read body to an exact `anvil-brep` solid when every face is a plane,
+//! cylinder or cone bounded by lines, circles and ellipses.
 
 use crate::reader::{Body, LoopKind, Model};
 use crate::shapes;
@@ -10,11 +10,36 @@ use glam::DVec3;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-fn surface(s: &shapes::Surface) -> Option<Surface> {
+/// The kernel surface for a face, given the points of its boundary vertices.
+fn surface(s: &shapes::Surface, points: &[DVec3]) -> Option<Surface> {
     match s {
         shapes::Surface::Plane { frame } => Some(Surface::Plane { frame: *frame }),
         shapes::Surface::Cylinder { frame, radius } => {
             Some(Surface::Cylinder { frame: *frame, radius: *radius })
+        }
+        shapes::Surface::Cone { frame, radius, semi_angle } => {
+            // Move the origin to the middle of the face, so the radius there sets the
+            // parameter scale and is never zero; faces that reach the apex are refused.
+            let tan = semi_angle.tan();
+            if !(1e-6..1e6).contains(&tan) {
+                return None;
+            }
+            let heights = points.iter().map(|p| frame.to_local(*p).z);
+            let (lo, hi) = heights.fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), z| (a.min(z), b.max(z)));
+            if !lo.is_finite() {
+                return None;
+            }
+            let at = |z: f64| radius + z * tan;
+            let tol = 1e-6 * radius.abs().max(1.0);
+            if at(lo) <= tol || at(hi) <= tol {
+                return None;
+            }
+            let mid = 0.5 * (lo + hi);
+            Some(Surface::Cone {
+                frame: frame.with_origin(frame.origin + frame.z * mid),
+                radius: at(mid),
+                half_angle: *semi_angle,
+            })
         }
         _ => None,
     }
@@ -67,8 +92,21 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
     }
     // Exact surfaces of every face, and the faces each edge bounds, so that edges the
     // file stores as B-splines can be rebuilt exactly from the two surfaces they join.
+    let face_points = |f: &crate::reader::Face| -> Vec<DVec3> {
+        let mut pts = Vec::new();
+        for b in &f.bounds {
+            if let LoopKind::Edges(edges) = &b.kind {
+                for oe in edges {
+                    if let Some(e) = model.edges.get(&oe.edge) {
+                        pts.extend([e.start, e.end].iter().filter_map(|v| model.vertices.get(v)));
+                    }
+                }
+            }
+        }
+        pts
+    };
     let surfaces: Vec<Option<Surface>> =
-        body.faces.iter().map(|f| f.surface.as_ref().and_then(surface)).collect();
+        body.faces.iter().map(|f| f.surface.as_ref().and_then(|s| surface(s, &face_points(f)))).collect();
     let mut edge_faces: HashMap<u64, Vec<usize>> = HashMap::new();
     for (fi, f) in body.faces.iter().enumerate() {
         for b in &f.bounds {
@@ -104,8 +142,9 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
     let mut vids: HashMap<u64, VertexId> = HashMap::new();
     let mut eids: HashMap<u64, EdgeId> = HashMap::new();
     for (index, f) in body.faces.iter().enumerate() {
-        let surf = f.surface.as_ref().and_then(surface).ok_or_else(|| match f.surface_type.as_str() {
+        let surf = surfaces[index].ok_or_else(|| match f.surface_type.as_str() {
             "POLY" => "the file stores this body as flat facets, so it is imported as a mesh".to_string(),
+            "CONICAL_SURFACE" => "a cone face reaches its apex, so it is imported as a mesh".to_string(),
             other => format!(
                 "{} faces are not supported by the exact kernel yet, so it is imported as a mesh",
                 other.to_lowercase().replace('_', " ")
@@ -178,6 +217,9 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
             owner: 0,
         });
     }
+    // Faces that wrap all the way around without a seam get one, so the kernel can
+    // lay every face out flat.
+    anvil_brep::seam::add_seams(&mut solid).map_err(|e| e.to_string())?;
     check::validate(&solid).map_err(|e| e.to_string())?;
     Ok(solid)
 }

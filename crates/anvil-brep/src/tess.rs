@@ -116,11 +116,10 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
     }
 
     let mut loops_uv: Vec<Vec<DVec2>> = loops3.iter().map(|l| to_uv(&face.surface, l)).collect();
-    // On a cylinder every loop must use the same branch of the angle.
-    if let Surface::Cylinder { radius, .. } = face.surface
+    // On a surface that wraps around, every loop must use the same branch of the angle.
+    if let Some(period) = face.surface.u_period()
         && let Some(reference) = loops_uv.first().and_then(|l| l.first()).map(|p| p.x)
     {
-        let period = TAU * radius;
         for l in loops_uv.iter_mut().skip(1) {
             if let Some(first) = l.first().map(|p| p.x) {
                 let shift = period * ((reference - first) / period).round();
@@ -165,7 +164,18 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
 
     // Curved faces get interior points on a grid, so triangles stay small in
     // the curved direction instead of spanning chords across the surface.
-    if let Surface::Cylinder { radius, .. } = face.surface {
+    if let Surface::Cylinder { radius: scale, .. } | Surface::Cone { radius: scale, .. } = face.surface {
+        // The angle step comes from the widest point of the face; `u` is the angle
+        // times `scale`.
+        let frame = face.surface.frame();
+        let radius = loops3
+            .iter()
+            .flatten()
+            .map(|p| {
+                let l = frame.to_local(*p);
+                DVec2::new(l.x, l.y).length()
+            })
+            .fold(0.0, f64::max);
         let step_angle = {
             let mut a = params.max_angle.max(1e-3);
             if params.chord > 0.0 && params.chord < radius {
@@ -173,14 +183,14 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
             }
             a
         };
-        let du = radius * step_angle;
+        let du = scale * step_angle;
         let all: Vec<DVec2> = loops_uv.iter().flatten().copied().collect();
         let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
         for p in &all {
             lo = lo.min(*p);
             hi = hi.max(*p);
         }
-        let dv = du.max((hi.y - lo.y) / 64.0);
+        let dv = (radius * step_angle).max((hi.y - lo.y) / 64.0);
         let nu = ((hi.x - lo.x) / du).ceil() as usize;
         let nv = ((hi.y - lo.y) / dv).ceil() as usize;
         if nu.saturating_mul(nv) < 200_000 {
@@ -220,15 +230,16 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         }
     }
 
+    // A triangle is inside when reaching it from outside crosses the boundary an odd
+    // number of times. Unlike a centroid test, this is right for the slivers that
+    // nearly collinear boundary points (a circle on a cylinder, say) leave behind.
+    let parity = boundary_parity(&cdt);
     for tri in cdt.inner_faces() {
-        let vs = tri.vertices();
-        let uv: Vec<DVec2> = vs.iter().map(|v| DVec2::new(v.position().x, v.position().y)).collect();
-        let centroid = (uv[0] + uv[1] + uv[2]) / 3.0;
-        let inside =
-            loops_uv.iter().filter(|l| crate::profile::point_in_polygon(centroid, l)).count() % 2 == 1;
-        if !inside {
+        if !parity.get(tri.fix().index()).copied().unwrap_or(false) {
             continue;
         }
+        let vs = tri.vertices();
+        let uv: Vec<DVec2> = vs.iter().map(|v| DVec2::new(v.position().x, v.position().y)).collect();
         let mut idx = [0u32; 3];
         for (k, v) in vs.iter().enumerate() {
             idx[k] = vmap
@@ -247,6 +258,39 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
     Ok(())
 }
 
+/// For every face of the triangulation, whether it lies inside the constraints.
+fn boundary_parity(cdt: &ConstrainedDelaunayTriangulation<Point2<f64>>) -> Vec<bool> {
+    let n = cdt.num_all_faces();
+    let mut adj: Vec<Vec<(usize, bool)>> = vec![Vec::new(); n];
+    for t in cdt.inner_faces() {
+        let i = t.fix().index();
+        for e in t.adjacent_edges() {
+            let j = e.rev().face().fix().index();
+            let wall = e.is_constraint_edge();
+            if i < n && j < n {
+                adj[i].push((j, wall));
+                adj[j].push((i, wall));
+            }
+        }
+    }
+    let mut parity: Vec<Option<bool>> = vec![None; n];
+    let outer = cdt.outer_face().fix().index();
+    let mut queue = std::collections::VecDeque::from([outer]);
+    if let Some(p) = parity.get_mut(outer) {
+        *p = Some(false);
+    }
+    while let Some(f) = queue.pop_front() {
+        let Some(pf) = parity[f] else { continue };
+        for &(g, wall) in &adj[f] {
+            if parity[g].is_none() {
+                parity[g] = Some(pf != wall);
+                queue.push_back(g);
+            }
+        }
+    }
+    parity.into_iter().map(|p| p.unwrap_or(false)).collect()
+}
+
 /// Maps a closed loop on a surface to parameter space. Parameters are scaled
 /// to millimetres so the Delaunay criterion sees true proportions.
 fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
@@ -258,17 +302,17 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
                 DVec2::new(l.x, l.y)
             })
             .collect(),
-        Surface::Cylinder { frame, radius } => {
+        Surface::Cylinder { .. } | Surface::Cone { .. } => {
+            let period = surface.u_period().unwrap_or(TAU);
             let mut prev: Option<f64> = None;
             pts.iter()
                 .map(|p| {
-                    let l = frame.to_local(*p);
-                    let mut theta = l.y.atan2(l.x);
+                    let mut q = surface.uv(*p);
                     if let Some(pr) = prev {
-                        theta += TAU * ((pr - theta) / TAU).round();
+                        q.x += period * ((pr - q.x) / period).round();
                     }
-                    prev = Some(theta);
-                    DVec2::new(theta * radius, l.z)
+                    prev = Some(q.x);
+                    q
                 })
                 .collect()
         }

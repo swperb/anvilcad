@@ -118,6 +118,10 @@ pub fn write(solids: &[Solid], name: &str) -> String {
                     let a = w.placement(&frame);
                     w.ent(format!("CYLINDRICAL_SURFACE('',#{a},{})", real(radius)))
                 }
+                Surface::Cone { frame, radius, half_angle } => {
+                    let a = w.placement(&frame);
+                    w.ent(format!("CONICAL_SURFACE('',#{a},{},{})", real(radius), real(half_angle)))
+                }
             };
             let mut bounds = Vec::new();
             for (li, l) in f.loops().enumerate() {

@@ -32,7 +32,71 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
         (Surface::Cylinder { frame: fa, radius: ra }, Surface::Cylinder { frame: fb, radius: rb }) => {
             cylinder_cylinder(fa, *ra, fb, *rb, tol)
         }
+        (Surface::Plane { frame: fp }, Surface::Cone { frame, radius, half_angle })
+        | (Surface::Cone { frame, radius, half_angle }, Surface::Plane { frame: fp }) => {
+            plane_cone(fp, frame, *radius, *half_angle, tol)
+        }
+        (Surface::Cylinder { frame: fc, radius: rc }, Surface::Cone { frame, radius, half_angle })
+        | (Surface::Cone { frame, radius, half_angle }, Surface::Cylinder { frame: fc, radius: rc }) => {
+            // A cylinder is a cone that does not open.
+            coaxial_cones(frame, *radius, *half_angle, fc, *rc, 0.0, tol)
+        }
+        (
+            Surface::Cone { frame: fa, radius: ra, half_angle: ha },
+            Surface::Cone { frame: fb, radius: rb, half_angle: hb },
+        ) => coaxial_cones(fa, *ra, *ha, fb, *rb, *hb, tol),
     }
+}
+
+fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) -> Result<Ssi> {
+    let n = plane.z;
+    let axis = cone.z;
+    let cos = n.dot(axis);
+    let tan = half_angle.tan();
+    if (1.0 - cos.abs()) < PARALLEL {
+        // Perpendicular to the axis: one circle, unless the plane misses the nappe.
+        let h = (plane.origin - cone.origin).dot(axis);
+        let radius = r + h * tan;
+        if radius <= tol {
+            return Ok(Ssi::None);
+        }
+        let center = cone.origin + axis * h;
+        return Ok(Ssi::Curves(vec![Curve::Circle { frame: cone.with_origin(center), radius }]));
+    }
+    let apex = crate::geom::cone_apex(cone, r, half_angle);
+    if cos.abs() < PARALLEL && (apex - plane.origin).dot(n).abs() < tol {
+        // A plane through the axis: the two generators in it.
+        let side = n.cross(axis).normalize();
+        let (c, s) = (half_angle.cos(), half_angle.sin());
+        return Ok(Ssi::Curves(vec![
+            Curve::Line { origin: apex, dir: axis * c + side * s },
+            Curve::Line { origin: apex, dir: axis * c - side * s },
+        ]));
+    }
+    Err(KernelError::Unsupported("intersection of a cone with a plane at an angle to its axis".into()))
+}
+
+/// Two surfaces of revolution about the same axis, each given as a cone (a
+/// cylinder has `half_angle` 0): they meet in circles where their radii agree.
+fn coaxial_cones(a: &Frame, ra: f64, ha: f64, b: &Frame, rb: f64, hb: f64, tol: f64) -> Result<Ssi> {
+    let d = b.origin - a.origin;
+    if a.z.cross(b.z).length() > PARALLEL || (d - a.z * d.dot(a.z)).length() > tol {
+        return Err(KernelError::Unsupported("intersection of a cone with a surface on another axis".into()));
+    }
+    // Heights along a's axis: b's radius is rb + sign * (z - z0) * tan(hb).
+    let sign = a.z.dot(b.z).signum();
+    let z0 = d.dot(a.z);
+    let (ta, tb) = (ha.tan(), hb.tan() * sign);
+    let slope = ta - tb;
+    if slope.abs() < PARALLEL {
+        return Ok(Ssi::None);
+    }
+    let z = (rb - z0 * tb - ra) / slope;
+    let radius = ra + z * ta;
+    if radius <= tol || rb + (z - z0) * tb <= tol {
+        return Ok(Ssi::None);
+    }
+    Ok(Ssi::Curves(vec![Curve::Circle { frame: a.with_origin(a.origin + a.z * z), radius }]))
 }
 
 fn plane_plane(a: &Frame, b: &Frame) -> Ssi {
@@ -186,6 +250,9 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
         (Curve::Line { origin, dir }, Surface::Cylinder { frame, radius }) => {
             line_cylinder(*origin, *dir, frame, *radius, tol)
         }
+        (Curve::Line { origin, dir }, Surface::Cone { frame, radius, half_angle }) => {
+            line_cone(*origin, *dir, frame, *radius, *half_angle, tol)
+        }
         (Curve::Circle { frame: cf, radius }, Surface::Plane { frame }) => {
             // (c + r cos t x + r sin t y - o) . n = 0
             let n = frame.z;
@@ -195,7 +262,7 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
             let n = frame.z;
             trig_roots(a * cf.x.dot(n), b * cf.y.dot(n), (cf.origin - frame.origin).dot(n), tol)
         }
-        (_, Surface::Cylinder { .. }) => numeric_roots(curve, lo, hi, surface, tol),
+        (_, Surface::Cylinder { .. } | Surface::Cone { .. }) => numeric_roots(curve, lo, hi, surface, tol),
     };
     let mut out: Vec<f64> = Vec::new();
     for t in params {
@@ -235,6 +302,37 @@ fn line_cylinder(o: DVec3, d: DVec3, cyl: &Frame, r: f64, tol: f64) -> Vec<f64> 
     vec![(-b - sq) / (2.0 * a), (-b + sq) / (2.0 * a)]
 }
 
+fn line_cone(o: DVec3, d: DVec3, cone: &Frame, r: f64, half_angle: f64, tol: f64) -> Vec<f64> {
+    // x^2 + y^2 = (r + k z)^2 on the line o + d t, in the cone's frame.
+    let k = half_angle.tan();
+    let lo = cone.to_local(o);
+    let ld = DVec3::new(d.dot(cone.x), d.dot(cone.y), d.dot(cone.z));
+    let (w0, w1) = (r + k * lo.z, k * ld.z);
+    let a = ld.x * ld.x + ld.y * ld.y - w1 * w1;
+    let b = 2.0 * (lo.x * ld.x + lo.y * ld.y - w0 * w1);
+    let c = lo.x * lo.x + lo.y * lo.y - w0 * w0;
+    let mut roots = Vec::new();
+    if a.abs() < PARALLEL {
+        if b.abs() > PARALLEL {
+            roots.push(-c / b);
+        }
+    } else {
+        let disc = b * b - 4.0 * a * c;
+        if disc >= 0.0 {
+            let sq = disc.sqrt();
+            roots.push((-b - sq) / (2.0 * a));
+            if sq > 1e-12 {
+                roots.push((-b + sq) / (2.0 * a));
+            }
+        } else if disc > -tol * tol * a.abs() {
+            roots.push(-b / (2.0 * a));
+        }
+    }
+    // Keep hits on the cone's own nappe, not its mirror past the apex.
+    roots.retain(|t| w0 + w1 * t > -tol);
+    roots
+}
+
 /// Roots of `a cos t + b sin t + c = 0` in `(-PI, PI]`.
 fn trig_roots(a: f64, b: f64, c: f64, tol: f64) -> Vec<f64> {
     let r = (a * a + b * b).sqrt();
@@ -254,15 +352,19 @@ fn trig_roots(a: f64, b: f64, c: f64, tol: f64) -> Vec<f64> {
     vec![phi + alpha, phi - alpha]
 }
 
-/// Roots of the signed distance to a cylinder along a curve, by sampling and
+/// Roots of the signed distance to a curved surface along a curve, by sampling and
 /// bisection. Tangent touches are found from sampled minima.
 fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -> Vec<f64> {
-    let Surface::Cylinder { frame, radius } = surface else {
-        return Vec::new();
-    };
     let f = |t: f64| {
-        let l = frame.to_local(curve.eval(t));
-        DVec2::new(l.x, l.y).length() - radius
+        let p = curve.eval(t);
+        match surface {
+            Surface::Cylinder { frame, radius } => {
+                let l = frame.to_local(p);
+                DVec2::new(l.x, l.y).length() - radius
+            }
+            Surface::Cone { .. } => surface.cone_offset(p),
+            Surface::Plane { frame } => (p - frame.origin).dot(frame.z),
+        }
     };
     let n = 256;
     let span = if curve.is_periodic() && (hi - lo) >= TAU - 1e-12 { TAU } else { hi - lo };
@@ -374,6 +476,68 @@ mod tests {
         for c in &cs {
             on_both(c, &a, &cross);
         }
+    }
+
+    fn cone(half_angle: f64) -> Surface {
+        Surface::Cone { frame: Frame::world(), radius: 2.0, half_angle }
+    }
+
+    #[test]
+    fn plane_cone_cases() {
+        let c = cone(0.4);
+        // Across the axis: a circle.
+        let p = plane(DVec3::new(0.0, 0.0, 1.5), DVec3::Z);
+        let Ok(Ssi::Curves(cs)) = surfaces(&p, &c, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 1);
+        on_both(&cs[0], &p, &c);
+        // Past the apex there is nothing.
+        let below = plane(DVec3::new(0.0, 0.0, -10.0), DVec3::Z);
+        assert_eq!(surfaces(&below, &c, 1e-6), Ok(Ssi::None));
+        // Through the axis: two generators.
+        let through = plane(DVec3::ZERO, DVec3::X);
+        let Ok(Ssi::Curves(cs)) = surfaces(&through, &c, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 2);
+        for curve in &cs {
+            for t in [0.5, 2.0, 5.0] {
+                let p = curve.eval(t);
+                assert!(c.distance(p) < 1e-9 && through.distance(p) < 1e-9);
+            }
+        }
+        // Oblique planes are not supported yet.
+        assert!(surfaces(&plane(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0)), &c, 1e-6).is_err());
+    }
+
+    #[test]
+    fn coaxial_cone_cases() {
+        let c = cone(0.4);
+        let cy = cyl(DVec3::new(0.0, 0.0, 7.0), DVec3::NEG_Z, 3.0);
+        let Ok(Ssi::Curves(cs)) = surfaces(&c, &cy, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 1);
+        on_both(&cs[0], &c, &cy);
+        let other = Surface::Cone {
+            frame: Frame { origin: DVec3::new(0.0, 0.0, 4.0), x: DVec3::X, y: DVec3::NEG_Y, z: DVec3::NEG_Z },
+            radius: 2.5,
+            half_angle: 0.2,
+        };
+        let Ok(Ssi::Curves(cs)) = surfaces(&c, &other, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 1);
+        on_both(&cs[0], &c, &other);
+        assert_eq!(surfaces(&c, &c, 1e-6), Ok(Ssi::Coincident));
+    }
+
+    #[test]
+    fn line_cone_hits() {
+        let c = cone(0.4);
+        let line = Curve::Line { origin: DVec3::new(-10.0, 0.3, 1.0), dir: DVec3::X };
+        let CurveHit::Params(ts) = curve_surface(&line, 0.0, 20.0, &c, 1e-6) else { panic!() };
+        assert_eq!(ts.len(), 2);
+        for t in ts {
+            assert!(c.distance(line.eval(t)) < 1e-9);
+        }
+        // A line along the axis meets only the cone's own nappe, at its apex.
+        let axis = Curve::Line { origin: DVec3::new(0.0, 0.0, -20.0), dir: DVec3::Z };
+        let CurveHit::Params(ts) = curve_surface(&axis, 0.0, 40.0, &c, 1e-6) else { panic!() };
+        assert!(ts.len() <= 1);
     }
 
     #[test]

@@ -262,6 +262,10 @@ pub enum Surface {
     /// The cylinder with axis `frame.z` through `frame.origin`. Its natural
     /// normal points away from the axis.
     Cylinder { frame: Frame, radius: f64 },
+    /// The cone with axis `frame.z` whose radius is `radius` at `frame.origin` and
+    /// grows by `tan(half_angle)` per unit along the axis. Its natural normal points
+    /// away from the axis. `radius` is kept positive (the origin is never the apex).
+    Cone { frame: Frame, radius: f64, half_angle: f64 },
 }
 
 impl Surface {
@@ -273,12 +277,17 @@ impl Surface {
                 let l = frame.to_local(p);
                 (frame.x * l.x + frame.y * l.y).normalize_or(frame.x)
             }
+            Surface::Cone { frame, half_angle, .. } => {
+                let l = frame.to_local(p);
+                let radial = (frame.x * l.x + frame.y * l.y).normalize_or(frame.x);
+                radial * half_angle.cos() - frame.z * half_angle.sin()
+            }
         }
     }
 
     pub fn frame(&self) -> &Frame {
         match self {
-            Surface::Plane { frame } | Surface::Cylinder { frame, .. } => frame,
+            Surface::Plane { frame } | Surface::Cylinder { frame, .. } | Surface::Cone { frame, .. } => frame,
         }
     }
 
@@ -287,6 +296,9 @@ impl Surface {
         match *self {
             Surface::Plane { frame } => Surface::Plane { frame: frame.moved(m) },
             Surface::Cylinder { frame, radius } => Surface::Cylinder { frame: frame.moved(m), radius },
+            Surface::Cone { frame, radius, half_angle } => {
+                Surface::Cone { frame: frame.moved(m), radius, half_angle }
+            }
         }
     }
 
@@ -298,7 +310,26 @@ impl Surface {
                 let l = frame.to_local(p);
                 (DVec2::new(l.x, l.y).length() - radius).abs()
             }
+            Surface::Cone { .. } => self.cone_offset(p).abs(),
         }
+    }
+
+    /// Signed distance from a cone (positive away from the axis), measured to the
+    /// nappe the cone's faces lie on.
+    pub fn cone_offset(&self, p: DVec3) -> f64 {
+        match self {
+            Surface::Cone { frame, radius, half_angle } => {
+                let l = frame.to_local(p);
+                let rho = DVec2::new(l.x, l.y).length();
+                (rho - radius - l.z * half_angle.tan()) * half_angle.cos()
+            }
+            _ => 0.0,
+        }
+    }
+
+    /// Radius of a cone at height `v` along its axis.
+    fn cone_radius(radius: f64, half_angle: f64, v: f64) -> f64 {
+        radius + v * half_angle.tan()
     }
 
     /// Parameter-space coordinates scaled to model units. On a cylinder `u`
@@ -314,6 +345,12 @@ impl Surface {
                 let l = frame.to_local(p);
                 DVec2::new(l.y.atan2(l.x) * radius, l.z)
             }
+            // `u` is the angle scaled by the radius at the origin, so generators are
+            // straight lines and circles are horizontal lines in parameter space.
+            Surface::Cone { frame, radius, .. } => {
+                let l = frame.to_local(p);
+                DVec2::new(l.y.atan2(l.x) * radius, l.z)
+            }
         }
     }
 
@@ -324,6 +361,11 @@ impl Surface {
                 let t = uv.x / radius;
                 frame.origin + (frame.x * t.cos() + frame.y * t.sin()) * *radius + frame.z * uv.y
             }
+            Surface::Cone { frame, radius, half_angle } => {
+                let t = uv.x / radius;
+                let r = Self::cone_radius(*radius, *half_angle, uv.y);
+                frame.origin + (frame.x * t.cos() + frame.y * t.sin()) * r + frame.z * uv.y
+            }
         }
     }
 
@@ -331,7 +373,7 @@ impl Surface {
     pub fn u_period(&self) -> Option<f64> {
         match self {
             Surface::Plane { .. } => None,
-            Surface::Cylinder { radius, .. } => Some(TAU * radius),
+            Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => Some(TAU * radius),
         }
     }
 
@@ -347,7 +389,23 @@ impl Surface {
                     && (d - a.z * d.dot(a.z)).length() < tol
                     && (ra - rb).abs() < tol
             }
+            (
+                Surface::Cone { frame: a, radius: ra, half_angle: ha },
+                Surface::Cone { frame: b, radius: rb, half_angle: hb },
+            ) => {
+                // Same axis line, same apex and same opening.
+                let (aa, ab) = (cone_apex(a, *ra, *ha), cone_apex(b, *rb, *hb));
+                a.z.dot(b.z) > 0.0
+                    && a.z.cross(b.z).length() < 1e-9
+                    && (aa - ab).length() < tol
+                    && (ha - hb).abs() < 1e-9
+            }
             _ => false,
         }
     }
+}
+
+/// The apex of a cone (where its radius reaches zero).
+pub fn cone_apex(frame: &Frame, radius: f64, half_angle: f64) -> DVec3 {
+    frame.origin - frame.z * (radius / half_angle.tan())
 }

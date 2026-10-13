@@ -239,3 +239,53 @@ fn timing() {
     eprintln!("six holes: {ms:.1} ms, {} faces", body.faces.len());
     assert_eq!(check::genus(&body).expect("genus"), 6);
 }
+
+/// A cone frustum on the z axis: radius 2 at z = 0 widening to z = 3.
+fn frustum(half_angle: f64) -> Solid {
+    let mut s = crate::seam::tests::band_solid(half_angle);
+    crate::seam::add_seams(&mut s).expect("seam");
+    s
+}
+
+fn frustum_volume(r1: f64, half_angle: f64, h: f64) -> f64 {
+    let r2 = r1 + h * half_angle.tan();
+    PI * h / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2)
+}
+
+#[test]
+fn hole_through_a_cone() {
+    let half_angle = 0.3;
+    let cone = frustum(half_angle);
+    let hole = cylinder(DVec3::ZERO, DVec3::Z, 1.0, -1.0, 4.0);
+    let d = boolean(&cone, &hole, BoolOp::Subtract).expect("subtract");
+    assert_eq!(d.len(), 1);
+    let want = frustum_volume(2.0, half_angle, 3.0) - PI * 3.0;
+    assert!(close(volume(&d), want, 2e-3), "{} vs {want}", volume(&d));
+}
+
+#[test]
+fn cone_cut_across_its_axis() {
+    let half_angle = 0.3;
+    let cone = frustum(half_angle);
+    // A wide cylinder from z = 1.5 up removes the top of the frustum.
+    let top = cylinder(DVec3::ZERO, DVec3::Z, 10.0, 1.5, 5.0);
+    let d = boolean(&cone, &top, BoolOp::Subtract).expect("subtract");
+    let want = frustum_volume(2.0, half_angle, 1.5);
+    assert!(close(volume(&d), want, 2e-3), "{} vs {want}", volume(&d));
+    let i = boolean(&cone, &top, BoolOp::Intersect).expect("intersect");
+    let r = 2.0 + 1.5 * half_angle.tan();
+    assert!(close(volume(&i), frustum_volume(r, half_angle, 1.5), 2e-3));
+}
+
+#[test]
+fn cones_on_one_axis() {
+    // A narrower frustum widening the other way crosses the first in one circle.
+    let a = frustum(0.3);
+    let m = Frame { origin: DVec3::new(0.0, 0.0, 3.0), x: DVec3::X, y: DVec3::NEG_Y, z: DVec3::NEG_Z };
+    let b = frustum(0.3).transformed(&m);
+    let u = boolean(&a, &b, BoolOp::Union).expect("union");
+    assert_eq!(u.len(), 1);
+    let both = 2.0 * frustum_volume(2.0, 0.3, 3.0);
+    let i = boolean(&a, &b, BoolOp::Intersect).expect("intersect");
+    assert!(close(volume(&u) + volume(&i), both, 2e-3));
+}
