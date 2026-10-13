@@ -289,3 +289,63 @@ fn cones_on_one_axis() {
     let i = boolean(&a, &b, BoolOp::Intersect).expect("intersect");
     assert!(close(volume(&u) + volume(&i), both, 2e-3));
 }
+
+/// Volume shared by a cylinder of radius `big` along x and one of radius `small`
+/// along z whose axes meet, by numerical integration across the thin one.
+fn cross_volume(big: f64, small: f64) -> f64 {
+    let n = 200_000;
+    let h = 2.0 * small / n as f64;
+    (0..n)
+        .map(|i| {
+            let y = -small + h * (i as f64 + 0.5);
+            4.0 * (small * small - y * y).sqrt() * (big * big - y * y).sqrt() * h
+        })
+        .sum()
+}
+
+#[test]
+fn hole_drilled_across_a_shaft() {
+    let (big, small, len) = (5.0, 2.0, 20.0);
+    let shaft = cylinder(DVec3::new(-10.0, 0.0, 0.0), DVec3::X, big, 0.0, len);
+    let drill = cylinder(DVec3::new(1.0, 0.0, -8.0), DVec3::Z, small, 0.0, 16.0);
+    let d = boolean(&shaft, &drill, BoolOp::Subtract).expect("subtract");
+    assert_eq!(d.len(), 1);
+    // Entry and exit edges are traced splines.
+    assert!(d[0].edges.iter().filter(|e| matches!(e.curve, Curve::Spline(_))).count() >= 2);
+    let want = PI * big * big * len - cross_volume(big, small);
+    assert!(close(volume(&d), want, 2e-3), "{} vs {want}", volume(&d));
+    let i = boolean(&shaft, &drill, BoolOp::Intersect).expect("intersect");
+    assert!(close(volume(&i), cross_volume(big, small), 2e-3), "{}", volume(&i));
+}
+
+#[test]
+fn boss_partly_into_a_shaft() {
+    // A boss whose axis misses the shaft's, so it only bites one side.
+    let shaft = cylinder(DVec3::new(-10.0, 0.0, 0.0), DVec3::X, 4.0, 0.0, 20.0);
+    let boss = cylinder(DVec3::new(0.0, 3.5, 0.0), DVec3::Z, 1.5, 0.0, 10.0);
+    let u = boolean(&shaft, &boss, BoolOp::Union).expect("union");
+    let i = boolean(&shaft, &boss, BoolOp::Intersect).expect("intersect");
+    let both = PI * 16.0 * 20.0 + PI * 2.25 * 10.0;
+    assert_eq!(u.len(), 1);
+    assert!(close(volume(&u) + volume(&i), both, 2e-3), "{} + {}", volume(&u), volume(&i));
+}
+
+#[test]
+fn slanted_cut_across_a_cone() {
+    let cone = frustum(0.3);
+    // A big box tilted about x, with only its tilted face crossing the cone.
+    let b = cuboid(DVec3::new(-20.0, -20.0, 0.0), DVec3::new(20.0, 20.0, 20.0));
+    let angle = 0.4f64;
+    let m = Frame {
+        origin: DVec3::new(0.0, 0.0, 1.5),
+        x: DVec3::X,
+        y: DVec3::new(0.0, angle.cos(), angle.sin()),
+        z: DVec3::new(0.0, -angle.sin(), angle.cos()),
+    };
+    let b = b.transformed(&m);
+    let d = boolean(&cone, &b, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&cone, &b, BoolOp::Intersect).expect("intersect");
+    let all = frustum_volume(2.0, 0.3, 3.0);
+    assert!(close(volume(&d) + volume(&i), all, 2e-3), "{} + {}", volume(&d), volume(&i));
+    assert!(volume(&d) > 0.2 * all && volume(&i) > 0.2 * all);
+}

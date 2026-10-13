@@ -40,6 +40,42 @@ impl Writer {
         self.ent(format!("DIRECTION('',({},{},{}))", real(d.x), real(d.y), real(d.z)))
     }
 
+    /// A B-spline curve; rational ones need STEP's complex-instance form.
+    fn spline(&mut self, sp: &anvil_brep::spline::Spline) -> usize {
+        let pts: Vec<String> = sp.points.iter().map(|p| format!("#{}", self.point(*p))).collect();
+        let mut knots: Vec<f64> = Vec::new();
+        let mut mults: Vec<usize> = Vec::new();
+        for k in &sp.knots {
+            match knots.last() {
+                Some(last) if last == k => {
+                    if let Some(m) = mults.last_mut() {
+                        *m += 1;
+                    }
+                }
+                _ => {
+                    knots.push(*k);
+                    mults.push(1);
+                }
+            }
+        }
+        let list = |v: Vec<String>| v.join(",");
+        let pts = list(pts);
+        let mults = list(mults.iter().map(|m| m.to_string()).collect());
+        let knots = list(knots.iter().map(|k| real(*k)).collect());
+        let closed = if sp.closed { ".T." } else { ".F." };
+        let deg = sp.degree;
+        if sp.weights.is_empty() {
+            self.ent(format!(
+                "B_SPLINE_CURVE_WITH_KNOTS('',{deg},({pts}),.UNSPECIFIED.,{closed},.F.,({mults}),({knots}),.UNSPECIFIED.)"
+            ))
+        } else {
+            let weights = list(sp.weights.iter().map(|w| real(*w)).collect());
+            self.ent(format!(
+                "(BOUNDED_CURVE()B_SPLINE_CURVE({deg},({pts}),.UNSPECIFIED.,{closed},.F.)B_SPLINE_CURVE_WITH_KNOTS(({mults}),({knots}),.UNSPECIFIED.)CURVE()GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_CURVE(({weights}))REPRESENTATION_ITEM(''))"
+            ))
+        }
+    }
+
     fn placement(&mut self, f: &Frame) -> usize {
         let o = self.point(f.origin);
         let z = self.dir(f.z);
@@ -86,18 +122,19 @@ pub fn write(solids: &[Solid], name: &str) -> String {
             .collect();
         let mut edges = Vec::with_capacity(solid.edges.len());
         for e in &solid.edges {
-            let (geom, same) = match e.curve {
-                Curve::Line { origin, dir } => {
+            let (geom, same) = match &e.curve {
+                Curve::Spline(sp) => (w.spline(sp), e.t1 >= e.t0),
+                &Curve::Line { origin, dir } => {
                     let p = w.point(origin);
                     let d = w.dir(dir);
                     let v = w.ent(format!("VECTOR('',#{d},1.)"));
                     (w.ent(format!("LINE('',#{p},#{v})")), e.t1 >= e.t0)
                 }
-                Curve::Circle { frame, radius } => {
+                &Curve::Circle { frame, radius } => {
                     let a = w.placement(&frame);
                     (w.ent(format!("CIRCLE('',#{a},{})", real(radius))), e.t1 >= e.t0)
                 }
-                Curve::Ellipse { frame, a, b } => {
+                &Curve::Ellipse { frame, a, b } => {
                     let pl = w.placement(&frame);
                     (w.ent(format!("ELLIPSE('',#{pl},{},{})", real(a), real(b))), e.t1 >= e.t0)
                 }

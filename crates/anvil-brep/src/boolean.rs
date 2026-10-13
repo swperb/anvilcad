@@ -173,18 +173,13 @@ fn face_info(solid: &Solid, face: &Face) -> FaceInfo {
         }
         loops_uv.push(uv);
     }
-    // Inner loops on a cylinder must sit on the same branch as the outer.
-    if let Some(per) = period
-        && let Some(outer_mid) = loops_uv.first().and_then(|l| l.first()).map(|p| p.x)
-    {
-        for l in loops_uv.iter_mut().skip(1) {
-            if let Some(first) = l.first().map(|p| p.x) {
-                let shift = unwrap(outer_mid, first, per) - first;
-                for p in l.iter_mut() {
-                    p.x += shift;
-                }
-            }
-        }
+    if let Some(per) = period {
+        crate::tess::align_holes(&mut loops_uv, per);
+        // The range of u moves with the holes.
+        (umin, umax) = loops_uv
+            .iter()
+            .flatten()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.x), b.max(p.x)));
     }
     FaceInfo { loops_uv, u_range: (umin, umax), bbox: (lo - DVec3::splat(ON), hi + DVec3::splat(ON)) }
 }
@@ -313,7 +308,7 @@ impl<'a> Engine<'a> {
                 let mut list = Vec::new();
                 let (mut t, mut v) = (e.t0, v0);
                 for (tc, vc) in cuts.into_iter().chain(std::iter::once((e.t1, v1))) {
-                    list.push(self.add_edge(e.curve, t, tc, v, vc));
+                    list.push(self.add_edge(e.curve.clone(), t, tc, v, vc));
                     t = tc;
                     v = vc;
                 }
@@ -398,20 +393,21 @@ impl<'a> Engine<'a> {
         verts.dedup_by(|a, b| a.1 == b.1);
 
         let mut spans: Vec<(f64, f64, usize, usize)> = Vec::new();
-        if curve.is_periodic() {
+        if let Some(period) = curve.period() {
             if verts.is_empty() {
                 // A closed curve that touches no edge: give it a vertex.
                 let p = curve.eval(0.0);
                 if self.locate(0, fa, p) == Loc::Inside && self.locate(1, fb, p) == Loc::Inside {
                     let v = self.add_point(p);
-                    spans.push((0.0, TAU, v, v));
+                    let t = curve.param_of(p);
+                    spans.push((t, t + period, v, v));
                 }
             } else {
                 for i in 0..verts.len() {
                     let (t, v) = verts[i];
                     let (mut tn, vn) = verts[(i + 1) % verts.len()];
                     if tn <= t {
-                        tn += TAU;
+                        tn += period;
                     }
                     spans.push((t, tn, v, vn));
                 }
@@ -434,7 +430,7 @@ impl<'a> Engine<'a> {
             if la == Loc::Boundary && lb == Loc::Boundary {
                 continue;
             }
-            let (e, _) = self.add_edge(curve, t0, t1, v0, v1);
+            let (e, _) = self.add_edge(curve.clone(), t0, t1, v0, v1);
             if la == Loc::Inside {
                 self.cuts[0][fa].insert(e);
             }
@@ -899,7 +895,7 @@ impl<'a> Engine<'a> {
                                     let start = vertex(solid, pe.v0);
                                     let end = vertex(solid, pe.v1);
                                     let id = solid.add_edge(Edge {
-                                        curve: pe.curve,
+                                        curve: pe.curve.clone(),
                                         start,
                                         end,
                                         t0: pe.t0,

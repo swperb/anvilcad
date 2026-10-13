@@ -1,9 +1,11 @@
 //! Exact curve and surface geometry.
 
+use crate::spline::Spline;
 use crate::{KernelError, Result, tol};
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::TAU;
+use std::sync::Arc;
 
 /// A right-handed orthonormal coordinate frame.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -76,7 +78,7 @@ impl Frame {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Curve {
     /// `origin + dir * t`, `dir` unit length.
     Line { origin: DVec3, dir: DVec3 },
@@ -84,6 +86,8 @@ pub enum Curve {
     Circle { frame: Frame, radius: f64 },
     /// `frame.origin + a cos t * frame.x + b sin t * frame.y`.
     Ellipse { frame: Frame, a: f64, b: f64 },
+    /// A B-spline, for intersection curves and curves read from other systems.
+    Spline(Arc<Spline>),
 }
 
 impl Curve {
@@ -96,12 +100,14 @@ impl Curve {
             Curve::Ellipse { frame, a, b } => {
                 frame.origin + frame.x * (a * t.cos()) + frame.y * (b * t.sin())
             }
+            Curve::Spline(s) => s.eval(t),
         }
     }
 
     /// The curve moved by the rigid motion `m`.
     pub fn moved(&self, m: &Frame) -> Curve {
         match *self {
+            Curve::Spline(ref s) => Curve::Spline(Arc::new(s.mapped(|p| m.apply_point(p)))),
             Curve::Line { origin, dir } => {
                 Curve::Line { origin: m.apply_point(origin), dir: m.apply_dir(dir) }
             }
@@ -110,15 +116,24 @@ impl Curve {
         }
     }
 
-    /// Circles and ellipses are periodic in their parameter.
+    /// Circles, ellipses and closed splines are periodic in their parameter.
     pub fn is_periodic(&self) -> bool {
-        !matches!(self, Curve::Line { .. })
+        self.period().is_some()
+    }
+
+    /// How far the parameter goes before the curve repeats, if it does.
+    pub fn period(&self) -> Option<f64> {
+        match self {
+            Curve::Line { .. } => None,
+            Curve::Circle { .. } | Curve::Ellipse { .. } => Some(TAU),
+            Curve::Spline(s) => s.period(),
+        }
     }
 
     /// Largest radius of curvature scale, for choosing sample counts.
     fn size(&self) -> f64 {
         match self {
-            Curve::Line { .. } => 0.0,
+            Curve::Line { .. } | Curve::Spline(_) => 0.0,
             Curve::Circle { radius, .. } => *radius,
             Curve::Ellipse { a, b, .. } => a.max(*b),
         }
@@ -128,6 +143,7 @@ impl Curve {
     pub fn sample(&self, t0: f64, t1: f64, chord: f64, max_angle: f64) -> Vec<DVec3> {
         match self {
             Curve::Line { .. } => vec![self.eval(t0), self.eval(t1)],
+            Curve::Spline(s) => s.sample(t0, t1, chord, max_angle),
             _ => {
                 let n = arc_steps(self.size(), (t1 - t0).abs(), chord, max_angle);
                 (0..=n)
@@ -145,8 +161,8 @@ impl Curve {
         }
     }
 
-    /// The parameter of a point on (or near) the curve. Periodic curves
-    /// return a value in `(-PI, PI]`.
+    /// The parameter of a point on (or near) the curve. Circles and ellipses
+    /// return a value in `(-PI, PI]`, splines one in their domain.
     pub fn param_of(&self, p: DVec3) -> f64 {
         match self {
             Curve::Line { origin, dir } => (p - *origin).dot(*dir),
@@ -158,6 +174,10 @@ impl Curve {
                 let l = frame.to_local(p);
                 (l.y / b).atan2(l.x / a)
             }
+            Curve::Spline(s) => {
+                let (lo, hi) = s.domain();
+                s.closest(p, lo, hi)
+            }
         }
     }
 
@@ -165,14 +185,14 @@ impl Curve {
     /// close as possible to) the range between `t0` and `t1`.
     pub fn param_in_range(&self, p: DVec3, t0: f64, t1: f64) -> f64 {
         let t = self.param_of(p);
-        if !self.is_periodic() {
+        let Some(period) = self.period() else {
             return t;
-        }
+        };
         let (lo, hi) = (t0.min(t1), t0.max(t1));
         let mut best = t;
         let mut best_err = f64::INFINITY;
         for k in -3..=3 {
-            let c = t + TAU * k as f64;
+            let c = t + period * k as f64;
             let err = if c < lo {
                 lo - c
             } else if c > hi {
@@ -230,6 +250,7 @@ impl Curve {
                 }
                 (self.eval(0.5 * (a + b)) - p).length().min(best.sqrt())
             }
+            Curve::Spline(s) => (s.eval(s.closest(p, lo, hi)) - p).length(),
         }
     }
 
@@ -239,6 +260,10 @@ impl Curve {
             Curve::Line { origin, dir } => {
                 let d = p - *origin;
                 (d - *dir * d.dot(*dir)).length()
+            }
+            Curve::Spline(s) => {
+                let (lo, hi) = s.domain();
+                self.distance_to(p, lo, hi)
             }
             _ => self.distance_to(p, -std::f64::consts::PI, std::f64::consts::PI),
         }

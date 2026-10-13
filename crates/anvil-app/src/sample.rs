@@ -174,6 +174,60 @@ mod exact_tests {
         assert_eq!(st.body.open_edges(), 0);
     }
 
+    /// A vertical boss with a hole drilled across it: the hole meets the boss in
+    /// traced intersection curves, so the part stays on the exact kernel.
+    #[test]
+    fn cross_drilled_boss_stays_exact() {
+        use anvil_kernel::v2;
+        use anvil_model::*;
+        use anvil_sketch::{Constraint, ORIGIN};
+        let (big, small, height) = (12.0, 4.0, 40.0);
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        sf.sketch.add_constraint(Constraint::Coincident { p: c, q: ORIGIN });
+        let e = sf.sketch.add_circle(c, big);
+        sf.sketch.add_constraint(Constraint::Diameter { entity: e, value: 2.0 * big });
+        let boss_sk = doc.add_feature(FeatureKind::Sketch(sf));
+        doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: boss_sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(height),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        super::circle(&mut sf.sketch, 0.0, 20.0, 2.0 * small);
+        let hole_sk = doc.add_feature(FeatureKind::Sketch(sf));
+        doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: hole_sk,
+            end: EndCondition::MidPlane,
+            depth: Dim::Value(60.0),
+            reverse: false,
+            op: BodyOp::Cut,
+        }));
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert!(st.faceted_from.is_none(), "{:?}", st.faceted_from);
+        // Volume shared by the two cylinders, integrated across the hole.
+        let n = 100_000;
+        let h = 2.0 * small / n as f64;
+        let cross: f64 = (0..n)
+            .map(|i| {
+                let y = -small + h * (i as f64 + 0.5);
+                4.0 * (small * small - y * y).sqrt() * (big * big - y * y).sqrt() * h
+            })
+            .sum();
+        let want = std::f64::consts::PI * big * big * height - cross;
+        let v = st.body.mass_properties().volume;
+        assert!((v - want).abs() / want < 2e-3, "{v} vs {want}");
+        assert_eq!(st.body.open_edges(), 0);
+        let text = anvil_model::step::exact_step(&st, "boss").expect("exact STEP");
+        if let Ok(dir) = std::env::var("ANVIL_DUMP_STEP") {
+            let _ = std::fs::write(std::path::Path::new(&dir).join("cross-drilled-boss.step"), &text);
+        }
+    }
+
     /// The sample part is not all exact, so its STEP export is faceted. Importing that
     /// file back must give the same, closed solid.
     #[test]

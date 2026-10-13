@@ -1,6 +1,6 @@
 //! Real-world STEP files from NIST's CAD test models (see tests/data/NOTICE.md).
 
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::panic)]
 
 use anvil_step::{Mesh, import};
 use glam::DVec3;

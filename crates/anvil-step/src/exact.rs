@@ -1,14 +1,17 @@
 //! Converts a read body to an exact `anvil-brep` solid when every face is a plane,
-//! cylinder or cone bounded by lines, circles and ellipses.
+//! cylinder or cone. Edges keep the file's line, circle or ellipse; other edges are
+//! traced exactly from the two surfaces they join, or else keep the file's B-spline.
 
 use crate::reader::{Body, LoopKind, Model};
 use crate::shapes;
 use anvil_brep::intersect::{self, Ssi};
+use anvil_brep::spline::Spline;
 use anvil_brep::topo::{Coedge, Edge, Face, FaceTag, Loop};
 use anvil_brep::{Curve, EdgeId, Solid, Surface, VertexId, check};
 use glam::DVec3;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::f64::consts::TAU;
+use std::sync::Arc;
 
 /// The kernel surface for a face, given the points of its boundary vertices.
 fn surface(s: &shapes::Surface, points: &[DVec3]) -> Option<Surface> {
@@ -56,27 +59,40 @@ fn curve(c: &shapes::Curve) -> Option<Curve> {
     }
 }
 
-/// Parameter range from `start` to `end` along `c`, forwards when `same_sense`.
-fn range(c: &Curve, start: DVec3, end: DVec3, same_sense: bool) -> (f64, f64) {
+/// Intersection curves by pair of faces, `None` where tracing failed.
+type Traced = HashMap<(usize, usize), Option<Vec<Curve>>>;
+
+/// The file's B-spline as a kernel spline.
+fn file_spline(c: &shapes::Curve) -> Option<Curve> {
+    let shapes::Curve::BSpline(b) = c else { return None };
+    let s = Spline::new(b.basis.degree, b.basis.knots.clone(), b.points.clone(), b.weights.clone()).ok()?;
+    Some(Curve::Spline(Arc::new(s)))
+}
+
+/// Direction the edge runs at `p` along the file's curve.
+fn file_direction(c: &shapes::Curve, p: DVec3, same_sense: bool) -> DVec3 {
+    let (lo, hi) = c.domain();
+    let t = c.invert(p);
+    let h = if (hi - lo).is_finite() { (hi - lo) * 1e-4 } else { 1e-3 };
+    let (a, b) = if c.is_periodic() { (t - h, t + h) } else { ((t - h).max(lo), (t + h).min(hi)) };
+    let d = c.eval(b) - c.eval(a);
+    if same_sense { d } else { -d }
+}
+
+/// Parameter range from `start` to `end` along `c`, in the curve's direction when
+/// `forward`.
+fn range(c: &Curve, start: DVec3, end: DVec3, forward: bool) -> (f64, f64) {
     let t0 = c.param_of(start);
     let t1 = c.param_of(end);
-    if !c.is_periodic() {
+    let Some(period) = c.period() else {
         return (t0, t1);
-    }
+    };
     let closed = (start - end).length() < 1e-9;
-    if same_sense {
-        let mut sweep = (t1 - t0).rem_euclid(TAU);
-        if closed || sweep < 1e-12 {
-            sweep = TAU;
-        }
-        (t0, t0 + sweep)
-    } else {
-        let mut sweep = (t0 - t1).rem_euclid(TAU);
-        if closed || sweep < 1e-12 {
-            sweep = TAU;
-        }
-        (t0, t0 - sweep)
+    let mut sweep = if forward { (t1 - t0).rem_euclid(period) } else { (t0 - t1).rem_euclid(period) };
+    if closed || sweep < 1e-12 * period {
+        sweep = period;
     }
+    if forward { (t0, t0 + sweep) } else { (t0, t0 - sweep) }
 }
 
 /// Twice the signed area vector of a closed polyline (Newell's method).
@@ -120,10 +136,20 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
             }
         }
     }
+    // Intersections per pair of faces: the edges between two faces share them.
+    let traced: RefCell<Traced> = RefCell::new(HashMap::new());
     let rebuilt = |edge: u64, e: &crate::reader::EdgeCurve| -> Option<Curve> {
         let faces = edge_faces.get(&edge)?;
         let [fa, fb] = faces[..] else { return None };
         let (sa, sb) = (surfaces.get(fa)?.as_ref()?, surfaces.get(fb)?.as_ref()?);
+        let cs = traced
+            .borrow_mut()
+            .entry((fa.min(fb), fa.max(fb)))
+            .or_insert_with(|| match intersect::surfaces(sa, sb, 1e-6) {
+                Ok(Ssi::Curves(cs)) => Some(cs),
+                _ => None,
+            })
+            .clone()?;
         let (ps, pe) = (*model.vertices.get(&e.start)?, *model.vertices.get(&e.end)?);
         // A point inside the edge, from the file's own curve, picks the right branch.
         let mid = e.curve.as_ref().map(|c| {
@@ -131,7 +157,6 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
             c.eval(0.5 * (t0 + t1))
         });
         let tol = 1e-4 * ps.length().max(pe.length()).max(1.0);
-        let Ok(Ssi::Curves(cs)) = intersect::surfaces(sa, sb, 1e-6) else { return None };
         cs.into_iter().find(|c| {
             c.distance_to_curve(ps) < tol
                 && c.distance_to_curve(pe) < tol
@@ -162,14 +187,36 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                 let id = match eids.get(&oe.edge) {
                     Some(id) => *id,
                     None => {
-                        let c = e.curve.as_ref().and_then(curve).or_else(|| rebuilt(oe.edge, e)).ok_or_else(
-                            || {
-                                format!(
-                                    "{} edges are not exact yet",
-                                    e.curve_type.to_lowercase().replace('_', " ")
-                                )
+                        // The file's own line, circle or ellipse; else the curve traced
+                        // from the two faces, running the way the file's curve runs;
+                        // else the file's B-spline.
+                        let (c, forward) = match e.curve.as_ref().and_then(curve) {
+                            Some(c) => (c, e.same_sense),
+                            None => match rebuilt(oe.edge, e) {
+                                Some(c) => {
+                                    let ps = *model.vertices.get(&e.start).ok_or("vertex missing")?;
+                                    let forward = match &e.curve {
+                                        Some(file) => {
+                                            let want = file_direction(file, ps, e.same_sense);
+                                            let t = c.param_of(ps);
+                                            let h = c.period().unwrap_or(1.0) * 1e-4;
+                                            (c.eval(t + h) - c.eval(t - h)).dot(want) >= 0.0
+                                        }
+                                        None => e.same_sense,
+                                    };
+                                    (c, forward)
+                                }
+                                None => {
+                                    let c = e.curve.as_ref().and_then(file_spline).ok_or_else(|| {
+                                        format!(
+                                            "{} edges are not exact yet",
+                                            e.curve_type.to_lowercase().replace('_', " ")
+                                        )
+                                    })?;
+                                    (c, e.same_sense)
+                                }
                             },
-                        )?;
+                        };
                         let mut vertex = |v: u64| -> Result<VertexId, String> {
                             if let Some(id) = vids.get(&v) {
                                 return Ok(*id);
@@ -181,7 +228,7 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                         };
                         let (start, end) = (vertex(e.start)?, vertex(e.end)?);
                         let (ps, pe) = (model.vertices[&e.start], model.vertices[&e.end]);
-                        let (t0, t1) = range(&c, ps, pe, e.same_sense);
+                        let (t0, t1) = range(&c, ps, pe, forward);
                         let id = solid.add_edge(Edge { curve: c, start, end, t0, t1 });
                         eids.insert(oe.edge, id);
                         id

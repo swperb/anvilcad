@@ -1,9 +1,9 @@
 //! Surface-surface and curve-surface intersection.
 
+use crate::Result;
 use crate::geom::{Curve, Frame, Surface};
-use crate::{KernelError, Result};
 use glam::{DVec2, DVec3};
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::PI;
 
 /// Directions closer than this to parallel are treated as parallel.
 const PARALLEL: f64 = 1e-9;
@@ -73,7 +73,15 @@ fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) ->
             Curve::Line { origin: apex, dir: axis * c - side * s },
         ]));
     }
-    Err(KernelError::Unsupported("intersection of a cone with a plane at an angle to its axis".into()))
+    // At an angle: an ellipse when the plane cuts every generator, traced in general.
+    Ok(Ssi::Curves(crate::ssi::intersect(
+        &Surface::Plane { frame: *plane },
+        &cone_surface(cone, r, half_angle),
+    )?))
+}
+
+fn cone_surface(frame: &Frame, radius: f64, half_angle: f64) -> Surface {
+    Surface::Cone { frame: *frame, radius, half_angle }
 }
 
 /// Two surfaces of revolution about the same axis, each given as a cone (a
@@ -81,7 +89,10 @@ fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) ->
 fn coaxial_cones(a: &Frame, ra: f64, ha: f64, b: &Frame, rb: f64, hb: f64, tol: f64) -> Result<Ssi> {
     let d = b.origin - a.origin;
     if a.z.cross(b.z).length() > PARALLEL || (d - a.z * d.dot(a.z)).length() > tol {
-        return Err(KernelError::Unsupported("intersection of a cone with a surface on another axis".into()));
+        let sa = cone_surface(a, ra, ha);
+        let sb =
+            if hb == 0.0 { Surface::Cylinder { frame: *b, radius: rb } } else { cone_surface(b, rb, hb) };
+        return Ok(Ssi::Curves(crate::ssi::intersect(&sa, &sb)?));
     }
     // Heights along a's axis: b's radius is rb + sign * (z - z0) * tan(hb).
     let sign = a.z.dot(b.z).signum();
@@ -186,20 +197,22 @@ fn cylinder_cylinder(a: &Frame, ra: f64, b: &Frame, rb: f64, tol: f64) -> Result
 /// Cylinders whose axes are not parallel. The case that edge blends need,
 /// equal radii with intersecting axes, meets in two plane ellipses: the planes
 /// through the axes' crossing point with normals `a1 - a2` and `a1 + a2`.
-/// Anything else is a general quartic curve, which is not supported yet.
+/// Anything else is a general quartic curve.
 fn crossing_cylinders(a: &Frame, ra: f64, b: &Frame, rb: f64, tol: f64) -> Result<Ssi> {
-    let unsupported = || {
-        Err(KernelError::Unsupported(
-            "intersection of crossing cylinders unless they have equal radii and their axes meet".into(),
-        ))
+    // Anything but equal radii with meeting axes is a quartic, traced in general.
+    let general = || {
+        Ok(Ssi::Curves(crate::ssi::intersect(
+            &Surface::Cylinder { frame: *a, radius: ra },
+            &Surface::Cylinder { frame: *b, radius: rb },
+        )?))
     };
     if (ra - rb).abs() > tol {
-        return unsupported();
+        return general();
     }
     let n = a.z.cross(b.z);
     let d = b.origin - a.origin;
     if d.dot(n).abs() / n.length() > tol {
-        return unsupported();
+        return general();
     }
     // Crossing point: a.origin + a.z * s with s from the closest-point solve.
     let s = d.cross(b.z).dot(n) / n.length_squared();
@@ -263,6 +276,7 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
             trig_roots(a * cf.x.dot(n), b * cf.y.dot(n), (cf.origin - frame.origin).dot(n), tol)
         }
         (_, Surface::Cylinder { .. } | Surface::Cone { .. }) => numeric_roots(curve, lo, hi, surface, tol),
+        (Curve::Spline(_), Surface::Plane { .. }) => numeric_roots(curve, lo, hi, surface, tol),
     };
     let mut out: Vec<f64> = Vec::new();
     for t in params {
@@ -366,8 +380,11 @@ fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -
             Surface::Plane { frame } => (p - frame.origin).dot(frame.z),
         }
     };
-    let n = 256;
-    let span = if curve.is_periodic() && (hi - lo) >= TAU - 1e-12 { TAU } else { hi - lo };
+    let n = if matches!(curve, Curve::Spline(_)) { 1024 } else { 256 };
+    let span = match curve.period() {
+        Some(per) if (hi - lo) >= per - 1e-12 => per,
+        _ => hi - lo,
+    };
     let ts: Vec<f64> = (0..=n).map(|i| lo + span * i as f64 / n as f64).collect();
     let fs: Vec<f64> = ts.iter().map(|t| f(*t)).collect();
     let mut roots = Vec::new();
@@ -399,6 +416,7 @@ fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f64::consts::TAU;
 
     fn plane(origin: DVec3, n: DVec3) -> Surface {
         Surface::Plane {
@@ -467,8 +485,10 @@ mod tests {
         for c in &cs {
             on_both(c, &a, &b);
         }
+        // Unequal radii crossing: two traced loops where the thin one goes through.
         let skew = cyl(DVec3::new(0.0, 0.0, 3.0), DVec3::X, 1.0);
-        assert!(surfaces(&a, &skew, 1e-6).is_err());
+        let Ok(Ssi::Curves(cs)) = surfaces(&a, &skew, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 2);
         // Equal radii, axes meeting at a right angle: two ellipses.
         let cross = cyl(DVec3::new(-5.0, 0.0, 3.0), DVec3::X, 2.0);
         let Ok(Ssi::Curves(cs)) = surfaces(&a, &cross, 1e-6) else { panic!() };
@@ -503,8 +523,11 @@ mod tests {
                 assert!(c.distance(p) < 1e-9 && through.distance(p) < 1e-9);
             }
         }
-        // Oblique planes are not supported yet.
-        assert!(surfaces(&plane(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0)), &c, 1e-6).is_err());
+        // An oblique plane cutting every generator: one closed traced curve.
+        let oblique = plane(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0));
+        let Ok(Ssi::Curves(cs)) = surfaces(&oblique, &c, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 1);
+        assert!(matches!(cs[0], Curve::Spline(_)));
     }
 
     #[test]

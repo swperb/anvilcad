@@ -372,3 +372,29 @@ fn cone_with_apex_is_closed() {
     let exact = PI * r * r * h / 3.0;
     assert!((mesh_volume(m) - exact).abs() / exact < 0.005, "{}", mesh_volume(m));
 }
+
+/// A hole drilled across a shaft: its entry and exit edges are spline curves, which
+/// export as B-splines and come back exact.
+#[test]
+fn cross_drilled_shaft_round_trips_exactly() {
+    let shaft = rod(DVec3::new(-10.0, 0.0, 0.0), DVec3::X, 5.0, 0.0, 20.0);
+    let drill = rod(DVec3::new(1.0, 0.0, -8.0), DVec3::Z, 2.0, 0.0, 16.0);
+    let part = boolean(&shaft, &drill, BoolOp::Subtract).expect("cut").remove(0);
+    let splines = |s: &anvil_brep::Solid| {
+        s.edges.iter().filter(|e| matches!(e.curve, anvil_brep::Curve::Spline(_))).count()
+    };
+    assert!(splines(&part) >= 2);
+    let text = export::write(std::slice::from_ref(&part), "shaft");
+    assert!(text.contains("B_SPLINE_CURVE_WITH_KNOTS"));
+    let imp = import(&text).expect("import");
+    let b = &imp.bodies[0];
+    let exact = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+    check::validate(exact).expect("valid");
+    assert_eq!(exact.faces.len(), part.faces.len());
+    assert!(splines(exact) >= 2);
+    let v = exact_volume(&part);
+    assert!((exact_volume(exact) - v).abs() / v < 1e-6, "{} vs {v}", exact_volume(exact));
+    assert!(watertight(&b.mesh));
+    // The importer's own mesh is coarser (0.02 mm chords on 2 mm radii).
+    assert!((mesh_volume(&b.mesh) - v).abs() / v < 5e-3, "{} vs {v}", mesh_volume(&b.mesh));
+}

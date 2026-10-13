@@ -116,18 +116,8 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
     }
 
     let mut loops_uv: Vec<Vec<DVec2>> = loops3.iter().map(|l| to_uv(&face.surface, l)).collect();
-    // On a surface that wraps around, every loop must use the same branch of the angle.
-    if let Some(period) = face.surface.u_period()
-        && let Some(reference) = loops_uv.first().and_then(|l| l.first()).map(|p| p.x)
-    {
-        for l in loops_uv.iter_mut().skip(1) {
-            if let Some(first) = l.first().map(|p| p.x) {
-                let shift = period * ((reference - first) / period).round();
-                for p in l.iter_mut() {
-                    p.x += shift;
-                }
-            }
-        }
+    if let Some(period) = face.surface.u_period() {
+        align_holes(&mut loops_uv, period);
     }
 
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
@@ -256,6 +246,26 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         mesh.triangle_face.push(face_index);
     }
     Ok(())
+}
+
+/// On a surface that wraps around, puts each inner loop on the outer loop's branch
+/// of the angle: shifted by whole periods so its middle falls in the outer loop's
+/// range of `u`. (Matching first points is not enough: a hole at -90 degrees in a
+/// face running from 0 to 360 would land outside it.)
+pub(crate) fn align_holes(loops: &mut [Vec<DVec2>], period: f64) {
+    let Some((outer, inners)) = loops.split_first_mut() else { return };
+    let Some(lo) = outer.iter().map(|p| p.x).min_by(f64::total_cmp) else { return };
+    for l in inners {
+        let (a, b) = l.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.x), b.max(p.x)));
+        if !a.is_finite() {
+            continue;
+        }
+        let mid = 0.5 * (a + b);
+        let shift = period * ((lo - mid) / period).ceil();
+        for p in l.iter_mut() {
+            p.x += shift;
+        }
+    }
 }
 
 /// For every face of the triangulation, whether it lies inside the constraints.

@@ -75,6 +75,20 @@ fn sample_edge(model: &Model, e: &EdgeCurve) -> Vec<DVec3> {
                 t1 = t0 + sweep;
             } else if closed {
                 let (lo, hi) = c.domain();
+                // A closed curve whose vertex is not at the start of its domain: go
+                // from the vertex to the domain's end and on round from its start.
+                let ends_meet = (c.eval(lo) - c.eval(hi)).length() < 1e-9 * ps.length().max(1.0);
+                let margin = 1e-6 * (hi - lo);
+                if ends_meet && t0 > lo + margin && t0 < hi - margin {
+                    let (first, second) = if e.same_sense {
+                        (c.sample(t0, hi, CHORD), c.sample(lo, t0, CHORD))
+                    } else {
+                        (c.sample(t0, lo, CHORD), c.sample(hi, t0, CHORD))
+                    };
+                    let mut pts = first;
+                    pts.extend(second.into_iter().skip(1));
+                    return pin(pts, ps, pe);
+                }
                 let (a, b) = if e.same_sense { (lo, hi) } else { (hi, lo) };
                 return pin(c.sample(a, b, CHORD), ps, pe);
             }
@@ -553,6 +567,44 @@ fn orient_by_loops(b: &Builder, loops3: &[Vec<DVec3>], tris: &mut [[u32; 3]]) {
     }
 }
 
+/// Moves holes by whole periods (in coordinate `dim`) into the range of the widest
+/// loop when they landed outside it.
+fn place_in_widest(raw: &mut [Vec<DVec2>], dim: usize) {
+    let span = |l: &[DVec2]| {
+        l.iter()
+            .map(|q| coord(*q, dim))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), x| (a.min(x), b.max(x)))
+    };
+    let Some(widest) = (0..raw.len()).max_by(|&i, &j| {
+        let (a, b) = (span(&raw[i]), span(&raw[j]));
+        (a.1 - a.0).total_cmp(&(b.1 - b.0))
+    }) else {
+        return;
+    };
+    let (lo, hi) = span(&raw[widest]);
+    let inside = |a: f64, b: f64| a >= lo - 1e-9 && b <= hi + 1e-9;
+    for (i, l) in raw.iter_mut().enumerate() {
+        let (a, b) = span(l);
+        // A loop that goes around (its unwrapped ends a period apart) stays put.
+        let wraps = match (l.first(), l.last()) {
+            (Some(f), Some(e)) => (coord(*e, dim) - coord(*f, dim)).abs() > PI,
+            _ => false,
+        };
+        if i == widest || !a.is_finite() || wraps {
+            continue;
+        }
+        // Only a hole that the move puts inside the outer loop's range: other loops
+        // (a torus band's second rim, say) are where they belong already.
+        let shift = TAU * ((lo - 0.5 * (a + b)) / TAU).ceil();
+        if inside(a, b) || !inside(a + shift, b + shift) {
+            continue;
+        }
+        for q in l.iter_mut() {
+            *q = with_coord(*q, dim, coord(*q, dim) + shift);
+        }
+    }
+}
+
 fn curved_face(
     b: &mut Builder,
     s: &Surface,
@@ -613,6 +665,14 @@ fn curved_face(
                     *q += DVec2::new(du, dv);
                 }
             }
+        }
+    }
+    // Matching first points is not enough on its own: a hole at -90 degrees in a face
+    // running from 0 to 360 would sit outside it. Holes move by whole periods so their
+    // middles fall in the range of the widest loop (the outer one).
+    for (periodic, dim) in [(pu, 0), (pv, 1)] {
+        if periodic {
+            place_in_widest(&mut raw, dim);
         }
     }
     let mut loops3: Vec<Vec<DVec3>> = loops3.to_vec();

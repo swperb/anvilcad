@@ -111,9 +111,9 @@ explains how to migrate them.
 
 ```
 crates/
-  anvil-brep     exact kernel: analytic curves (line, circle, ellipse) and surfaces
-                 (plane, cylinder), exact booleans, extrude, fillets and chamfers,
-                 topology checks, watertight tessellation
+  anvil-brep     exact kernel: curves (line, circle, ellipse, B-spline) and surfaces
+                 (plane, cylinder, cone), exact booleans, traced intersection curves,
+                 extrude, fillets and chamfers, topology checks, watertight tessellation
   anvil-kernel   faceted kernel: math, profiles, triangulation, polygon B-rep solids,
                  booleans (BSP), extrude/revolve, shell, mass properties, picking
   anvil-sketch   2D sketcher: entities, constraints, solver, profile extraction
@@ -128,10 +128,13 @@ crates/
 ```
 
 Kernel design notes:
-- Two kernels work together. `anvil-brep` builds parts exactly: its curves and surfaces
-  are analytic, and its booleans intersect them exactly (plane-plane, plane-cylinder,
-  parallel cylinders, and equal-radius cylinders whose axes meet). `anvil-kernel` is a
-  faceted kernel that covers everything else.
+- Two kernels work together. `anvil-brep` builds parts exactly: its surfaces are
+  analytic, and its booleans intersect them exactly. Where the answer is a line, circle
+  or ellipse it is computed in closed form; anything else between cylinders, cones and
+  planes (a hole drilled across a shaft, say) is traced: each straight line of one
+  surface meets the other at the roots of a quadratic, so every traced point is exact,
+  and the points are joined into a cubic B-spline refined until it stays within 1e-7 mm
+  of both surfaces. `anvil-kernel` is a faceted kernel that covers everything else.
 - The rebuild runs on the exact kernel while every feature so far is one it supports
   (extrudes, cuts, patterns, fillets and chamfers on straight edges between flat faces).
   After each exact feature the faceted body is regenerated from the exact result, so
@@ -146,8 +149,9 @@ Kernel design notes:
 - Every exact solid passes a topology check (closed, consistently oriented, valid Euler
   characteristic) before it is used. Exact booleans are tested with randomized boxes on an
   integer grid, which makes faces, edges and corners coincide constantly, against exact
-  volumes. Operations the exact kernel cannot do yet (crossing cylinders of different
-  radii, bodies touching along an edge, internal voids) are reported, never guessed.
+  volumes. Operations the exact kernel cannot do yet (open intersection curves such as a
+  plane parallel to a cone's axis, bodies touching along an edge, internal voids) are
+  reported, never guessed.
 - Faceted solids are planar convex polygons, each tagged with its face name and exact
   surface. Their booleans use BSP trees (iterative, no recursion limits), then T-junctions
   are repaired so results are watertight. Curved faces are faceted at 0.01 mm chord
@@ -204,14 +208,13 @@ Part loads a model that uses most features.
 
 ## Roadmap
 
-1. Kernel: extend the exact kernel to cones, tori, spheres and surfaces of revolution so
-   revolves, shells and curved-edge fillets build exactly; general cylinder-cylinder
-   intersections; fillets on curved-to-curved edges, spherical corner blends,
+1. Kernel: extend the exact kernel to tori, spheres and surfaces of revolution so
+   revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
    variable-radius fillets, draft; later NURBS
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
    custom properties
-4. STEP: assembly placement, colours and names, exact import of spheres, tori and general intersection curves;
+4. STEP: assembly placement, colours and names, exact import of spheres, tori and cones that come to a point;
    then SOLIDWORKS format research for the five-year compatibility window
 5. A scripting and plugin API
 6. CAM (tracked as a feature request in the issues)
