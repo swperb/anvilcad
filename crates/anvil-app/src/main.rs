@@ -2,6 +2,7 @@
 //!
 //! Usage:
 //!   anvilcad [FILE.anvprt | --sample] [--screenshot OUT.png] [--edit-sketch FEATURE_ID]
+//!            [--window properties|mass|dfm] [--material NAME]
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -17,11 +18,15 @@ fn main() -> eframe::Result<()> {
     let mut open = None;
     let mut screenshot = None;
     let mut edit_sketch = None;
+    let mut window = None;
+    let mut material = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--screenshot" => screenshot = args.next().map(PathBuf::from),
             "--edit-sketch" => edit_sketch = args.next().and_then(|s| s.parse().ok()),
+            "--window" => window = args.next(),
+            "--material" => material = args.next(),
             _ => open = Some(PathBuf::from(a)),
         }
     }
@@ -44,7 +49,14 @@ fn main() -> eframe::Result<()> {
                 // Must match the depth buffer and multisampling requested above.
                 render::install(rs, 4, eframe::egui_wgpu::depth_format_from_bits(24, 0));
             }
-            Ok(Box::new(app::AnvilApp::new(&cc.egui_ctx, open, screenshot, edit_sketch)))
+            let mut app = app::AnvilApp::new(&cc.egui_ctx, open, screenshot, edit_sketch);
+            if let Some(m) = &material {
+                app.set_material(m);
+            }
+            if let Some(w) = &window {
+                app.show_window(w);
+            }
+            Ok(Box::new(app))
         }),
     )
 }

@@ -51,7 +51,20 @@ struct Windows {
     properties: bool,
     equations: bool,
     mass: bool,
+    dfm: bool,
     about: bool,
+}
+
+/// The design-for-manufacturing check window's state.
+struct DfmState {
+    process: dfm::Process,
+    report: Option<dfm::DfmReport>,
+    /// The part changed since the report was made.
+    stale: bool,
+    /// The finding whose faces are highlighted.
+    focus: Option<usize>,
+    /// The material the report was made for.
+    material: Option<String>,
 }
 
 pub struct AnvilApp {
@@ -70,6 +83,7 @@ pub struct AnvilApp {
     path: Option<PathBuf>,
     selection: Selection,
     hover_face: Option<FaceId>,
+    dfm: DfmState,
     sketch: Option<SketchSession>,
     editor: Option<Editor>,
     tab: Tab,
@@ -132,6 +146,13 @@ impl AnvilApp {
             path: None,
             selection: Selection::None,
             hover_face: None,
+            dfm: DfmState {
+                process: dfm::Process::CncMachining,
+                report: None,
+                stale: false,
+                focus: None,
+                material: None,
+            },
             sketch: None,
             editor: None,
             tab: Tab::Features,
@@ -168,8 +189,44 @@ impl AnvilApp {
 
     // ----- document state -------------------------------------------------------------
 
+    /// Opens a window by name (for the command line): properties, mass or dfm.
+    pub fn show_window(&mut self, name: &str) {
+        match name {
+            "properties" => self.windows.properties = true,
+            "mass" => self.windows.mass = true,
+            "dfm" => self.open_dfm(),
+            _ => {}
+        }
+    }
+
+    /// Assigns a library material by name (for the command line).
+    pub fn set_material(&mut self, name: &str) {
+        if let Some(m) = Material::library().into_iter().find(|m| m.name == name) {
+            self.doc.material = Some(m);
+        }
+    }
+
+    fn open_dfm(&mut self) {
+        self.windows.dfm = true;
+        if self.dfm.report.is_none() || self.dfm.stale {
+            self.run_dfm();
+        }
+    }
+
+    fn run_dfm(&mut self) {
+        let material = self.doc.material.as_ref().map(|m| m.resolved());
+        self.dfm.report = Some(dfm::check(&self.state.body, material.as_ref(), self.dfm.process));
+        self.dfm.material = material.map(|m| m.name);
+        self.dfm.stale = false;
+        self.dfm.focus = None;
+        self.scene_dirty = true;
+    }
+
     fn rebuild(&mut self) {
         self.state = self.doc.rebuild();
+        if self.dfm.report.is_some() {
+            self.dfm.stale = true;
+        }
         if self.pick_target().is_none() {
             self.pick_body = None;
         }
@@ -808,6 +865,10 @@ impl AnvilApp {
                     ui.close_menu();
                     self.windows.mass = true;
                 }
+                if ui.button("Check Design (DFM)...").clicked() {
+                    ui.close_menu();
+                    self.open_dfm();
+                }
             });
             ui.menu_button("Help", |ui| {
                 if ui.button("Open Sample Part").clicked() {
@@ -900,6 +961,9 @@ impl AnvilApp {
             Tab::Evaluate => {
                 if ui.button("Mass Properties").clicked() {
                     self.windows.mass = true;
+                }
+                if ui.button("Check Design (DFM)").clicked() {
+                    self.open_dfm();
                 }
                 if ui.button("Equations").clicked() {
                     self.windows.equations = true;
@@ -1674,7 +1738,13 @@ impl AnvilApp {
                     Some(FeatureKind::Shell(s)) => Some(s.remove.clone()),
                     _ => None,
                 };
+            let dfm_faces = match (self.windows.dfm, &self.dfm.report, self.dfm.focus) {
+                (true, Some(r), Some(i)) => r.findings.get(i).map(|f| f.faces.clone()),
+                _ => None,
+            };
             let selected: Vec<FaceId> = if let Some(faces) = shell_faces {
+                faces
+            } else if let Some(faces) = dfm_faces {
                 faces
             } else {
                 match self.selection {
@@ -1868,18 +1938,46 @@ impl AnvilApp {
                 if ui.selectable_label(self.doc.material.is_none(), "<not specified>").clicked() {
                     self.doc.material = None;
                 }
-                for m in Material::library() {
-                    let sel = self.doc.material.as_ref().is_some_and(|c| c.name == m.name);
-                    if ui.selectable_label(sel, format!("{}  ({} g/cm³)", m.name, m.density)).clicked() {
-                        self.doc.material = Some(m);
+                for class in [MaterialClass::Metal, MaterialClass::Plastic] {
+                    ui.separator();
+                    ui.weak(class.label());
+                    for m in Material::library().into_iter().filter(|m| m.class == class) {
+                        let sel = self.doc.material.as_ref().is_some_and(|c| c.name == m.name);
+                        if ui.selectable_label(sel, format!("{}  ({} g/cm³)", m.name, m.density)).clicked() {
+                            self.doc.material = Some(m);
+                        }
                     }
                 }
             });
             if let Some(m) = &mut self.doc.material {
-                ui.horizontal(|ui| {
+                if m.min_wall == 0.0 {
+                    *m = m.resolved();
+                }
+                egui::Grid::new("material").num_columns(2).striped(true).show(ui, |ui| {
                     ui.label("Density (g/cm³)");
                     ui.add(egui::DragValue::new(&mut m.density).speed(0.01).range(0.0..=100.0));
+                    ui.end_row();
+                    let known = |v: f64, unit: &str| if v > 0.0 { format!("{v} {unit}") } else { "-".into() };
+                    for (label, value) in [
+                        ("Class", m.class.label().to_string()),
+                        ("Yield strength", known(m.yield_strength, "MPa")),
+                        ("Tensile strength", known(m.tensile_strength, "MPa")),
+                        ("Elastic modulus", known(m.elastic_modulus, "GPa")),
+                        ("Thermal conductivity", known(m.thermal_conductivity, "W/(m·K)")),
+                        ("Thinnest machined wall", known(m.min_wall, "mm")),
+                        (
+                            "Smallest bend radius",
+                            m.min_bend_ratio
+                                .map(|r| format!("{r} x thickness"))
+                                .unwrap_or_else(|| "not bent as sheet".into()),
+                        ),
+                    ] {
+                        ui.label(label);
+                        ui.label(value);
+                        ui.end_row();
+                    }
                 });
+                ui.weak("Nominal datasheet values; a supplier's certificate governs a real part.");
             }
             ui.separator();
             ui.label(RichText::new("Custom Properties").strong());
@@ -2020,7 +2118,11 @@ impl AnvilApp {
                 );
                 ui.end_row();
                 ui.label("Mass");
-                ui.label(m.mass.map(|g| format!("{g:.3} g")).unwrap_or_else(|| "assign a material".into()));
+                ui.label(
+                    m.mass
+                        .map(|g| format!("{g:.3} g  ({:.4} kg, {:.4} lb)", g / 1000.0, g / 453.592_37))
+                        .unwrap_or_else(|| "assign a material".into()),
+                );
                 ui.end_row();
                 ui.label("Volume");
                 ui.label(format!("{:.3} mm³", m.props.volume));
@@ -2032,6 +2134,22 @@ impl AnvilApp {
                 ui.label("Center of mass");
                 ui.label(format!("X = {:.3}  Y = {:.3}  Z = {:.3} mm", c.x, c.y, c.z));
                 ui.end_row();
+                if let Some(p) = m.principal {
+                    ui.label("Principal moments");
+                    ui.label(format!(
+                        "{:.4e}  {:.4e}  {:.4e} g·mm² (about the center of mass)",
+                        p[0], p[1], p[2]
+                    ));
+                    ui.end_row();
+                }
+                if let Some(t) = m.inertia {
+                    ui.label("Inertia tensor");
+                    ui.label(format!(
+                        "Ixx {:.4e}  Iyy {:.4e}  Izz {:.4e}\nIxy {:.4e}  Iyz {:.4e}  Izx {:.4e} g·mm²",
+                        t[0][0], t[1][1], t[2][2], t[0][1], t[1][2], t[2][0]
+                    ));
+                    ui.end_row();
+                }
                 if !b.is_empty() {
                     let s = b.max - b.min;
                     ui.label("Bounding box");
@@ -2042,6 +2160,87 @@ impl AnvilApp {
             ui.weak("Curved faces are faceted to 0.01 mm chord tolerance.");
         });
         self.windows.mass = open;
+
+        let mut open = self.windows.dfm;
+        let mut rerun = false;
+        let mut focus = self.dfm.focus;
+        egui::Window::new("Check Design").open(&mut open).default_width(520.0).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Process");
+                for p in dfm::Process::ALL {
+                    if ui.selectable_label(self.dfm.process == p, p.label()).clicked()
+                        && self.dfm.process != p
+                    {
+                        self.dfm.process = p;
+                        rerun = true;
+                    }
+                }
+                if ui.button("Run").clicked() {
+                    rerun = true;
+                }
+            });
+            let material = self.doc.material.as_ref().map(|m| m.name.clone());
+            ui.label(match &material {
+                Some(name) => format!("Material: {name}"),
+                None => "No material assigned: general limits are used.".into(),
+            });
+            if self.dfm.stale || (self.dfm.report.is_some() && material != self.dfm.material) {
+                ui.colored_label(
+                    Color32::from_rgb(200, 120, 0),
+                    "The part changed since this check; run it again.",
+                );
+            }
+            let Some(report) = &self.dfm.report else { return };
+            ui.separator();
+            let (e, w, n) = (
+                report.count(dfm::Severity::Error),
+                report.count(dfm::Severity::Warning),
+                report.count(dfm::Severity::Note),
+            );
+            let mut summary = format!("{e} errors, {w} warnings, {n} notes");
+            if let Some(t) = report.thickness {
+                summary += &format!(" · sheet {t:.2} mm thick, {} bends", report.bends);
+            }
+            ui.strong(summary);
+            if report.findings.is_empty() {
+                ui.label("Nothing to flag for this process.");
+            }
+            egui::ScrollArea::vertical().max_height(380.0).show(ui, |ui| {
+                for (i, f) in report.findings.iter().enumerate() {
+                    let color = match f.severity {
+                        dfm::Severity::Error => Color32::from_rgb(200, 40, 40),
+                        dfm::Severity::Warning => Color32::from_rgb(200, 120, 0),
+                        dfm::Severity::Note => Color32::from_rgb(90, 90, 100),
+                    };
+                    ui.horizontal_wrapped(|ui| {
+                        ui.colored_label(color, f.severity.label());
+                        let text = RichText::new(f.rule).strong();
+                        if ui
+                            .selectable_label(focus == Some(i), text)
+                            .on_hover_text("Show its faces")
+                            .clicked()
+                        {
+                            focus = if focus == Some(i) { None } else { Some(i) };
+                        }
+                        if f.count > 1 {
+                            ui.strong(format!("x{}", f.count));
+                        }
+                        ui.label(&f.message);
+                    });
+                }
+            });
+            ui.weak("Limits are common shop rules of thumb; check them with your supplier.");
+        });
+        if open && rerun {
+            self.run_dfm();
+        } else if focus != self.dfm.focus {
+            self.dfm.focus = focus;
+            self.scene_dirty = true;
+        }
+        if open != self.windows.dfm {
+            self.scene_dirty = true;
+        }
+        self.windows.dfm = open;
 
         let mut open = self.windows.about;
         egui::Window::new("About AnvilCAD").open(&mut open).show(ctx, |ui| {

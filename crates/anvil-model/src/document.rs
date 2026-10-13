@@ -1,6 +1,7 @@
 //! The part document: feature tree, global variables, material and custom properties.
 
 use crate::equations::{eval, eval_all, EvalError};
+use crate::material::Material;
 use anvil_kernel::{v3, EdgeRef, FaceId, Frame, Vec3};
 use anvil_sketch::Sketch;
 use serde::{Deserialize, Serialize};
@@ -402,34 +403,6 @@ pub struct Feature {
     /// Provenance or migration notes, shown alongside the feature.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Material {
-    pub name: String,
-    /// g/cm^3
-    pub density: f64,
-}
-
-impl Material {
-    pub fn library() -> Vec<Material> {
-        [
-            ("Plain Carbon Steel", 7.80),
-            ("AISI 304", 8.00),
-            ("1060 Alloy", 2.70),
-            ("6061 Alloy", 2.70),
-            ("Brass", 8.50),
-            ("Copper", 8.90),
-            ("Titanium Ti-6Al-4V", 4.43),
-            ("ABS", 1.04),
-            ("PLA", 1.24),
-            ("Nylon 6/6", 1.14),
-            ("Acrylic (PMMA)", 1.19),
-        ]
-        .into_iter()
-        .map(|(n, d)| Material { name: n.into(), density: d })
-        .collect()
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

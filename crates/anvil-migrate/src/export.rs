@@ -294,7 +294,7 @@ impl Ctx<'_> {
         if let Ok((name, _)) = self.model.call_out("GetMaterialPropertyName2", &["".into(), Arg::OutStr]) {
             if let Some(n) = name.str().filter(|n| !n.is_empty()) {
                 let density = sw_density(&self.model).unwrap_or(1.0);
-                self.doc.material = Some(Material { name: n.to_string(), density });
+                self.doc.material = Some(Material::simple(n, density).resolved());
             }
         }
     }

@@ -39,7 +39,22 @@ system are still ahead; see the roadmap.
 **Parameters and properties**
 - Global variables with equations (`width = 80`, `depth = width / 2`, functions like
   `sqrt`, `sin` in degrees, `min`, `max`); type `=width` into any dimension to link it
-- Material library with mass, volume, surface area, center of mass, bounding box
+- Material library (26 metals and plastics: carbon and alloy steels such as A36, 1018 and
+  4140; 304, 316 and 17-4 stainless; 5052, 6061 and 7075 aluminum; brass, copper,
+  titanium; Delrin, UHMW, HDPE, PTFE, nylon, PEEK, polycarbonate, acrylic, ABS, PLA, PVC)
+  with density, strength, stiffness, thermal conductivity and manufacturing limits
+- Mass properties: mass (g, kg, lb), volume, surface area, center of mass, inertia
+  tensor and principal moments, bounding box
+
+**Design for manufacturing**
+- Check Design (Evaluate tab or Tools menu) for CNC machining or sheet metal, using the
+  part's material. Click a finding to highlight its faces.
+- CNC machining: thin walls (thinner limits for metals than plastics), small and deep
+  holes, tight or deep inside radii, and sharp inside corners no tool end can reach
+- Sheet metal: one thickness throughout, bend radius against the material's smallest
+  (A36 1x thickness, 6061-T6 2.5x, Ti-6Al-4V 4.5x...), flange length, hole size, and
+  hole distance from edges, other holes and bends
+- Limits are common shop rules of thumb; the report says which ones a part breaks
 - Custom properties (text, number, date, yes/no)
 - Part templates (`.anvprtdot`)
 
@@ -118,7 +133,8 @@ crates/
                  booleans (BSP), extrude/revolve, shell, mass properties, picking
   anvil-sketch   2D sketcher: entities, constraints, solver, profile extraction
   anvil-model    parametric part document: feature tree, rebuild, equations,
-                 materials, custom properties, file format
+                 materials, mass properties, design-for-manufacturing checks,
+                 custom properties, file format
   anvil-step     STEP reader (ISO 10303-21, never panics on malformed files), B-rep
                  import as exact solids or meshes, exact AP214 export
   anvil-io       faceted STEP / STL / OBJ export, SOLIDWORKS file identification

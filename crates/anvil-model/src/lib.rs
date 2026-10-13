@@ -4,13 +4,16 @@
 //! planes, patterns) plus global variables, a material and custom properties.
 //! [`Document::rebuild`] regenerates the solid.
 
+pub mod dfm;
 pub mod document;
 pub mod equations;
 pub mod exact;
+pub mod material;
 pub mod rebuild;
 pub mod step;
 
 pub use document::*;
+pub use material::{Material, MaterialClass};
 pub use rebuild::{BuildState, MassReport};
 
 #[cfg(test)]

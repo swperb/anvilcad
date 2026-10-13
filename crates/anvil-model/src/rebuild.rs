@@ -46,17 +46,110 @@ pub struct MassReport {
     pub props: MassProperties,
     /// Grams, when a material is assigned.
     pub mass: Option<f64>,
+    /// Inertia tensor about the centre of mass, g mm^2, when a material is assigned.
+    pub inertia: Option<[[f64; 3]; 3]>,
+    /// Principal moments of inertia about the centre of mass, g mm^2, smallest first.
+    pub principal: Option<[f64; 3]>,
 }
 
 impl BuildState {
     pub fn mass_report(&self, doc: &Document) -> MassReport {
         let props = self.body.mass_properties();
+        let material = doc.material.as_ref().map(|m| m.resolved());
+        let inertia = material.as_ref().map(|m| {
+            let unit = second_moments(&self.body, props.centroid);
+            // g/cm^3 to g/mm^3.
+            let rho = m.density / 1000.0;
+            unit.map(|row| row.map(|v| v * rho))
+        });
         MassReport {
             props,
-            // mm^3 * g/cm^3 / 1000 = g
-            mass: doc.material.as_ref().map(|m| props.volume * m.density / 1000.0),
+            mass: material.as_ref().map(|m| m.mass_of(props.volume)),
+            inertia,
+            principal: inertia.map(principal_moments),
         }
     }
+}
+
+/// Inertia tensor of the body about `c` for unit density, by summing the signed
+/// tetrahedra each boundary triangle makes with `c`.
+fn second_moments(body: &Solid, c: Vec3) -> [[f64; 3]; 3] {
+    // Integrals of x^2, y^2, z^2, xy, yz, zx over the volume, relative to c.
+    let mut m = [0.0f64; 6];
+    for p in &body.polygons {
+        let v0 = p.verts[0] - c;
+        for i in 1..p.verts.len() - 1 {
+            let (a, b, d) = (v0, p.verts[i] - c, p.verts[i + 1] - c);
+            let vol = a.dot(b.cross(d)) / 6.0;
+            let (x, y, z) = ([a.x, b.x, d.x], [a.y, b.y, d.y], [a.z, b.z, d.z]);
+            let sq = |u: [f64; 3]| {
+                u[0] * u[0] + u[1] * u[1] + u[2] * u[2] + u[0] * u[1] + u[0] * u[2] + u[1] * u[2]
+            };
+            let pr = |u: [f64; 3], w: [f64; 3]| {
+                2.0 * (u[0] * w[0] + u[1] * w[1] + u[2] * w[2])
+                    + u[0] * w[1]
+                    + u[1] * w[0]
+                    + u[0] * w[2]
+                    + u[2] * w[0]
+                    + u[1] * w[2]
+                    + u[2] * w[1]
+            };
+            m[0] += vol / 10.0 * sq(x);
+            m[1] += vol / 10.0 * sq(y);
+            m[2] += vol / 10.0 * sq(z);
+            m[3] += vol / 20.0 * pr(x, y);
+            m[4] += vol / 20.0 * pr(y, z);
+            m[5] += vol / 20.0 * pr(z, x);
+        }
+    }
+    let [xx, yy, zz, xy, yz, zx] = m;
+    // Products that are zero by symmetry come out as rounding noise; show them as zero.
+    let scale = xx.abs().max(yy.abs()).max(zz.abs());
+    let clean = |v: f64| if v.abs() < 1e-9 * scale { 0.0 } else { v };
+    let (xy, yz, zx) = (clean(xy), clean(yz), clean(zx));
+    [[yy + zz, -xy, -zx], [-xy, xx + zz, -yz], [-zx, -yz, xx + yy]]
+}
+
+/// Eigenvalues of a symmetric 3x3 matrix by Jacobi rotations, smallest first.
+fn principal_moments(t: [[f64; 3]; 3]) -> [f64; 3] {
+    let mut a = t;
+    for _ in 0..50 {
+        let (mut p, mut q, mut big) = (0, 1, 0.0);
+        for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+            if a[i][j].abs() > big {
+                (p, q, big) = (i, j, a[i][j].abs());
+            }
+        }
+        let scale = a[0][0].abs() + a[1][1].abs() + a[2][2].abs();
+        if big <= 1e-15 * scale.max(1e-300) {
+            break;
+        }
+        let theta = 0.5 * (2.0 * a[p][q]).atan2(a[q][q] - a[p][p]);
+        let (s, c) = theta.sin_cos();
+        let mut r = [[0.0; 3]; 3];
+        for (k, row) in r.iter_mut().enumerate() {
+            row[k] = 1.0;
+        }
+        r[p][p] = c;
+        r[q][q] = c;
+        r[p][q] = s;
+        r[q][p] = -s;
+        // a = r^T a r
+        let mut ar = [[0.0; 3]; 3];
+        for i in 0..3 {
+            for j in 0..3 {
+                ar[i][j] = (0..3).map(|k| a[i][k] * r[k][j]).sum();
+            }
+        }
+        for i in 0..3 {
+            for j in 0..3 {
+                a[i][j] = (0..3).map(|k| r[k][i] * ar[k][j]).sum();
+            }
+        }
+    }
+    let mut e = [a[0][0], a[1][1], a[2][2]];
+    e.sort_by(f64::total_cmp);
+    e
 }
 
 /// Rotation by `angle` about the line through `origin` along `axis`.
