@@ -48,7 +48,9 @@ fn ftc_11_bands_without_seams() {
     assert!((v - 5129.0).abs() / 5129.0 < 2e-4, "{v}");
 }
 
-/// Sphere patches with a vertex on the pole, in inch units.
+/// Sphere patches with a vertex on the pole, in inch units. Meshed by stereographic
+/// projection, the three NIST versions of this part (from different CAD systems) agree
+/// on its volume to 0.001%: 3323431.7 here, 3323411.4 (AP242 e2), 3323425.8 (stc_06).
 #[test]
 fn ftc_06_pole_vertices() {
     let imp = load("nist_ftc_06_asme1_rd.stp");
@@ -56,7 +58,7 @@ fn ftc_06_pole_vertices() {
     let solid = imp.bodies.iter().find(|b| b.solid).expect("solid");
     assert_eq!(open_edges(&solid.mesh), 0);
     let v = volume(&solid.mesh);
-    assert!((v - 3327243.1).abs() / 3327243.1 < 2e-3, "{v}");
+    assert!((v - 3323425.0).abs() / 3323425.0 < 5e-5, "{v}");
 }
 
 /// The exact solid of a file, checked to tessellate watertight in the kernel with the

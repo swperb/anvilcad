@@ -45,6 +45,9 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
             Surface::Cone { frame: fa, radius: ra, half_angle: ha },
             Surface::Cone { frame: fb, radius: rb, half_angle: hb },
         ) => coaxial_cones(fa, *ra, *ha, fb, *rb, *hb, tol),
+        (Surface::Sphere { frame, radius }, other) | (other, Surface::Sphere { frame, radius }) => {
+            sphere_with(frame.origin, *radius, other, tol)
+        }
         (Surface::Torus { frame, major, minor, .. }, other)
         | (other, Surface::Torus { frame, major, minor, .. }) => {
             torus_with(frame, *major, *minor, other, tol)
@@ -79,6 +82,10 @@ fn meridian(axis: &Frame, s: &Surface, tol: f64) -> Option<Meridian> {
         }
         Surface::Torus { major, minor, .. } if parallel && on_axis => {
             Some(Meridian::Circle { c: DVec2::new(major, z0), r: minor })
+        }
+        // A sphere is a surface of revolution about any axis through its centre.
+        Surface::Sphere { radius, .. } if on_axis => {
+            Some(Meridian::Circle { c: DVec2::new(0.0, z0), r: radius })
         }
         _ => None,
     }
@@ -125,6 +132,46 @@ fn meridian_points(a: Meridian, b: Meridian, tol: f64) -> Vec<DVec2> {
                 vec![c1 + u * x + u.perp() * h, c1 + u * x - u.perp() * h]
             }
         }
+    }
+}
+
+/// The circles where two meridians about `axis` cross.
+fn coaxial_circles(axis: &Frame, a: Meridian, b: Meridian, tol: f64) -> Ssi {
+    let curves: Vec<Curve> = meridian_points(a, b, tol)
+        .into_iter()
+        .filter(|q| q.x > tol)
+        .map(|q| Curve::Circle { frame: axis.with_origin(axis.origin + axis.z * q.y), radius: q.x })
+        .collect();
+    if curves.is_empty() { Ssi::None } else { Ssi::Curves(curves) }
+}
+
+/// A sphere with any other surface. A plane, another sphere, or a surface of
+/// revolution whose axis passes through the centre meets it in circles; other
+/// cylinders and cones are traced.
+fn sphere_with(centre: DVec3, radius: f64, other: &Surface, tol: f64) -> Result<Ssi> {
+    let sphere = Surface::Sphere { frame: Frame::world().with_origin(centre), radius };
+    let axis = match other {
+        Surface::Plane { frame } => Some(frame.with_origin(centre)),
+        Surface::Sphere { frame, .. } => {
+            let d = frame.origin - centre;
+            if d.length() < tol {
+                return Ok(Ssi::None); // Concentric with another radius.
+            }
+            let hint = if d.x.abs() < 0.9 * d.length() { DVec3::X } else { DVec3::Y };
+            Some(Frame::new(centre, d, hint)?)
+        }
+        _ => meridian(other.frame(), &sphere, tol).map(|_| *other.frame()),
+    };
+    if let Some(axis) = axis
+        && let (Some(a), Some(b)) = (meridian(&axis, &sphere, tol), meridian(&axis, other, tol))
+    {
+        return Ok(coaxial_circles(&axis, a, b, tol));
+    }
+    match other {
+        Surface::Cylinder { .. } | Surface::Cone { .. } => {
+            Ok(Ssi::Curves(crate::ssi::intersect(&sphere, other)?))
+        }
+        _ => Err(KernelError::Unsupported("intersection of a sphere with a torus off its axis".into())),
     }
 }
 
@@ -400,6 +447,19 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
             }
         }
         (_, Surface::Torus { .. }) => numeric_roots(curve, lo, hi, surface, tol),
+        (Curve::Line { origin, dir }, Surface::Sphere { frame, radius }) => {
+            let r = *origin - frame.origin;
+            let (b, c) = (dir.dot(r), r.dot(r) - radius * radius);
+            let disc = b * b - c;
+            if disc < -tol * tol {
+                Vec::new()
+            } else if disc <= tol * tol {
+                vec![-b]
+            } else {
+                vec![-b - disc.sqrt(), -b + disc.sqrt()]
+            }
+        }
+        (_, Surface::Sphere { .. }) => numeric_roots(curve, lo, hi, surface, tol),
         (Curve::Spline(_), Surface::Plane { .. }) => numeric_roots(curve, lo, hi, surface, tol),
     };
     let mut out: Vec<f64> = Vec::new();
@@ -502,6 +562,7 @@ fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -
             }
             Surface::Cone { .. } => surface.cone_offset(p),
             Surface::Torus { .. } => surface.torus_offset(p),
+            Surface::Sphere { frame, radius } => (p - frame.origin).length() - radius,
             Surface::Plane { frame } => (p - frame.origin).dot(frame.z),
         }
     };

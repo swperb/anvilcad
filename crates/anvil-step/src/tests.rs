@@ -398,3 +398,58 @@ fn cross_drilled_shaft_round_trips_exactly() {
     // The importer's own mesh is coarser (0.02 mm chords on 2 mm radii).
     assert!((mesh_volume(&b.mesh) - v).abs() / v < 5e-3, "{} vs {v}", mesh_volume(&b.mesh));
 }
+
+/// A ball of radius `r` about `c` above the plane z = c.z: a sphere face over a disc.
+fn dome(c: DVec3, r: f64) -> anvil_brep::Solid {
+    use anvil_brep::topo::{Coedge, Edge, Face, FaceTag, Loop};
+    let mut s = anvil_brep::Solid::default();
+    let circle = Frame { origin: c, ..Frame::world() };
+    let v = s.add_vertex(c + DVec3::new(r, 0.0, 0.0));
+    let e = s.add_edge(Edge {
+        curve: anvil_brep::Curve::Circle { frame: circle, radius: r },
+        start: v,
+        end: v,
+        t0: 0.0,
+        t1: std::f64::consts::TAU,
+    });
+    let l = |reversed| Loop { coedges: vec![Coedge { edge: e, reversed }] };
+    s.add_face(Face {
+        surface: anvil_brep::Surface::Sphere { frame: circle, radius: r },
+        reversed: false,
+        outer: l(false),
+        inners: vec![],
+        tag: FaceTag::Imported { index: 0 },
+        owner: 0,
+    });
+    s.add_face(Face {
+        surface: anvil_brep::Surface::Plane { frame: circle },
+        reversed: true,
+        outer: l(true),
+        inners: vec![],
+        tag: FaceTag::Imported { index: 1 },
+        owner: 0,
+    });
+    s
+}
+
+/// A dome and a block with a spherical socket cut in it both come back exact, the
+/// socket's inward-facing sphere included.
+#[test]
+fn dome_and_socket_round_trip_exactly() {
+    let ball = dome(DVec3::ZERO, 6.0);
+    let block = prism(&rect(-10.0, -10.0, 10.0, 10.0), &Frame::world(), -8.0, 4.0);
+    let socket = boolean(&block, &ball, BoolOp::Subtract).expect("cut").remove(0);
+    for part in [ball, socket] {
+        assert!(part.faces.iter().any(|f| matches!(f.surface, anvil_brep::Surface::Sphere { .. })));
+        let imp = round_trip(&part);
+        let b = &imp.bodies[0];
+        let exact = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+        check::validate(exact).expect("valid");
+        let v = exact_volume(&part);
+        assert!((exact_volume(exact) - v).abs() / v < 1e-6, "{} vs {v}", exact_volume(exact));
+        assert!(watertight(&b.mesh));
+        // The importer's own mesh steps 10 degrees at a time; on a sphere, which curves
+        // both ways, that loses about half a percent.
+        assert!((mesh_volume(&b.mesh) - v).abs() / v < 1e-2, "{} vs {v}", mesh_volume(&b.mesh));
+    }
+}

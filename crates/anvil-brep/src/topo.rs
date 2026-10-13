@@ -182,12 +182,13 @@ impl Solid {
                 }
             }
         }
-        // A torus face bulges past its edges by up to its tube radius.
+        // Torus and sphere faces bulge past their edges by up to their radius.
         let pad = self
             .faces
             .iter()
             .filter_map(|f| match f.surface {
                 Surface::Torus { minor, .. } => Some(minor),
+                Surface::Sphere { radius, .. } => Some(radius),
                 _ => None,
             })
             .fold(0.0, f64::max);

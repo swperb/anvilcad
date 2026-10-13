@@ -305,6 +305,13 @@ pub enum Surface {
         #[serde(default)]
         v_mid: f64,
     },
+    /// The sphere of `radius` about `frame.origin`. Its natural normal points out.
+    ///
+    /// Parameters are its stereographic projection from the point opposite `frame.z`
+    /// onto the plane touching it at `frame.z`, scaled so lengths near that point are
+    /// true. The projection has no poles or seam and keeps angles, so a face anywhere
+    /// but at the far point lays out flat; `frame.z` is chosen in the face's middle.
+    Sphere { frame: Frame, radius: f64 },
 }
 
 impl Surface {
@@ -326,6 +333,7 @@ impl Surface {
                 let radial = (frame.x * l.x + frame.y * l.y).normalize_or(frame.x);
                 (p - (frame.origin + radial * *major)).normalize_or(radial)
             }
+            Surface::Sphere { frame, .. } => (p - frame.origin).normalize_or(frame.z),
         }
     }
 
@@ -342,7 +350,8 @@ impl Surface {
             Surface::Plane { frame }
             | Surface::Cylinder { frame, .. }
             | Surface::Cone { frame, .. }
-            | Surface::Torus { frame, .. } => frame,
+            | Surface::Torus { frame, .. }
+            | Surface::Sphere { frame, .. } => frame,
         }
     }
 
@@ -357,6 +366,7 @@ impl Surface {
             Surface::Torus { frame, major, minor, v_mid } => {
                 Surface::Torus { frame: frame.moved(m), major, minor, v_mid }
             }
+            Surface::Sphere { frame, radius } => Surface::Sphere { frame: frame.moved(m), radius },
         }
     }
 
@@ -370,6 +380,7 @@ impl Surface {
             }
             Surface::Cone { .. } => self.cone_offset(p).abs(),
             Surface::Torus { .. } => self.torus_offset(p).abs(),
+            Surface::Sphere { frame, radius } => ((p - frame.origin).length() - radius).abs(),
         }
     }
 
@@ -429,6 +440,12 @@ impl Surface {
                 let phi = Self::tube_angle(frame, *major, *v_mid, p);
                 DVec2::new(l.y.atan2(l.x) * major, (phi - v_mid) * minor)
             }
+            Surface::Sphere { frame, radius } => {
+                // Project the direction onto the plane z = 1 from (0, 0, -1).
+                let l = frame.to_local(p);
+                let d = l / l.length().max(1e-300);
+                DVec2::new(d.x, d.y) * (2.0 * radius / (1.0 + d.z).max(1e-12))
+            }
         }
     }
 
@@ -449,13 +466,19 @@ impl Surface {
                 let radial = frame.x * t.cos() + frame.y * t.sin();
                 frame.origin + radial * (major + minor * phi.cos()) + frame.z * (minor * phi.sin())
             }
+            Surface::Sphere { frame, radius } => {
+                let q = uv / (2.0 * radius);
+                let s = q.length_squared();
+                let d = DVec3::new(2.0 * q.x, 2.0 * q.y, 1.0 - s) / (1.0 + s);
+                frame.to_world3(d * *radius)
+            }
         }
     }
 
     /// Period of `u`, if the surface wraps around.
     pub fn u_period(&self) -> Option<f64> {
         match self {
-            Surface::Plane { .. } => None,
+            Surface::Plane { .. } | Surface::Sphere { .. } => None,
             Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => Some(TAU * radius),
             Surface::Torus { major, .. } => Some(TAU * major),
         }
@@ -492,6 +515,9 @@ impl Surface {
                     && (a.origin - b.origin).length() < tol
                     && (ma - mb).abs() < tol
                     && (na - nb).abs() < tol
+            }
+            (Surface::Sphere { frame: a, radius: ra }, Surface::Sphere { frame: b, radius: rb }) => {
+                (a.origin - b.origin).length() < tol && (ra - rb).abs() < tol
             }
             _ => false,
         }

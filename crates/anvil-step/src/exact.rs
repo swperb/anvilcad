@@ -1,5 +1,5 @@
 //! Converts a read body to an exact `anvil-brep` solid when every face is a plane,
-//! cylinder, cone or torus. Edges keep the file's line, circle or ellipse; other edges are
+//! cylinder, cone, torus or sphere. Edges keep the file's line, circle or ellipse; other edges are
 //! traced exactly from the two surfaces they join, or else keep the file's B-spline.
 
 use crate::reader::{Body, LoopKind, Model};
@@ -7,15 +7,18 @@ use crate::shapes;
 use anvil_brep::intersect::{self, Ssi};
 use anvil_brep::spline::Spline;
 use anvil_brep::topo::{Coedge, Edge, Face, FaceTag, Loop};
-use anvil_brep::{Curve, EdgeId, Solid, Surface, VertexId, check};
+use anvil_brep::{Curve, EdgeId, Frame, Solid, Surface, VertexId, check};
 use glam::DVec3;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 use std::sync::Arc;
 
-/// The kernel surface for a face, given the points of its boundary vertices.
-fn surface(s: &shapes::Surface, points: &[DVec3]) -> Option<Surface> {
+/// The kernel surface for a face, given its boundary loops in order (running so the
+/// face lies to their left seen from the side its normal points to) and its sense.
+fn surface(s: &shapes::Surface, loops: &[Vec<DVec3>], same_sense: bool) -> Option<Surface> {
+    let all: Vec<DVec3> = loops.iter().flatten().copied().collect();
+    let points = &all[..];
     match s {
         shapes::Surface::Plane { frame } => Some(Surface::Plane { frame: *frame }),
         shapes::Surface::Cylinder { frame, radius } => {
@@ -72,6 +75,20 @@ fn surface(s: &shapes::Surface, points: &[DVec3]) -> Option<Surface> {
             // The face runs from the end of the gap round to its start.
             let v_mid = after + gap + 0.5 * (TAU - gap);
             Some(Surface::Torus { frame: *frame, major: *major, minor: *minor, v_mid })
+        }
+        shapes::Surface::Sphere { frame, radius } => {
+            // The face's vector area (half the sum of its loops' Newell vectors) points
+            // into its middle; the kernel lays the face out from the point opposite.
+            let mut area: DVec3 = loops.iter().map(|l| newell(l)).sum();
+            if !same_sense {
+                area = -area;
+            }
+            if area.length() < 1e-6 * radius * radius {
+                return None;
+            }
+            let hint = if area.x.abs() < 0.9 * area.length() { DVec3::X } else { DVec3::Y };
+            let frame = Frame::new(frame.origin, area, hint).ok()?;
+            Some(Surface::Sphere { frame, radius: *radius })
         }
         _ => None,
     }
@@ -137,39 +154,57 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
     }
     // Exact surfaces of every face, and the faces each edge bounds, so that edges the
     // file stores as B-splines can be rebuilt exactly from the two surfaces they join.
-    let face_points = |f: &crate::reader::Face| -> Vec<DVec3> {
-        let mut pts = Vec::new();
+    // Each face's loops as points in order (a few per edge, along its curve), running
+    // the way the face's bounds run.
+    let face_loops = |f: &crate::reader::Face| -> Vec<Vec<DVec3>> {
+        let mut loops = Vec::new();
         for b in &f.bounds {
-            if let LoopKind::Edges(edges) = &b.kind {
-                for oe in edges {
-                    if let Some(e) = model.edges.get(&oe.edge) {
-                        let ends: Vec<DVec3> =
-                            [e.start, e.end].iter().filter_map(|v| model.vertices.get(v)).copied().collect();
-                        // A point inside the edge too: a seam round a torus's tube says
-                        // which way round the tube the face goes.
-                        if let (Some(c), [ps, pe]) = (&e.curve, &ends[..]) {
-                            let (t0, t1) = (c.invert(*ps), c.invert(*pe));
-                            let mid = if c.is_periodic() {
-                                let sweep = if e.same_sense {
-                                    (t1 - t0).rem_euclid(TAU)
-                                } else {
-                                    -(t0 - t1).rem_euclid(TAU)
-                                };
-                                t0 + 0.5 * sweep
+            let LoopKind::Edges(edges) = &b.kind else { continue };
+            let mut pts = Vec::new();
+            for oe in edges {
+                let Some(e) = model.edges.get(&oe.edge) else { continue };
+                let (Some(&ps), Some(&pe)) = (model.vertices.get(&e.start), model.vertices.get(&e.end))
+                else {
+                    continue;
+                };
+                let mut along: Vec<DVec3> = match &e.curve {
+                    Some(c) => {
+                        let (t0, t1) = (c.invert(ps), c.invert(pe));
+                        let sweep = if c.is_periodic() {
+                            let closed = (ps - pe).length() < 1e-9;
+                            let s = if e.same_sense {
+                                (t1 - t0).rem_euclid(TAU)
                             } else {
-                                0.5 * (t0 + t1)
+                                -(t0 - t1).rem_euclid(TAU)
                             };
-                            pts.push(c.eval(mid));
-                        }
-                        pts.extend(ends);
+                            if closed || s.abs() < 1e-12 { if e.same_sense { TAU } else { -TAU } } else { s }
+                        } else {
+                            t1 - t0
+                        };
+                        (0..8).map(|k| c.eval(t0 + sweep * k as f64 / 8.0)).collect()
                     }
+                    None => vec![ps],
+                };
+                along[0] = ps;
+                if !oe.forward {
+                    along.push(pe);
+                    along.reverse();
+                    along.pop();
                 }
+                pts.extend(along);
             }
+            if !b.orientation {
+                pts.reverse();
+            }
+            loops.push(pts);
         }
-        pts
+        loops
     };
-    let surfaces: Vec<Option<Surface>> =
-        body.faces.iter().map(|f| f.surface.as_ref().and_then(|s| surface(s, &face_points(f)))).collect();
+    let surfaces: Vec<Option<Surface>> = body
+        .faces
+        .iter()
+        .map(|f| f.surface.as_ref().and_then(|s| surface(s, &face_loops(f), f.same_sense)))
+        .collect();
     let mut edge_faces: HashMap<u64, Vec<usize>> = HashMap::new();
     for (fi, f) in body.faces.iter().enumerate() {
         for b in &f.bounds {
@@ -217,6 +252,9 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
         let surf = surfaces[index].ok_or_else(|| match f.surface_type.as_str() {
             "POLY" => "the file stores this body as flat facets, so it is imported as a mesh".to_string(),
             "CONICAL_SURFACE" => "a cone face reaches its apex, so it is imported as a mesh".to_string(),
+            "SPHERICAL_SURFACE" => {
+                "a sphere face is a whole sphere or a band round it, so it is imported as a mesh".to_string()
+            }
             "TOROIDAL_SURFACE" | "DEGENERATE_TOROIDAL_SURFACE" => {
                 "a torus face wraps round its tube or the torus is degenerate, so it is imported as a mesh"
                     .to_string()

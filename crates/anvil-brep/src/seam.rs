@@ -174,7 +174,7 @@ fn surface_scale(s: &Surface) -> f64 {
     match s {
         Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => *radius,
         Surface::Torus { major, .. } => *major,
-        Surface::Plane { .. } => 1.0,
+        Surface::Plane { .. } | Surface::Sphere { .. } => 1.0,
     }
 }
 

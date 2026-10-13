@@ -398,3 +398,95 @@ fn ring_with_a_coaxial_bore() {
     assert!(close(volume(&i) + volume(&d), ring_mesh_volume(), 2e-3), "{} + {}", volume(&i), volume(&d));
     assert!(volume(&i) > 0.1 && volume(&d) > 0.1);
 }
+
+/// A ball of radius `r` about the origin cut by the plane z = `z0`, keeping the part
+/// above: a sphere cap face over a flat disc. With `z0` = 0 it is a hemisphere; with
+/// `z0` < 0 the cap is more than half the sphere.
+fn ball_cut(r: f64, z0: f64) -> Solid {
+    use crate::topo::{Coedge, Edge, Face, FaceTag, Loop};
+    let rc = (r * r - z0 * z0).sqrt();
+    let mut s = Solid::default();
+    let circle = Frame { origin: DVec3::new(0.0, 0.0, z0), ..Frame::world() };
+    let v = s.add_vertex(DVec3::new(rc, 0.0, z0));
+    let e = s.add_edge(Edge {
+        curve: Curve::Circle { frame: circle, radius: rc },
+        start: v,
+        end: v,
+        t0: 0.0,
+        t1: std::f64::consts::TAU,
+    });
+    let c = |reversed| Loop { coedges: vec![Coedge { edge: e, reversed }] };
+    s.add_face(Face {
+        surface: Surface::Sphere { frame: Frame::world(), radius: r },
+        reversed: false,
+        outer: c(false),
+        inners: vec![],
+        tag: FaceTag::Imported { index: 0 },
+        owner: 0,
+    });
+    s.add_face(Face {
+        surface: Surface::Plane { frame: circle },
+        reversed: true,
+        outer: c(true),
+        inners: vec![],
+        tag: FaceTag::Imported { index: 1 },
+        owner: 0,
+    });
+    s
+}
+
+/// Volume of a ball of radius `r` above z = `z0`.
+fn ball_cut_volume(r: f64, z0: f64) -> f64 {
+    let h = r - z0;
+    PI * h * h * (3.0 * r - h) / 3.0
+}
+
+#[test]
+fn sphere_caps_tessellate_closed() {
+    for z0 in [0.0, -4.0, 3.0] {
+        let b = ball_cut(8.0, z0);
+        check::validate(&b).expect("valid");
+        // Finely tessellated, the volume converges on the exact one. The default 5 degree
+        // steps lose 0.2 to 0.4% on a sphere, which curves both ways (more on a shallow
+        // cap, where the dome is a smaller share of the volume).
+        let m = tess::tessellate(&b, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+        assert!(m.is_watertight());
+        let v = mass::properties(&m).volume;
+        let want = ball_cut_volume(8.0, z0);
+        assert!(close(v, want, 1e-4), "z0 {z0}: {v} vs {want}");
+        let coarse = volume(&[b]);
+        assert!(close(coarse, want, 5e-3), "z0 {z0}: default tessellation {coarse} vs {want}");
+    }
+}
+
+#[test]
+fn hemisphere_cut_by_a_plane_and_a_coaxial_bore() {
+    let (r, h) = (8.0, ball_cut_volume(8.0, 0.0));
+    let dome = ball_cut(r, 0.0);
+    let whole = volume(std::slice::from_ref(&dome));
+    // Across the axis: the top cap goes, a circle where the plane meets the sphere.
+    let top = cuboid(DVec3::new(-20.0, -20.0, 4.0), DVec3::new(20.0, 20.0, 20.0));
+    let d = boolean(&dome, &top, BoolOp::Subtract).expect("subtract");
+    let want = h - ball_cut_volume(r, 4.0);
+    assert!(close(volume(&d), want * whole / h, 3e-3), "{} vs {want}", volume(&d));
+    // A bore on the axis: circles where the cylinder meets the sphere.
+    let bore = cylinder(DVec3::new(0.0, 0.0, -1.0), DVec3::Z, 3.0, 0.0, 20.0);
+    let d = boolean(&dome, &bore, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&dome, &bore, BoolOp::Intersect).expect("intersect");
+    assert_eq!(d.len(), 1);
+    assert!(close(volume(&d) + volume(&i), whole, 3e-3), "{} + {}", volume(&d), volume(&i));
+}
+
+#[test]
+fn hole_drilled_sideways_through_a_dome() {
+    // A cylinder across the dome, off its axis: traced curves on the sphere.
+    let dome = ball_cut(8.0, 0.0);
+    let whole = volume(std::slice::from_ref(&dome));
+    let pin = cylinder(DVec3::new(-20.0, 1.0, 3.0), DVec3::X, 1.5, 0.0, 40.0);
+    let d = boolean(&dome, &pin, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&dome, &pin, BoolOp::Intersect).expect("intersect");
+    assert_eq!(d.len(), 1);
+    assert!(d[0].edges.iter().any(|e| matches!(e.curve, Curve::Spline(_))));
+    assert!(close(volume(&d) + volume(&i), whole, 3e-3), "{} + {}", volume(&d), volume(&i));
+    assert!(volume(&i) > 10.0);
+}

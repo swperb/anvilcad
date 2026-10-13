@@ -156,7 +156,8 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
     // the curved direction instead of spanning chords across the surface.
     if let Surface::Cylinder { radius: scale, .. }
     | Surface::Cone { radius: scale, .. }
-    | Surface::Torus { major: scale, .. } = face.surface
+    | Surface::Torus { major: scale, .. }
+    | Surface::Sphere { radius: scale, .. } = face.surface
     {
         // The angle step comes from the widest point of the face; `u` is the angle
         // times `scale`.
@@ -176,7 +177,9 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
             }
             a
         };
-        let step_angle = step_for(radius);
+        // A sphere's parameters are lengths near the face's middle, at its own radius.
+        let step_angle =
+            if matches!(face.surface, Surface::Sphere { .. }) { step_for(scale) } else { step_for(radius) };
         let mut du = scale * step_angle;
         let all: Vec<DVec2> = loops_uv.iter().flatten().copied().collect();
         let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
@@ -187,17 +190,27 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         // Along a torus's tube `v` is the tube angle times `minor`.
         let v_step = match face.surface {
             Surface::Torus { minor, .. } => minor * step_for(minor),
+            Surface::Sphere { radius, .. } => radius * step_angle,
             _ => radius * step_angle,
         };
-        let dv = v_step.max((hi.y - lo.y) / 64.0);
+        // Cylinders and cones are straight along `v`, so a few rows do; a sphere is not.
+        let dv = if matches!(face.surface, Surface::Sphere { .. }) {
+            v_step
+        } else {
+            v_step.max((hi.y - lo.y) / 64.0)
+        };
         // A torus curves both ways, so long thin triangles across its tube tilt badly
         // (and show as creases): keep its grid cells within 2:1.
         if matches!(face.surface, Surface::Torus { .. }) {
             du = du.min(2.0 * dv);
         }
+        // At most 200 000 grid points: past that, widen the spacing rather than drop it.
+        let cells = ((hi.x - lo.x) / du).max(1.0) * ((hi.y - lo.y) / dv).max(1.0);
+        let widen = (cells / 200_000.0).sqrt().max(1.0);
+        let (du, dv) = (du * widen, dv * widen);
         let nu = ((hi.x - lo.x) / du).ceil() as usize;
         let nv = ((hi.y - lo.y) / dv).ceil() as usize;
-        if nu.saturating_mul(nv) < 200_000 {
+        if du.is_finite() && dv.is_finite() && du > 0.0 && dv > 0.0 {
             let near_boundary = |q: DVec2| {
                 loops_uv.iter().any(|l| {
                     (0..l.len()).any(|i| {
@@ -326,6 +339,7 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
                 DVec2::new(l.x, l.y)
             })
             .collect(),
+        Surface::Sphere { .. } => pts.iter().map(|p| surface.uv(*p)).collect(),
         Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Torus { .. } => {
             let period = surface.u_period().unwrap_or(TAU);
             let mut prev: Option<f64> = None;

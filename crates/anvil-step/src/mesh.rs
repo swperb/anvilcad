@@ -703,6 +703,45 @@ fn curved_face(
     triangulate(b, loops3, &loops2, &interior, &lift, sense > 0.0)
 }
 
+/// A sphere face, laid out by stereographic projection from the point opposite its
+/// middle (as the exact kernel does): no poles, no seam, and angles kept. `None` for a
+/// face with no clear middle, which the general path then takes.
+fn sphere_face(
+    b: &mut Builder,
+    centre: DVec3,
+    radius: f64,
+    sense: f64,
+    loops3: &[Vec<DVec3>],
+) -> Option<Vec<[u32; 3]>> {
+    // The face's vector area points into its middle (loops run counter-clockwise about
+    // the face normal, which `sense` turns inward for a concave face).
+    let area: DVec3 =
+        loops3.iter().map(|l| newell(&l.iter().map(|p| *p - centre).collect::<Vec<_>>())).sum::<DVec3>()
+            * sense;
+    let z = area.try_normalize().filter(|_| area.length() > 1e-6 * radius * radius)?;
+    let x = z.any_orthonormal_vector();
+    let y = z.cross(x);
+    let to_uv = |p: DVec3| {
+        let d = (p - centre).normalize_or(z);
+        DVec2::new(d.dot(x), d.dot(y)) * (2.0 * radius / (1.0 + d.dot(z)).max(1e-12))
+    };
+    let lift = |q: DVec2| {
+        let q = q / (2.0 * radius);
+        let s = q.length_squared();
+        centre + (x * (2.0 * q.x) + y * (2.0 * q.y) + z * (1.0 - s)) * (radius / (1.0 + s))
+    };
+    let loops2: Vec<Vec<DVec2>> = loops3.iter().map(|l| l.iter().map(|p| to_uv(*p)).collect()).collect();
+    let mut step = chord_step(radius);
+    let mut interior = grid(&loops2, DVec2::splat(step));
+    // The grid refuses very fine layouts; widen until it fits rather than go without.
+    while interior.is_empty() && step < 4.0 * radius {
+        step *= 1.5;
+        interior = grid(&loops2, DVec2::splat(step));
+    }
+    // Counter-clockwise in (x, y) is about z, the outward normal at the face's middle.
+    Some(triangulate(b, loops3, &loops2, &interior, &lift, sense > 0.0))
+}
+
 fn chord_step(radius: f64) -> f64 {
     let angle = if CHORD < radius { 2.0 * (1.0 - CHORD / radius).acos() } else { PI / 4.0 };
     (radius * angle.min(PI / 18.0)).max(1e-3)
@@ -736,7 +775,14 @@ pub fn tessellate(model: &Model, body: &Body, warnings: &mut Vec<String>) -> Mes
                 // keep the first clean result, or the least broken one.
                 let mut best: Option<(usize, Vec<[u32; 3]>)> = None;
                 for attempt in 0..3 {
+                    let sphere = match s {
+                        Surface::Sphere { frame, radius } if attempt == 0 => {
+                            sphere_face(&mut b, frame.origin, *radius, sense, &loops3)
+                        }
+                        _ => None,
+                    };
                     let tris = match attempt {
+                        0 if sphere.is_some() => sphere.unwrap_or_default(),
                         0 => curved_face(&mut b, s, sense, &loops3, true),
                         1 => curved_face(&mut b, s, sense, &loops3, false),
                         _ => {

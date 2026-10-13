@@ -1,7 +1,7 @@
 //! AnvilCAD exact geometry kernel (anvil-brep).
 //!
 //! A boundary-representation (B-rep) kernel written in pure Rust. Geometry is
-//! exact (lines, circles, ellipses, B-splines, planes, cylinders, cones, tori); tessellation is only produced for
+//! exact (lines, circles, ellipses, B-splines, planes, cylinders, cones, tori, spheres); tessellation is only produced for
 //! display and mass estimates.
 //!
 //! Stability rules for this crate:
