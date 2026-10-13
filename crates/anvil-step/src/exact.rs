@@ -299,13 +299,140 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
             let (t0, t1) = (c.invert(ps), c.invert(pe));
             c.eval(0.5 * (t0 + t1))
         });
-        let tol = 1e-4 * ps.length().max(pe.length()).max(1.0);
+        // The file's vertices may be off by up to its stated accuracy.
+        let tol = (1e-4 * ps.length().max(pe.length()).max(1.0))
+            .max(2.0 * model.uncertainty.unwrap_or(0.0).min(0.05));
         cs.into_iter().find(|c| {
             c.distance_to_curve(ps) < tol
                 && c.distance_to_curve(pe) < tol
                 && mid.is_none_or(|m| c.distance_to_curve(m) < tol * 10.0)
         })
     };
+    // The curve traced from the two faces an edge joins, running the way the file's
+    // curve runs.
+    let traced_curve = |edge: u64, e: &crate::reader::EdgeCurve| -> Option<(Curve, bool)> {
+        let c = rebuilt(edge, e)?;
+        let ps = *model.vertices.get(&e.start)?;
+        let forward = match &e.curve {
+            Some(file) => {
+                let want = file_direction(file, ps, e.same_sense);
+                let t = c.param_of(ps);
+                let h = c.period().unwrap_or(1.0) * 1e-4;
+                (c.eval(t + h) - c.eval(t - h)).dot(want) >= 0.0
+            }
+            None => e.same_sense,
+        };
+        Some((c, forward))
+    };
+    // Each edge's curve, with its direction and whether it was traced: the file's own
+    // line, circle or ellipse; else the curve traced from the two faces; else the
+    // file's B-spline. Edges with none are reported where a face uses them.
+    let mut chosen: HashMap<u64, (Curve, bool, bool)> = HashMap::new();
+    for f in &body.faces {
+        for b in &f.bounds {
+            let LoopKind::Edges(edges) = &b.kind else { continue };
+            for oe in edges {
+                let Some(e) = model.edges.get(&oe.edge) else { continue };
+                if chosen.contains_key(&oe.edge) {
+                    continue;
+                }
+                let pick = match e.curve.as_ref().and_then(curve) {
+                    Some(c) => Some((c, e.same_sense, false)),
+                    None => traced_curve(oe.edge, e)
+                        .map(|(c, forward)| (c, forward, true))
+                        .or_else(|| e.curve.as_ref().and_then(file_spline).map(|c| (c, e.same_sense, false))),
+                };
+                if let Some(pick) = pick {
+                    chosen.insert(oe.edge, pick);
+                }
+            }
+        }
+    }
+
+    // Healing. Files written to a looser tolerance than the kernel's leave vertices off
+    // their edges' curves. In a B-rep the surfaces are the shape and the vertices follow
+    // from them, so each such vertex moves to where its curves meet: found by projecting
+    // onto them in turn and averaging, then (where they do not quite meet) by easing
+    // toward the farthest. Where a file's own line or circle still misses, it is
+    // replaced by the curve traced from the two surfaces, which meets the others
+    // exactly at the corner. A vertex may move up to ten times the accuracy the file
+    // declares (at most 0.1 mm); beyond that the file is taken at its word.
+    let allowed = |p: DVec3| anvil_brep::tol::LINEAR * 10.0 + 1e-12 * p.length();
+    let heal = (10.0 * model.uncertainty.unwrap_or(1e-3)).clamp(1e-4, 0.1);
+    let mut incident: HashMap<u64, Vec<u64>> = HashMap::new();
+    for id in chosen.keys() {
+        if let Some(e) = model.edges.get(id) {
+            for v in [e.start, e.end] {
+                let list = incident.entry(v).or_default();
+                if !list.contains(id) {
+                    list.push(*id);
+                }
+            }
+        }
+    }
+    let snap = |p0: DVec3, curves: &[&Curve]| -> (DVec3, f64) {
+        let mut p = p0;
+        for _ in 0..100 {
+            let q = curves.iter().map(|c| c.eval(c.param_of(p))).sum::<DVec3>() / curves.len() as f64;
+            let step = (q - p).length();
+            p = q;
+            if step < 1e-14 * p.length().max(1.0) {
+                break;
+            }
+        }
+        let worst = |p: DVec3| curves.iter().map(|c| c.distance_to_curve(p)).fold(0.0, f64::max);
+        // Curves that do not quite meet: the average settles where the squared misses
+        // balance; stepping toward the farthest, in shrinking steps, moves it to where the
+        // worst miss is least.
+        let mut best = (p, worst(p));
+        if best.1 > 0.0 {
+            for k in 0..400 {
+                let Some(q) = curves
+                    .iter()
+                    .map(|c| c.eval(c.param_of(p)))
+                    .max_by(|a, b| (*a - p).length().total_cmp(&(*b - p).length()))
+                else {
+                    break;
+                };
+                p += (q - p) * (0.5 / (1.0 + k as f64 / 8.0));
+                let w = worst(p);
+                if w < best.1 {
+                    best = (p, w);
+                }
+            }
+        }
+        best
+    };
+    let mut pos: HashMap<u64, DVec3> = model.vertices.clone();
+    for round in 0..2 {
+        let mut retrace: Vec<u64> = Vec::new();
+        for (v, edges) in &incident {
+            let Some(&p0) = model.vertices.get(v) else { continue };
+            let curves: Vec<&Curve> = edges.iter().filter_map(|e| chosen.get(e)).map(|c| &c.0).collect();
+            if curves.is_empty() || curves.iter().all(|c| c.distance_to_curve(p0) <= allowed(p0)) {
+                continue;
+            }
+            let (p, off) = snap(p0, &curves);
+            if (p - p0).length() <= heal && off <= allowed(p) {
+                pos.insert(*v, p);
+            } else if round == 0 {
+                retrace.extend(edges.iter().filter(|e| chosen.get(e).is_some_and(|c| !c.2)));
+            }
+        }
+        retrace.sort_unstable();
+        retrace.dedup();
+        let mut changed = false;
+        for id in retrace {
+            if let Some((c, forward)) = model.edges.get(&id).and_then(|e| traced_curve(id, e)) {
+                chosen.insert(id, (c, forward, true));
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
     let mut solid = Solid::default();
     let mut vids: HashMap<u64, VertexId> = HashMap::new();
     let mut eids: HashMap<u64, EdgeId> = HashMap::new();
@@ -354,56 +481,36 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                 let id = match eids.get(&oe.edge) {
                     Some(id) => *id,
                     None => {
-                        // The file's own line, circle or ellipse; else the curve traced
-                        // from the two faces, running the way the file's curve runs;
-                        // else the file's B-spline.
-                        let (c, forward) = match e.curve.as_ref().and_then(curve) {
-                            Some(c) => (c, e.same_sense),
-                            None => match rebuilt(oe.edge, e) {
-                                Some(c) => {
-                                    let ps = *model.vertices.get(&e.start).ok_or("vertex missing")?;
-                                    let forward = match &e.curve {
-                                        Some(file) => {
-                                            let want = file_direction(file, ps, e.same_sense);
-                                            let t = c.param_of(ps);
-                                            let h = c.period().unwrap_or(1.0) * 1e-4;
-                                            (c.eval(t + h) - c.eval(t - h)).dot(want) >= 0.0
-                                        }
-                                        None => e.same_sense,
-                                    };
-                                    (c, forward)
-                                }
-                                None => {
-                                    let c = e.curve.as_ref().and_then(file_spline).ok_or_else(|| {
-                                        format!(
-                                            "{} edges are not exact yet",
-                                            e.curve_type.to_lowercase().replace('_', " ")
-                                        )
-                                    })?;
-                                    (c, e.same_sense)
-                                }
-                            },
-                        };
+                        let (c, forward, _) = chosen.get(&oe.edge).cloned().ok_or_else(|| {
+                            format!(
+                                "{} edges are not exact yet",
+                                e.curve_type.to_lowercase().replace('_', " ")
+                            )
+                        })?;
                         let mut vertex = |v: u64| -> Result<VertexId, String> {
                             if let Some(id) = vids.get(&v) {
                                 return Ok(*id);
                             }
-                            let p = *model.vertices.get(&v).ok_or("vertex missing")?;
+                            let p = *pos.get(&v).ok_or("vertex missing")?;
                             let id = solid.add_vertex(p);
                             vids.insert(v, id);
                             Ok(id)
                         };
                         let (start, end) = (vertex(e.start)?, vertex(e.end)?);
-                        let (ps, pe) = (model.vertices[&e.start], model.vertices[&e.end]);
+                        let (ps, pe) = (pos[&e.start], pos[&e.end]);
                         let (t0, t1) = range(&c, ps, pe, forward);
-                        // Files written to a looser tolerance leave vertices off their
-                        // curves; the exact kernel needs them on (to 1e-5 mm).
+                        // What healing could not close: the exact kernel needs every vertex
+                        // on its edges' curves (to 1e-5 mm).
                         let gap = (c.eval(t0) - ps).length().max((c.eval(t1) - pe).length());
-                        let allowed = anvil_brep::tol::LINEAR * 10.0 + 1e-12 * ps.length().max(pe.length());
-                        if gap > allowed {
-                            return Err(format!(
-                                "the file's edges miss their vertices by up to {gap:.1e} mm, more than the exact kernel accepts, so it is imported as a mesh"
-                            ));
+                        if gap > allowed(ps).max(allowed(pe)) {
+                            return Err(match model.uncertainty {
+                                Some(u) if gap > heal => format!(
+                                    "the file's edges miss their vertices by up to {gap:.1e} mm, more than its stated accuracy ({u:.1e} mm), so it is imported as a mesh"
+                                ),
+                                _ => format!(
+                                    "the file's edges miss their vertices by up to {gap:.1e} mm and could not be healed, so it is imported as a mesh"
+                                ),
+                            });
                         }
                         let id = solid.add_edge(Edge { curve: c, start, end, t0, t1 });
                         eids.insert(oe.edge, id);

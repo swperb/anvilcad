@@ -508,3 +508,53 @@ fn dome_and_socket_round_trip_exactly() {
         assert!((mesh_volume(&b.mesh) - v).abs() / v < 1e-2, "{} vs {v}", mesh_volume(&b.mesh));
     }
 }
+
+/// A box exported, then one vertex nudged by `by` mm and the file's stated accuracy set
+/// to `accuracy` mm, as files from looser systems arrive.
+fn nudged_box(by: f64, accuracy: f64) -> String {
+    let part = prism(&rect(0.0, 0.0, 40.0, 20.0), &Frame::world(), 0.0, 10.0);
+    let text = export::write(std::slice::from_ref(&part), "box");
+    let text = text.replace("LENGTH_MEASURE(1.E-06)", &format!("LENGTH_MEASURE({accuracy:?})"));
+    let point = text
+        .lines()
+        .find_map(|l| {
+            l.split_once("=VERTEX_POINT('',#").map(|(_, rest)| rest.trim_end_matches(");").to_string())
+        })
+        .expect("vertex point");
+    let prefix = format!("#{point}=CARTESIAN_POINT('',(");
+    text.lines()
+        .map(|l| match l.strip_prefix(&prefix) {
+            Some(rest) => {
+                let (x, tail) = rest.split_once(',').expect("coordinates");
+                let x: f64 = x.parse().expect("x");
+                format!("{prefix}{:?},{tail}", x + by)
+            }
+            None => l.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A vertex a little off its edges, within what the file says it is accurate to, is
+/// moved to where the edges meet and the body comes in exact.
+#[test]
+fn loose_vertices_are_healed_within_the_stated_accuracy() {
+    let imp = import(&nudged_box(3e-4, 1e-3)).expect("import");
+    let b = &imp.bodies[0];
+    let exact = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+    check::validate(exact).expect("valid");
+    assert!((exact_volume(exact) - 8000.0).abs() < 1e-6, "{}", exact_volume(exact));
+    // Every corner is back on the box.
+    for v in &exact.vertices {
+        let on = |x: f64, a: f64, b: f64| (x - a).abs() < 1e-9 || (x - b).abs() < 1e-9;
+        assert!(
+            on(v.point.x, 0.0, 40.0) && on(v.point.y, 0.0, 20.0) && on(v.point.z, 0.0, 10.0),
+            "{:?}",
+            v.point
+        );
+    }
+    // Far outside its stated accuracy the file is taken at its word: a mesh, and why.
+    let imp = import(&nudged_box(0.5, 1e-3)).expect("import");
+    let why = imp.bodies[0].not_exact.clone().unwrap_or_default();
+    assert!(why.contains("stated accuracy"), "{why}");
+}

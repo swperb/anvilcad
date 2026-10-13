@@ -86,6 +86,8 @@ pub struct Model {
     pub length_scale: f64,
     pub length_unit: String,
     pub assembly: bool,
+    /// The distance (mm) the file says it is accurate to, if it says.
+    pub uncertainty: Option<f64>,
 }
 
 struct Reader<'a> {
@@ -688,6 +690,21 @@ pub fn read(ex: &Exchange) -> Model {
         curves: HashMap::new(),
     };
     r.model.assembly = ex.of_type("NEXT_ASSEMBLY_USAGE_OCCURRENCE").next().is_some();
+    // The length uncertainty the file declares (in its length unit), the largest if
+    // several: points it says are the same may be that far apart.
+    r.model.uncertainty = ex
+        .of_type("UNCERTAINTY_MEASURE_WITH_UNIT")
+        .filter_map(|id| ex.get(id))
+        .filter_map(|e| {
+            let v = e.params().first()?;
+            match v {
+                Param::Typed(name, _) if name != "LENGTH_MEASURE" => None,
+                _ => v.as_real(),
+            }
+        })
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .map(|v| v * scale)
+        .reduce(f64::max);
     let mut ids: Vec<u64> =
         ["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS", "FACETED_BREP", "SHELL_BASED_SURFACE_MODEL"]
             .iter()

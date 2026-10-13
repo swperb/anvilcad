@@ -93,3 +93,12 @@ fn ftc_09_cones_are_exact() {
 fn ctc_03_seamless_bands_are_exact() {
     exact_matches_mesh("nist_ctc_03_asme1_rc.stp");
 }
+
+/// Written to 0.0002 in: some vertices sit up to 3e-5 mm off their edges, more than
+/// the kernel allows, so they are moved to where the edges meet and it comes in exact.
+#[test]
+fn ftc_08_loose_vertices_are_healed() {
+    let imp = load("nist_ftc_08_asme1_rc.stp");
+    assert!(imp.bodies[0].exact.is_some(), "{:?}", imp.bodies[0].not_exact);
+    exact_matches_mesh("nist_ftc_08_asme1_rc.stp");
+}

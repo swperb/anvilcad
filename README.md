@@ -62,7 +62,9 @@ system are still ahead; see the roadmap.
 - Native part format `.anvprt` (versioned JSON, written atomically)
 - STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
   B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes,
-  cylinders, cones, tori and spheres import as exact solids, so features added to them build exactly; everything
+  cylinders, cones, tori and spheres import as exact solids, so features added to them build exactly
+  (files written to a looser tolerance are healed: each vertex moves to where its edges
+  meet, within ten times the accuracy the file declares); everything
   else imports as a watertight mesh body. AP242 tessellated bodies (triangulated faces)
   import as meshes too. Open a `.step` or `.stp` file to start a part.
 - Export to STEP AP214 (exact geometry whenever the whole part was built exactly, facets
@@ -200,7 +202,7 @@ dimensioning, dragging, face picking, extruding and undo are covered without a w
 
 STEP import is checked against the NIST MBE PMI CAD test models (33 files from several
 CAD systems, AP203 and AP242). Every file imports, every solid is watertight, and the
-volumes of the same part exported by different systems agree to within 0.15%. Four of the
+volumes of the same part exported by different systems agree to within 0.15%. Five of the
 files are kept in `crates/anvil-step/tests/data` as regression tests (see the NOTICE
 there). To check a folder of your own STEP files:
 `cargo run --release -p anvil-step --example report -- <folder>`.
@@ -234,7 +236,7 @@ Part loads a model that uses most features.
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
    custom properties
-4. STEP: assembly placement, colours and names, exact import of B-spline surfaces and of files written to a looser tolerance;
+4. STEP: assembly placement, colours and names, exact import of B-spline surfaces;
    then SOLIDWORKS format research for the five-year compatibility window
 5. A scripting and plugin API
 6. CAM (tracked as a feature request in the issues)
