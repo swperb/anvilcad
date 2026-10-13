@@ -182,7 +182,16 @@ impl Solid {
                 }
             }
         }
-        Some((lo, hi))
+        // A torus face bulges past its edges by up to its tube radius.
+        let pad = self
+            .faces
+            .iter()
+            .filter_map(|f| match f.surface {
+                Surface::Torus { minor, .. } => Some(minor),
+                _ => None,
+            })
+            .fold(0.0, f64::max);
+        Some((lo - DVec3::splat(pad), hi + DVec3::splat(pad)))
     }
 
     pub fn face_by_tag(&self, tag: FaceTag) -> Option<FaceId> {

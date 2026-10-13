@@ -1,7 +1,7 @@
 //! Surface-surface and curve-surface intersection.
 
-use crate::Result;
 use crate::geom::{Curve, Frame, Surface};
+use crate::{KernelError, Result};
 use glam::{DVec2, DVec3};
 use std::f64::consts::PI;
 
@@ -45,7 +45,118 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
             Surface::Cone { frame: fa, radius: ra, half_angle: ha },
             Surface::Cone { frame: fb, radius: rb, half_angle: hb },
         ) => coaxial_cones(fa, *ra, *ha, fb, *rb, *hb, tol),
+        (Surface::Torus { frame, major, minor, .. }, other)
+        | (other, Surface::Torus { frame, major, minor, .. }) => {
+            torus_with(frame, *major, *minor, other, tol)
+        }
     }
+}
+
+/// A surface of revolution seen in a half-plane through an axis, with coordinates
+/// (distance from the axis, height along it).
+#[derive(Debug, Clone, Copy)]
+enum Meridian {
+    Line { p: DVec2, d: DVec2 },
+    Circle { c: DVec2, r: f64 },
+}
+
+/// The meridian of `s` about the axis of `axis`, if `s` is a plane across that
+/// axis or a surface of revolution about it.
+fn meridian(axis: &Frame, s: &Surface, tol: f64) -> Option<Meridian> {
+    let f = s.frame();
+    let d = f.origin - axis.origin;
+    let z0 = d.dot(axis.z);
+    let parallel = axis.z.cross(f.z).length() < PARALLEL;
+    let on_axis = (d - axis.z * z0).length() < tol;
+    let sign = axis.z.dot(f.z).signum();
+    match *s {
+        Surface::Plane { .. } if parallel => Some(Meridian::Line { p: DVec2::new(0.0, z0), d: DVec2::X }),
+        Surface::Cylinder { radius, .. } if parallel && on_axis => {
+            Some(Meridian::Line { p: DVec2::new(radius, 0.0), d: DVec2::Y })
+        }
+        Surface::Cone { radius, half_angle, .. } if parallel && on_axis => {
+            Some(Meridian::Line { p: DVec2::new(radius, z0), d: DVec2::new(half_angle.tan() * sign, 1.0) })
+        }
+        Surface::Torus { major, minor, .. } if parallel && on_axis => {
+            Some(Meridian::Circle { c: DVec2::new(major, z0), r: minor })
+        }
+        _ => None,
+    }
+}
+
+/// Where two meridians cross.
+fn meridian_points(a: Meridian, b: Meridian, tol: f64) -> Vec<DVec2> {
+    use Meridian::*;
+    let line_circle = |p: DVec2, d: DVec2, c: DVec2, r: f64| -> Vec<DVec2> {
+        let d = d.normalize();
+        let foot = p + d * (c - p).dot(d);
+        let h2 = r * r - (foot - c).length_squared();
+        if h2 < -tol * tol {
+            Vec::new()
+        } else if h2 <= tol * tol {
+            vec![foot]
+        } else {
+            let h = h2.sqrt();
+            vec![foot + d * h, foot - d * h]
+        }
+    };
+    match (a, b) {
+        (Line { p: p1, d: d1 }, Line { p: p2, d: d2 }) => {
+            let den = d1.perp_dot(d2);
+            if den.abs() < PARALLEL {
+                return Vec::new();
+            }
+            vec![p1 + d1 * ((p2 - p1).perp_dot(d2) / den)]
+        }
+        (Line { p, d }, Circle { c, r }) | (Circle { c, r }, Line { p, d }) => line_circle(p, d, c, r),
+        (Circle { c: c1, r: r1 }, Circle { c: c2, r: r2 }) => {
+            let v = c2 - c1;
+            let dist = v.length();
+            if dist < tol || dist > r1 + r2 + tol || dist < (r1 - r2).abs() - tol {
+                return Vec::new();
+            }
+            let x = (dist * dist + r1 * r1 - r2 * r2) / (2.0 * dist);
+            let u = v / dist;
+            let h2 = r1 * r1 - x * x;
+            if h2 <= tol * tol {
+                vec![c1 + u * x]
+            } else {
+                let h = h2.sqrt();
+                vec![c1 + u * x + u.perp() * h, c1 + u * x - u.perp() * h]
+            }
+        }
+    }
+}
+
+/// A torus with any other surface. Planes across its axis and surfaces of
+/// revolution about it meet it in circles, planes through its axis in two circles
+/// round the tube; anything else is not supported yet.
+fn torus_with(t: &Frame, major: f64, minor: f64, other: &Surface, tol: f64) -> Result<Ssi> {
+    let torus = Meridian::Circle { c: DVec2::ZERO + DVec2::new(major, 0.0), r: minor };
+    if let Some(m) = meridian(t, other, tol) {
+        let curves = meridian_points(torus, m, tol)
+            .into_iter()
+            .filter(|q| q.x > tol)
+            .map(|q| Curve::Circle { frame: t.with_origin(t.origin + t.z * q.y), radius: q.x })
+            .collect::<Vec<_>>();
+        return Ok(if curves.is_empty() { Ssi::None } else { Ssi::Curves(curves) });
+    }
+    if let Surface::Plane { frame: p } = other
+        && p.z.dot(t.z).abs() < PARALLEL
+        && (t.origin - p.origin).dot(p.z).abs() < tol
+    {
+        // Through the axis: the tube's cross-sections on either side.
+        let side = p.z.cross(t.z).normalize();
+        let circles = [side, -side]
+            .into_iter()
+            .map(|s| Curve::Circle {
+                frame: Frame { origin: t.origin + s * major, x: s, y: t.z, z: s.cross(t.z) },
+                radius: minor,
+            })
+            .collect();
+        return Ok(Ssi::Curves(circles));
+    }
+    Err(KernelError::Unsupported("intersection of a torus with a surface not on its axis".into()))
 }
 
 fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) -> Result<Ssi> {
@@ -276,6 +387,19 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
             trig_roots(a * cf.x.dot(n), b * cf.y.dot(n), (cf.origin - frame.origin).dot(n), tol)
         }
         (_, Surface::Cylinder { .. } | Surface::Cone { .. }) => numeric_roots(curve, lo, hi, surface, tol),
+        (Curve::Line { origin, dir }, Surface::Torus { frame, major, minor, .. }) => {
+            // Only the stretch of the line inside the torus's bounding sphere can hit it.
+            let (o, r) = (*origin - frame.origin, major + minor);
+            let b = o.dot(*dir);
+            let disc = b * b - (o.length_squared() - r * r);
+            if disc <= 0.0 {
+                Vec::new()
+            } else {
+                let (a, c) = ((-b - disc.sqrt()).max(lo), (-b + disc.sqrt()).min(hi));
+                if a < c { numeric_roots(curve, a, c, surface, tol) } else { Vec::new() }
+            }
+        }
+        (_, Surface::Torus { .. }) => numeric_roots(curve, lo, hi, surface, tol),
         (Curve::Spline(_), Surface::Plane { .. }) => numeric_roots(curve, lo, hi, surface, tol),
     };
     let mut out: Vec<f64> = Vec::new();
@@ -377,10 +501,15 @@ fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -
                 DVec2::new(l.x, l.y).length() - radius
             }
             Surface::Cone { .. } => surface.cone_offset(p),
+            Surface::Torus { .. } => surface.torus_offset(p),
             Surface::Plane { frame } => (p - frame.origin).dot(frame.z),
         }
     };
-    let n = if matches!(curve, Curve::Spline(_)) { 1024 } else { 256 };
+    let n = if matches!(curve, Curve::Spline(_)) || matches!(surface, Surface::Torus { .. }) {
+        1024
+    } else {
+        256
+    };
     let span = match curve.period() {
         Some(per) if (hi - lo) >= per - 1e-12 => per,
         _ => hi - lo,
@@ -546,6 +675,42 @@ mod tests {
         assert_eq!(cs.len(), 1);
         on_both(&cs[0], &c, &other);
         assert_eq!(surfaces(&c, &c, 1e-6), Ok(Ssi::Coincident));
+    }
+
+    #[test]
+    fn torus_cases() {
+        let t = Surface::Torus { frame: Frame::world(), major: 6.0, minor: 1.5, v_mid: 0.0 };
+        let on_torus = |cs: &[Curve], other: &Surface| {
+            for c in cs {
+                for i in 0..12 {
+                    let p = c.eval(i as f64 * 0.5);
+                    assert!(t.distance(p) < 1e-9 && other.distance(p) < 1e-9, "{p:?}");
+                }
+            }
+        };
+        // Across the axis through the tube: an outer and an inner circle.
+        let across = plane(DVec3::new(0.0, 0.0, 0.5), DVec3::Z);
+        let Ok(Ssi::Curves(cs)) = surfaces(&across, &t, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 2);
+        on_torus(&cs, &across);
+        assert_eq!(surfaces(&plane(DVec3::new(0.0, 0.0, 3.0), DVec3::Z), &t, 1e-6), Ok(Ssi::None));
+        // Through the axis: the tube's two cross-sections.
+        let through = plane(DVec3::ZERO, DVec3::Y);
+        let Ok(Ssi::Curves(cs)) = surfaces(&t, &through, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 2);
+        on_torus(&cs, &through);
+        // A coaxial cylinder and cone through the tube.
+        let c = cyl(DVec3::ZERO, DVec3::Z, 6.5);
+        let Ok(Ssi::Curves(cs)) = surfaces(&c, &t, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 2);
+        on_torus(&cs, &c);
+        let k = Surface::Cone { frame: Frame::world(), radius: 6.0, half_angle: 0.3 };
+        let Ok(Ssi::Curves(cs)) = surfaces(&t, &k, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 2);
+        on_torus(&cs, &k);
+        // Off-axis surfaces are not supported yet.
+        assert!(surfaces(&t, &cyl(DVec3::new(6.0, 0.0, 0.0), DVec3::X, 0.5), 1e-6).is_err());
+        assert!(surfaces(&t, &plane(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0)), 1e-6).is_err());
     }
 
     #[test]

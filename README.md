@@ -47,7 +47,7 @@ system are still ahead; see the roadmap.
 - Native part format `.anvprt` (versioned JSON, written atomically)
 - STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
   B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes,
-  cylinders and cones import as exact solids, so features added to them build exactly; everything
+  cylinders, cones and tori import as exact solids, so features added to them build exactly; everything
   else imports as a watertight mesh body. AP242 tessellated bodies (triangulated faces)
   import as meshes too. Open a `.step` or `.stp` file to start a part.
 - Export to STEP AP214 (exact geometry whenever the whole part was built exactly, facets
@@ -112,7 +112,7 @@ explains how to migrate them.
 ```
 crates/
   anvil-brep     exact kernel: curves (line, circle, ellipse, B-spline) and surfaces
-                 (plane, cylinder, cone), exact booleans, traced intersection curves,
+                 (plane, cylinder, cone, torus), exact booleans, traced intersection curves,
                  extrude, fillets and chamfers, topology checks, watertight tessellation
   anvil-kernel   faceted kernel: math, profiles, triangulation, polygon B-rep solids,
                  booleans (BSP), extrude/revolve, shell, mass properties, picking
@@ -131,7 +131,8 @@ Kernel design notes:
 - Two kernels work together. `anvil-brep` builds parts exactly: its surfaces are
   analytic, and its booleans intersect them exactly. Where the answer is a line, circle
   or ellipse it is computed in closed form; anything else between cylinders, cones and
-  planes (a hole drilled across a shaft, say) is traced: each straight line of one
+  planes (a hole drilled across a shaft, say) is traced; a torus meets planes and surfaces
+  on its own axis in exact circles. Traced curves are found this way: each straight line of one
   surface meets the other at the roots of a quadratic, so every traced point is exact,
   and the points are joined into a cubic B-spline refined until it stays within 1e-7 mm
   of both surfaces. `anvil-kernel` is a faceted kernel that covers everything else.
@@ -208,8 +209,8 @@ Part loads a model that uses most features.
 
 ## Roadmap
 
-1. Kernel: extend the exact kernel to tori, spheres and surfaces of revolution so
-   revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
+1. Kernel: extend the exact kernel to spheres and surfaces of revolution, and torus
+   intersections off its axis, so revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
    variable-radius fillets, draft; later NURBS
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by

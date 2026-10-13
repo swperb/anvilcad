@@ -154,7 +154,10 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
 
     // Curved faces get interior points on a grid, so triangles stay small in
     // the curved direction instead of spanning chords across the surface.
-    if let Surface::Cylinder { radius: scale, .. } | Surface::Cone { radius: scale, .. } = face.surface {
+    if let Surface::Cylinder { radius: scale, .. }
+    | Surface::Cone { radius: scale, .. }
+    | Surface::Torus { major: scale, .. } = face.surface
+    {
         // The angle step comes from the widest point of the face; `u` is the angle
         // times `scale`.
         let frame = face.surface.frame();
@@ -166,21 +169,32 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
                 DVec2::new(l.x, l.y).length()
             })
             .fold(0.0, f64::max);
-        let step_angle = {
+        let step_for = |radius: f64| {
             let mut a = params.max_angle.max(1e-3);
             if params.chord > 0.0 && params.chord < radius {
                 a = a.min(2.0 * (1.0 - params.chord / radius).acos());
             }
             a
         };
-        let du = scale * step_angle;
+        let step_angle = step_for(radius);
+        let mut du = scale * step_angle;
         let all: Vec<DVec2> = loops_uv.iter().flatten().copied().collect();
         let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
         for p in &all {
             lo = lo.min(*p);
             hi = hi.max(*p);
         }
-        let dv = (radius * step_angle).max((hi.y - lo.y) / 64.0);
+        // Along a torus's tube `v` is the tube angle times `minor`.
+        let v_step = match face.surface {
+            Surface::Torus { minor, .. } => minor * step_for(minor),
+            _ => radius * step_angle,
+        };
+        let dv = v_step.max((hi.y - lo.y) / 64.0);
+        // A torus curves both ways, so long thin triangles across its tube tilt badly
+        // (and show as creases): keep its grid cells within 2:1.
+        if matches!(face.surface, Surface::Torus { .. }) {
+            du = du.min(2.0 * dv);
+        }
         let nu = ((hi.x - lo.x) / du).ceil() as usize;
         let nv = ((hi.y - lo.y) / dv).ceil() as usize;
         if nu.saturating_mul(nv) < 200_000 {
@@ -312,7 +326,7 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
                 DVec2::new(l.x, l.y)
             })
             .collect(),
-        Surface::Cylinder { .. } | Surface::Cone { .. } => {
+        Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Torus { .. } => {
             let period = surface.u_period().unwrap_or(TAU);
             let mut prev: Option<f64> = None;
             pts.iter()

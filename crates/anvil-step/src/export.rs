@@ -159,6 +159,10 @@ pub fn write(solids: &[Solid], name: &str) -> String {
                     let a = w.placement(&frame);
                     w.ent(format!("CONICAL_SURFACE('',#{a},{},{})", real(radius), real(half_angle)))
                 }
+                Surface::Torus { frame, major, minor, .. } => {
+                    let a = w.placement(&frame);
+                    w.ent(format!("TOROIDAL_SURFACE('',#{a},{},{})", real(major), real(minor)))
+                }
             };
             let mut bounds = Vec::new();
             for (li, l) in f.loops().enumerate() {

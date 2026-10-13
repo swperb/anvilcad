@@ -181,7 +181,15 @@ fn face_info(solid: &Solid, face: &Face) -> FaceInfo {
             .flatten()
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.x), b.max(p.x)));
     }
-    FaceInfo { loops_uv, u_range: (umin, umax), bbox: (lo - DVec3::splat(ON), hi + DVec3::splat(ON)) }
+    // The box is only a quick rejection test, so it errs wide: sampled curves fall
+    // short of their true extremes (by r(1 - cos(step / 2))), and a torus face bulges
+    // past its boundary (a fillet's crown, say) by up to its tube radius.
+    let pad = match face.surface {
+        Surface::Torus { minor, .. } => minor,
+        _ => 0.0,
+    } + 0.01 * (hi - lo).length()
+        + ON;
+    FaceInfo { loops_uv, u_range: (umin, umax), bbox: (lo - DVec3::splat(pad), hi + DVec3::splat(pad)) }
 }
 
 impl<'a> Engine<'a> {

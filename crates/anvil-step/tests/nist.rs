@@ -36,6 +36,16 @@ fn ftc_11_bands_without_seams() {
     assert_eq!(open_edges(&solid.mesh), 0);
     let v = volume(&solid.mesh);
     assert!((v - 5103.7).abs() / 5103.7 < 2e-3, "{v}");
+    // Its fillets are tori, so the body is exact too. Finely tessellated, the exact
+    // solid converges on 5129.0 mm^3; the importer's coarser mesh above runs about
+    // 0.5% low on the 1.5 mm fillets.
+    let exact = solid.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", solid.not_exact));
+    assert!(exact.faces.iter().any(|f| matches!(f.surface, anvil_brep::Surface::Torus { .. })));
+    let params = anvil_brep::tess::TessParams { chord: 2e-4, max_angle: 0.01 };
+    let m = anvil_brep::tess::tessellate(exact, &params).expect("tessellate");
+    assert!(m.is_watertight());
+    let v = anvil_brep::mass::properties(&m).volume;
+    assert!((v - 5129.0).abs() / 5129.0 < 2e-4, "{v}");
 }
 
 /// Sphere patches with a vertex on the pole, in inch units.

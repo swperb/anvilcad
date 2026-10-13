@@ -2489,20 +2489,34 @@ mod ui_tests {
         }
         h.app.cmd_edge_treatment(false);
         h.step(vec![]);
-        // Pick a top edge: between the end cap and a side face of the extrude.
-        let target = h
-            .app
-            .pick_body
-            .as_ref()
-            .unwrap()
+        // Pick a top edge: between the end cap and a side face of the extrude. Take the
+        // one whose midpoint lies farthest on screen from every other edge, so the
+        // click cannot land on an edge behind it (the edge list's order is not fixed).
+        let body = h.app.pick_body.as_ref().unwrap();
+        let (cam, rect) = (h.app.camera, h.app.view_rect);
+        let screen_gap = |p: Pos2, a: Pos2, b: Pos2| {
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.length_sq().max(1e-12)).clamp(0.0, 1.0);
+            (a + ab * t - p).length()
+        };
+        let clearance = |e: &anvil_kernel::solid::ModelEdge| {
+            let mid = cam.project((e.seg[0] + e.seg[1]) * 0.5, rect);
+            body.edges
+                .iter()
+                .filter(|o| o.faces != e.faces)
+                .map(|o| screen_gap(mid, cam.project(o.seg[0], rect), cam.project(o.seg[1], rect)))
+                .fold(f32::INFINITY, f32::min)
+        };
+        let target = body
             .edges
             .iter()
-            .find(|e| {
+            .filter(|e| {
                 let f = e.faces;
                 f.a.feature == ex
                     && f.b.feature == ex
                     && (f.a.index == FaceId::END_CAP || f.b.index == FaceId::END_CAP)
             })
+            .max_by(|a, b| clearance(a).total_cmp(&clearance(b)))
             .copied()
             .expect("a top edge");
         let mid = (target.seg[0] + target.seg[1]) * 0.5;

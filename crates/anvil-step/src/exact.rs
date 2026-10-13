@@ -1,5 +1,5 @@
 //! Converts a read body to an exact `anvil-brep` solid when every face is a plane,
-//! cylinder or cone. Edges keep the file's line, circle or ellipse; other edges are
+//! cylinder, cone or torus. Edges keep the file's line, circle or ellipse; other edges are
 //! traced exactly from the two surfaces they join, or else keep the file's B-spline.
 
 use crate::reader::{Body, LoopKind, Model};
@@ -11,6 +11,7 @@ use anvil_brep::{Curve, EdgeId, Solid, Surface, VertexId, check};
 use glam::DVec3;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::f64::consts::TAU;
 use std::sync::Arc;
 
 /// The kernel surface for a face, given the points of its boundary vertices.
@@ -43,6 +44,34 @@ fn surface(s: &shapes::Surface, points: &[DVec3]) -> Option<Surface> {
                 radius: at(mid),
                 half_angle: *semi_angle,
             })
+        }
+        shapes::Surface::Torus { frame, major, minor } => {
+            // Ring tori only, and faces that leave a gap round the tube: the tube angle
+            // is measured from the middle of the face, away from that gap.
+            if *minor <= 0.0 || major - minor <= 1e-6 * major.abs().max(1.0) {
+                return None;
+            }
+            let mut angles: Vec<f64> = points
+                .iter()
+                .map(|p| {
+                    let l = frame.to_local(*p);
+                    l.z.atan2((l.x * l.x + l.y * l.y).sqrt() - major).rem_euclid(TAU)
+                })
+                .collect();
+            angles.sort_by(f64::total_cmp);
+            let n = angles.len();
+            let (gap, after) = (0..n)
+                .map(|i| {
+                    let next = if i + 1 < n { angles[i + 1] } else { angles[0] + TAU };
+                    (next - angles[i], angles[i])
+                })
+                .max_by(|a, b| a.0.total_cmp(&b.0))?;
+            if gap < 0.2 {
+                return None;
+            }
+            // The face runs from the end of the gap round to its start.
+            let v_mid = after + gap + 0.5 * (TAU - gap);
+            Some(Surface::Torus { frame: *frame, major: *major, minor: *minor, v_mid })
         }
         _ => None,
     }
@@ -114,7 +143,25 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
             if let LoopKind::Edges(edges) = &b.kind {
                 for oe in edges {
                     if let Some(e) = model.edges.get(&oe.edge) {
-                        pts.extend([e.start, e.end].iter().filter_map(|v| model.vertices.get(v)));
+                        let ends: Vec<DVec3> =
+                            [e.start, e.end].iter().filter_map(|v| model.vertices.get(v)).copied().collect();
+                        // A point inside the edge too: a seam round a torus's tube says
+                        // which way round the tube the face goes.
+                        if let (Some(c), [ps, pe]) = (&e.curve, &ends[..]) {
+                            let (t0, t1) = (c.invert(*ps), c.invert(*pe));
+                            let mid = if c.is_periodic() {
+                                let sweep = if e.same_sense {
+                                    (t1 - t0).rem_euclid(TAU)
+                                } else {
+                                    -(t0 - t1).rem_euclid(TAU)
+                                };
+                                t0 + 0.5 * sweep
+                            } else {
+                                0.5 * (t0 + t1)
+                            };
+                            pts.push(c.eval(mid));
+                        }
+                        pts.extend(ends);
                     }
                 }
             }
@@ -170,6 +217,10 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
         let surf = surfaces[index].ok_or_else(|| match f.surface_type.as_str() {
             "POLY" => "the file stores this body as flat facets, so it is imported as a mesh".to_string(),
             "CONICAL_SURFACE" => "a cone face reaches its apex, so it is imported as a mesh".to_string(),
+            "TOROIDAL_SURFACE" | "DEGENERATE_TOROIDAL_SURFACE" => {
+                "a torus face wraps round its tube or the torus is degenerate, so it is imported as a mesh"
+                    .to_string()
+            }
             other => format!(
                 "{} faces are not supported by the exact kernel yet, so it is imported as a mesh",
                 other.to_lowercase().replace('_', " ")
@@ -229,6 +280,15 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                         let (start, end) = (vertex(e.start)?, vertex(e.end)?);
                         let (ps, pe) = (model.vertices[&e.start], model.vertices[&e.end]);
                         let (t0, t1) = range(&c, ps, pe, forward);
+                        // Files written to a looser tolerance leave vertices off their
+                        // curves; the exact kernel needs them on (to 1e-5 mm).
+                        let gap = (c.eval(t0) - ps).length().max((c.eval(t1) - pe).length());
+                        let allowed = anvil_brep::tol::LINEAR * 10.0 + 1e-12 * ps.length().max(pe.length());
+                        if gap > allowed {
+                            return Err(format!(
+                                "the file's edges miss their vertices by up to {gap:.1e} mm, more than the exact kernel accepts, so it is imported as a mesh"
+                            ));
+                        }
                         let id = solid.add_edge(Edge { curve: c, start, end, t0, t1 });
                         eids.insert(oe.edge, id);
                         id

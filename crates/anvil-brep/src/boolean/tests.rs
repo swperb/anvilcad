@@ -349,3 +349,52 @@ fn slanted_cut_across_a_cone() {
     assert!(close(volume(&d) + volume(&i), all, 2e-3), "{} + {}", volume(&d), volume(&i));
     assert!(volume(&d) > 0.2 * all && volume(&i) > 0.2 * all);
 }
+
+fn ring(major: f64, minor: f64) -> Solid {
+    let mut s = crate::seam::tests::half_round_ring(major, minor);
+    crate::seam::add_seams(&mut s).expect("seam");
+    s
+}
+
+fn ring_volume(major: f64, minor: f64) -> f64 {
+    0.5 * PI * minor * minor * 2.0 * PI * (major + 4.0 * minor / (3.0 * PI))
+}
+
+/// The uncut ring tessellated like the results, so the comparisons below see only
+/// what the boolean did (on a 1.5 mm tube the default chords lose about 0.3%).
+fn ring_mesh_volume() -> f64 {
+    let v = volume(&[ring(6.0, 1.5)]);
+    assert!(close(v, ring_volume(6.0, 1.5), 5e-3), "{v}");
+    v
+}
+
+#[test]
+fn ring_cut_across_its_axis() {
+    let r = ring(6.0, 1.5);
+    let top = cuboid(DVec3::new(-20.0, -20.0, 0.0), DVec3::new(20.0, 20.0, 20.0));
+    let d = boolean(&r, &top, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&r, &top, BoolOp::Intersect).expect("intersect");
+    let whole = ring_mesh_volume();
+    assert!(close(volume(&d), 0.5 * whole, 2e-3), "{}", volume(&d));
+    assert!(close(volume(&i), 0.5 * whole, 2e-3), "{}", volume(&i));
+}
+
+#[test]
+fn ring_cut_through_its_axis() {
+    let r = ring(6.0, 1.5);
+    let half = cuboid(DVec3::new(0.0, -20.0, -20.0), DVec3::new(20.0, 20.0, 20.0));
+    let d = boolean(&r, &half, BoolOp::Subtract).expect("subtract");
+    assert_eq!(d.len(), 1);
+    assert!(close(volume(&d), 0.5 * ring_mesh_volume(), 2e-3), "{}", volume(&d));
+}
+
+#[test]
+fn ring_with_a_coaxial_bore() {
+    // A cylinder through the tube meets the torus in two circles.
+    let r = ring(6.0, 1.5);
+    let bore = cylinder(DVec3::new(0.0, 0.0, -5.0), DVec3::Z, 6.75, 0.0, 10.0);
+    let i = boolean(&r, &bore, BoolOp::Intersect).expect("intersect");
+    let d = boolean(&r, &bore, BoolOp::Subtract).expect("subtract");
+    assert!(close(volume(&i) + volume(&d), ring_mesh_volume(), 2e-3), "{} + {}", volume(&i), volume(&d));
+    assert!(volume(&i) > 0.1 && volume(&d) > 0.1);
+}

@@ -129,10 +129,7 @@ fn seam_face(solid: &mut Solid, fi: usize) -> Result<()> {
     let (Some(a), Some(b)) = (solid.vertex(pa).map(|v| v.point), solid.vertex(pb).map(|v| v.point)) else {
         return Err(KernelError::Topology("seam vertex missing".into()));
     };
-    let len = (b - a).length();
-    let dir = (b - a).try_normalize().ok_or_else(|| KernelError::Topology("band of zero height".into()))?;
-    let seam =
-        solid.add_edge(Edge { curve: Curve::Line { origin: a, dir }, start: pa, end: pb, t0: 0.0, t1: len });
+    let seam = solid.add_edge(seam_edge(&surface, radial, a, b, pa, pb)?);
 
     let face = &solid.faces[fi];
     let mut loops: Vec<Loop> = face.loops().cloned().collect();
@@ -151,10 +148,32 @@ fn seam_face(solid: &mut Solid, fi: usize) -> Result<()> {
     Ok(())
 }
 
+/// The seam from `a` to `b` at angle `radial` around the axis: a straight generator
+/// on a cylinder or cone, an arc round the tube on a torus.
+fn seam_edge(s: &Surface, radial: DVec3, a: DVec3, b: DVec3, pa: VertexId, pb: VertexId) -> Result<Edge> {
+    match *s {
+        Surface::Torus { frame, major, minor, v_mid } => {
+            let centre = frame.origin + radial * major;
+            let circle = Frame { origin: centre, x: radial, y: frame.z, z: radial.cross(frame.z) };
+            // Tube angles taken on the face's own branch, so the arc stays on the face.
+            let angle = |p: DVec3| s.uv(p).y / minor + v_mid;
+            let curve = Curve::Circle { frame: circle, radius: minor };
+            Ok(Edge { curve, start: pa, end: pb, t0: angle(a), t1: angle(b) })
+        }
+        _ => {
+            let len = (b - a).length();
+            let dir =
+                (b - a).try_normalize().ok_or_else(|| KernelError::Topology("band of zero height".into()))?;
+            Ok(Edge { curve: Curve::Line { origin: a, dir }, start: pa, end: pb, t0: 0.0, t1: len })
+        }
+    }
+}
+
 /// Scale from angle to `u` on a surface that wraps.
 fn surface_scale(s: &Surface) -> f64 {
     match s {
         Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => *radius,
+        Surface::Torus { major, .. } => *major,
         Surface::Plane { .. } => 1.0,
     }
 }
@@ -299,6 +318,50 @@ pub(crate) mod tests {
             owner: 0,
         });
         s
+    }
+
+    /// A ring on the z axis: the half disc (rho - major)^2 + z^2 <= minor^2, rho >= major,
+    /// swept round. A torus band outside, a cylinder band inside, neither with a seam.
+    pub(crate) fn half_round_ring(major: f64, minor: f64) -> Solid {
+        let mut s = Solid::default();
+        let circle = |z: f64| Frame { origin: DVec3::new(0.0, 0.0, z), ..Frame::world() };
+        let (a0, a1) = (0.4f64, 2.5f64);
+        let vb = s.add_vertex(circle(-minor).origin + DVec3::new(a0.cos(), a0.sin(), 0.0) * major);
+        let vt = s.add_vertex(circle(minor).origin + DVec3::new(a1.cos(), a1.sin(), 0.0) * major);
+        let curve = |z: f64| Curve::Circle { frame: circle(z), radius: major };
+        let eb = s.add_edge(Edge { curve: curve(-minor), start: vb, end: vb, t0: a0, t1: a0 + TAU });
+        let et = s.add_edge(Edge { curve: curve(minor), start: vt, end: vt, t0: a1, t1: a1 + TAU });
+        let tag = |i| FaceTag::Imported { index: i };
+        let c = |edge, reversed| Loop { coedges: vec![Coedge { edge, reversed }] };
+        s.add_face(Face {
+            surface: Surface::Torus { frame: Frame::world(), major, minor, v_mid: 0.0 },
+            reversed: false,
+            outer: c(eb, false),
+            inners: vec![c(et, true)],
+            tag: tag(0),
+            owner: 0,
+        });
+        s.add_face(Face {
+            surface: Surface::Cylinder { frame: Frame::world(), radius: major },
+            reversed: true,
+            outer: c(eb, true),
+            inners: vec![c(et, false)],
+            tag: tag(1),
+            owner: 0,
+        });
+        s
+    }
+
+    #[test]
+    fn torus_band_gets_a_seam() {
+        let (major, minor) = (6.0, 1.5);
+        let mut s = half_round_ring(major, minor);
+        check::validate(&s).expect("valid before");
+        add_seams(&mut s).expect("seam");
+        check::validate(&s).expect("valid after");
+        // Pappus: half-disc area times the path of its centroid.
+        let exact = 0.5 * PI * minor * minor * TAU * (major + 4.0 * minor / (3.0 * PI));
+        assert!((volume(&s) - exact).abs() / exact < 1e-3, "{} vs {exact}", volume(&s));
     }
 
     fn volume(s: &Solid) -> f64 {

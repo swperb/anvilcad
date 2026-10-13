@@ -291,6 +291,20 @@ pub enum Surface {
     /// grows by `tan(half_angle)` per unit along the axis. Its natural normal points
     /// away from the axis. `radius` is kept positive (the origin is never the apex).
     Cone { frame: Frame, radius: f64, half_angle: f64 },
+    /// The ring torus around axis `frame.z`: a tube of radius `minor` whose centre runs
+    /// round a circle of radius `major` (larger than `minor`) in the plane of
+    /// `frame.x` and `frame.y`. Its natural normal points out of the tube.
+    ///
+    /// The tube angle (0 on the outside, pi/2 on the `frame.z` side) is measured within
+    /// half a turn of `v_mid`, so a face around `v_mid` never meets the place where
+    /// that angle wraps.
+    Torus {
+        frame: Frame,
+        major: f64,
+        minor: f64,
+        #[serde(default)]
+        v_mid: f64,
+    },
 }
 
 impl Surface {
@@ -307,12 +321,28 @@ impl Surface {
                 let radial = (frame.x * l.x + frame.y * l.y).normalize_or(frame.x);
                 radial * half_angle.cos() - frame.z * half_angle.sin()
             }
+            Surface::Torus { frame, major, .. } => {
+                let l = frame.to_local(p);
+                let radial = (frame.x * l.x + frame.y * l.y).normalize_or(frame.x);
+                (p - (frame.origin + radial * *major)).normalize_or(radial)
+            }
         }
+    }
+
+    /// Angle around a torus's tube at `p`, within half a turn of `v_mid`.
+    fn tube_angle(frame: &Frame, major: f64, v_mid: f64, p: DVec3) -> f64 {
+        let l = frame.to_local(p);
+        let rho = DVec2::new(l.x, l.y).length();
+        let phi = l.z.atan2(rho - major);
+        v_mid + (phi - v_mid + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI
     }
 
     pub fn frame(&self) -> &Frame {
         match self {
-            Surface::Plane { frame } | Surface::Cylinder { frame, .. } | Surface::Cone { frame, .. } => frame,
+            Surface::Plane { frame }
+            | Surface::Cylinder { frame, .. }
+            | Surface::Cone { frame, .. }
+            | Surface::Torus { frame, .. } => frame,
         }
     }
 
@@ -323,6 +353,9 @@ impl Surface {
             Surface::Cylinder { frame, radius } => Surface::Cylinder { frame: frame.moved(m), radius },
             Surface::Cone { frame, radius, half_angle } => {
                 Surface::Cone { frame: frame.moved(m), radius, half_angle }
+            }
+            Surface::Torus { frame, major, minor, v_mid } => {
+                Surface::Torus { frame: frame.moved(m), major, minor, v_mid }
             }
         }
     }
@@ -336,6 +369,19 @@ impl Surface {
                 (DVec2::new(l.x, l.y).length() - radius).abs()
             }
             Surface::Cone { .. } => self.cone_offset(p).abs(),
+            Surface::Torus { .. } => self.torus_offset(p).abs(),
+        }
+    }
+
+    /// Signed distance from a torus, positive outside the tube.
+    pub fn torus_offset(&self, p: DVec3) -> f64 {
+        match self {
+            Surface::Torus { frame, major, minor, .. } => {
+                let l = frame.to_local(p);
+                let rho = DVec2::new(l.x, l.y).length();
+                DVec2::new(rho - major, l.z).length() - minor
+            }
+            _ => 0.0,
         }
     }
 
@@ -376,6 +422,13 @@ impl Surface {
                 let l = frame.to_local(p);
                 DVec2::new(l.y.atan2(l.x) * radius, l.z)
             }
+            // `u` is the angle around the axis times `major`, `v` the angle around the
+            // tube (relative to `v_mid`) times `minor`.
+            Surface::Torus { frame, major, minor, v_mid } => {
+                let l = frame.to_local(p);
+                let phi = Self::tube_angle(frame, *major, *v_mid, p);
+                DVec2::new(l.y.atan2(l.x) * major, (phi - v_mid) * minor)
+            }
         }
     }
 
@@ -391,6 +444,11 @@ impl Surface {
                 let r = Self::cone_radius(*radius, *half_angle, uv.y);
                 frame.origin + (frame.x * t.cos() + frame.y * t.sin()) * r + frame.z * uv.y
             }
+            Surface::Torus { frame, major, minor, v_mid } => {
+                let (t, phi) = (uv.x / major, uv.y / minor + v_mid);
+                let radial = frame.x * t.cos() + frame.y * t.sin();
+                frame.origin + radial * (major + minor * phi.cos()) + frame.z * (minor * phi.sin())
+            }
         }
     }
 
@@ -399,6 +457,7 @@ impl Surface {
         match self {
             Surface::Plane { .. } => None,
             Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => Some(TAU * radius),
+            Surface::Torus { major, .. } => Some(TAU * major),
         }
     }
 
@@ -424,6 +483,15 @@ impl Surface {
                     && a.z.cross(b.z).length() < 1e-9
                     && (aa - ab).length() < tol
                     && (ha - hb).abs() < 1e-9
+            }
+            (
+                Surface::Torus { frame: a, major: ma, minor: na, .. },
+                Surface::Torus { frame: b, major: mb, minor: nb, .. },
+            ) => {
+                a.z.cross(b.z).length() < 1e-9
+                    && (a.origin - b.origin).length() < tol
+                    && (ma - mb).abs() < tol
+                    && (na - nb).abs() < tol
             }
             _ => false,
         }
