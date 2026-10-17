@@ -62,3 +62,32 @@ needs.
   positions) rather than "it runs".
 - Commits carry a Developer Certificate of Origin sign-off (`git commit -s`).
 - Write comments and documentation in plain, direct prose.
+
+## Finishing work in a worktree: always open a pull request
+
+When you finish a piece of work in a git worktree, always open a pull request against
+`main`. Do not leave the work as local commits only.
+
+1. Run the checks in "Engineering standards" and fix anything they report.
+2. Commit with a sign-off, push the worktree's branch to `origin`, and open the pull
+   request with `gh pr create`.
+3. Say in the description what changed, how it was tested, and anything that was not
+   verified.
+
+Do not merge the pull request yourself unless the user asks.
+
+## CI and secret scanning: nothing that costs money
+
+Do not add or change GitHub Actions, or any other CI, in a way that costs tokens, credits
+or money.
+
+- Use only free GitHub-hosted runners (`ubuntu-latest`, `windows-latest`, `macos-latest`,
+  which are free for this public repository). No larger or paid runners.
+- No actions or services that need a paid plan, a paid API key or usage-based billing: no
+  AI or LLM review bots, no paid secret scanners, no paid code-scanning or coverage
+  services.
+- For secret scanning, rely on GitHub's built-in secret scanning and push protection
+  (free for public repositories), or a free, local open-source scanner run by hand before
+  pushing. Do not add a scanning workflow that bills per run.
+- Keep the matrix in `.github/workflows/ci.yml` as it is unless the user asks. Ask before
+  adding a new workflow, and say in the pull request why it costs nothing.
