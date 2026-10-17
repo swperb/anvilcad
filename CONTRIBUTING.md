@@ -16,19 +16,23 @@ sign-off with `git commit -s`:
 Unless you say otherwise, your contribution is dual licensed under MIT and Apache-2.0, as
 the README describes.
 
-## Clean-room rules
+## Interoperability rules
 
-AnvilCAD interoperates with commercial CAD, CAM, PDM and PLM systems through open
-standards and published APIs only. Please read [INTEROPERABILITY.md](INTEROPERABILITY.md).
-In particular, do not contribute anything that comes from:
+AnvilCAD studies commercial CAD, CAM, PDM and PLM systems, including by reverse
+engineering, so it can match them and read their data natively. Please read
+[INTEROPERABILITY.md](INTEROPERABILITY.md). In particular:
 
-- decompiling, disassembling or tracing commercial software, or reverse-engineering
-  proprietary file formats;
-- leaked material, or documentation or SDKs under a non-disclosure or restricted licence;
-- confidential information from an employer, client or vendor;
-- code under a licence that is not compatible with MIT and Apache-2.0 (GPL and LGPL code
-  cannot be copied in, though papers and public descriptions of ideas may be studied and
-  cited).
+- write reverse-engineering findings up as a specification in `docs/re/` first, then write
+  AnvilCAD's code from it; never copy code, libraries, help text, icons or artwork from
+  commercial products;
+- do not circumvent licence checks, copy protection, encryption or other protection
+  measures;
+- do not contribute leaked material, documentation or SDKs under a non-disclosure or
+  restricted licence, or confidential information from an employer, client or vendor;
+- do not contribute code under a licence that is not compatible with MIT and Apache-2.0 (GPL
+  and LGPL code cannot be copied in, though papers and public descriptions of ideas may be
+  studied and cited);
+- features must work without SOLIDWORKS or any other commercial software installed.
 
 If you work for a CAD, CAM or PLM vendor, or have seen a vendor's source code or
 confidential documentation, check your obligations before working in related areas, and
