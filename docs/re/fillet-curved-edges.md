@@ -32,6 +32,8 @@ with a scenario of the form
 |---|---|---|
 | Constant Size Fillets, SOLIDWORKS Design Help, <https://help.solidworks.com/2022/english/solidworks/sldworks/r_constant_size_fillets.htm> | SOLIDWORKS 2022 SP05 (page footer) | `ev_3af5195c3df936a5a035767e2c1b9eb7625b49629a4721b8e4432b2cfa644a87`, capture complete |
 | Fillet Overview, SOLIDWORKS Design Help, <https://help.solidworks.com/2021/English/SolidWorks/sldworks/c_fillet_overview.htm> | SOLIDWORKS 2021 | `ev_90b89e9aee2e27ccd19a0fdde662af591f4ec46578357648a0c9ea1397ce057c`, capture complete |
+| Face Fillets, SOLIDWORKS Design Help, <https://help.solidworks.com/2019/English/SolidWorks/sldworks/r_Face_Fillets.htm> | SOLIDWORKS 2019 | `ev_92874d12cb9d4541be5492984be033e89bfe35c987383b03275cd04d375e7b5f`, capture complete |
+| Conic Fillets, What's New in SOLIDWORKS, <https://help.solidworks.com/2014/english/WhatsNew/c_conic_fillets.htm> | SOLIDWORKS 2014 | `ev_d16710332fae420f094cc76fdd00da1b21d5a1311f327043551391d0798bf72c`, capture complete |
 
 The findings below paraphrase those pages; no text was copied.
 
@@ -53,14 +55,18 @@ Observed (stated on the pages):
   rather than meeting in a sharp junction (Constant Size Fillets).
 - Recommendations: larger fillets before smaller ones where several meet at a vertex; one
   feature for edges of equal radius (Overview).
+- A fillet's profile is its cross-sectional shape: circular, or conic shapes weighted by a
+  Rho value (Face Fillets, Conic Fillets). Face fillets can instead follow a hold line,
+  and fillets can be made curvature continuous at their boundaries (Face Fillets).
 
 Silent or ambiguous:
 
-- The pages do not define the fillet's geometry between two curved faces. AnvilCAD uses the
-  usual definition (general practice, not from these pages): the round is swept by a ball
-  of the fillet's radius rolling in contact with both faces, so on a circular edge between
-  faces round about the same axis its cross-section in each half-plane through that axis
-  is the same arc, and the round is part of a torus.
+- The pages do not define where a circular profile's arc lies between two curved faces.
+  AnvilCAD uses the usual definition (general practice, not from these pages): the round
+  is swept by a ball of the fillet's radius rolling in contact with both faces, so each
+  cross-section square to the ball's path is a circular arc of the radius between the two
+  contact points. On a circular edge between faces round about the same axis that makes
+  the round part of a torus.
 - How an edge's run is chosen when tangent propagation meets a branch (three or more
   tangent edges at a vertex) is not described.
 - The default overflow choice is not described beyond "the software picks".
@@ -76,7 +82,12 @@ Silent or ambiguous:
   edges that were not selected.
 - An arc that does not run on into another edge is rounded past its end only where
   nothing lies beyond it, so the round ends cleanly on the faces there.
-- A run mixing convex and concave edges, and edges between faces that are not round about
-  a common axis (a hole drilled into a curved wall, an ellipse or spline edge), still go to
-  the faceted kernel: their rolling-ball round is not a torus, and AnvilCAD does not yet
-  build freeform rounds. Overflow choices and round corners are not offered yet.
+- Any other edge between two faces (a hole slanting through a plate, a hole drilled across
+  a boss, a boss standing on a shaft, faces of any kind the kernel has) gets a rolling-ball
+  round: its sections are solved exactly, square to the edge, and joined into a B-spline
+  surface (rational across, cubic along) refined until it follows them to 1e-7 mm. The
+  round meets both faces tangentially. Closed edges are rounded all the way round.
+- Chamfers on such edges, rolling-ball rounds along a smooth run of several edges, runs
+  mixing convex and concave edges, conic and curvature-continuous profiles, hold lines,
+  overflow choices and round corners are not offered yet; those fall back to the faceted
+  kernel or are refused.

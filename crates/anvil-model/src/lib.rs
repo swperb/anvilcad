@@ -450,6 +450,72 @@ mod exact_round_fillets {
 }
 
 #[cfg(test)]
+mod exact_rolling_fillets {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A boss of radius 12 with a hole of radius 4 drilled across it: the hole's rims on
+    /// the boss are saddle-shaped, between faces with no common axis, so their fillet is
+    /// a rolling-ball round, and the part stays on the exact kernel.
+    #[test]
+    fn cross_hole_rims_fillet_exactly() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        let boss_circle = sf.sketch.add_circle(c, 12.0);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let boss = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(40.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        let c = sf.sketch.add_point(v2(0.0, 20.0));
+        let hole_circle = sf.sketch.add_circle(c, 4.0);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let hole = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::ThroughAllBoth,
+            depth: Dim::Value(0.0),
+            reverse: false,
+            op: BodyOp::Cut,
+        }));
+        let before = doc.rebuild().body.mass_properties().volume;
+        let rim =
+            EdgeRef::new(FaceId::side(boss, boss_circle as u32), FaceId::side(hole, hole_circle as u32));
+        let fillet =
+            doc.add_feature(FeatureKind::Fillet(FilletFeature { edges: vec![rim], radius: Dim::Value(1.0) }));
+        let st = doc.rebuild();
+        assert_eq!(st.faceted_from, None);
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert!(st.exact_features.contains(&fillet));
+        // Both rims rounded. Round each the faces meet at 90 degrees at the hole's top
+        // and bottom and 70.5 at its sides; a unit round takes off cot(phi / 2) -
+        // (pi - phi) / 2 per unit length there (as between flat faces; the boss's curved
+        // wall adds about a tenth, so the measure is allowed 20% over).
+        let pi = std::f64::consts::PI;
+        let n = 20_000;
+        let one: f64 = (0..n)
+            .map(|k| {
+                let a = 2.0 * pi * (k as f64 + 0.5) / n as f64;
+                let x = 4.0 * a.sin();
+                let y = (144.0 - x * x).sqrt();
+                let speed =
+                    (16.0 * a.cos().powi(2) * (1.0 + x * x / (y * y)) + 16.0 * a.sin().powi(2)).sqrt();
+                let phi = pi - (-(a.sin().powi(2)) / 3.0).acos();
+                let corner = 1.0 / (phi / 2.0).tan() - (pi - phi) / 2.0;
+                corner * speed * (2.0 * pi / n as f64) * (4.25 / 4.0)
+            })
+            .sum();
+        let taken = before - st.body.mass_properties().volume;
+        assert!(taken > 2.0 * one && taken < 2.4 * one, "{taken} vs about {}", 2.0 * one);
+        assert_eq!(st.body.open_edges(), 0);
+    }
+}
+
+#[cfg(test)]
 mod revolve_open_profile {
     use super::*;
     use anvil_kernel::v2;
