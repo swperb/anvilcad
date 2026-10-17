@@ -4,8 +4,13 @@
 //! - [`obj`]: Wavefront OBJ export
 //! - [`step`]: STEP AP214 export (faceted boundary representation)
 //! - [`solidworks`]: identifies SOLIDWORKS files and their container generation
+//! - [`props`]: reads custom properties from other programs' files without modifying them,
+//!   and keeps AnvilCAD's own properties for those files in a sidecar
 
+#[cfg(windows)]
+pub mod com;
 pub mod obj;
+pub mod props;
 pub mod solidworks;
 pub mod step;
 pub mod stl;
