@@ -4,7 +4,8 @@
 //! The app keeps a [`Renderer`] holding the latest scene. Each frame it hands egui a
 //! paint callback; the GPU side ([`Gpu`]) lives in egui's callback resources, uploads a
 //! new scene when its version changes, and draws into egui's own render pass. Without a
-//! GPU (the UI tests) the callback is recorded but never run.
+//! GPU (the UI tests) the callback is recorded but never run; the headless harness draws
+//! the same callback into an offscreen texture.
 
 use anvil_kernel::{FaceId, Mesh, Vec3};
 use eframe::egui;
@@ -177,8 +178,19 @@ pub struct Gpu {
 
 /// Creates the GPU resources. `msaa` and `depth` must match egui's render pass.
 pub fn install(rs: &egui_wgpu::RenderState, msaa: u32, depth: Option<wgpu::TextureFormat>) {
-    let gpu = Gpu::new(&rs.device, rs.target_format, msaa, depth);
-    rs.renderer.write().callback_resources.insert(gpu);
+    install_on(&rs.device, &mut rs.renderer.write(), rs.target_format, msaa, depth);
+}
+
+/// Creates the GPU resources on an egui renderer that draws to a `format` target, such as
+/// the headless harness's offscreen texture.
+pub fn install_on(
+    device: &wgpu::Device,
+    renderer: &mut egui_wgpu::Renderer,
+    format: wgpu::TextureFormat,
+    msaa: u32,
+    depth: Option<wgpu::TextureFormat>,
+) {
+    renderer.callback_resources.insert(Gpu::new(device, format, msaa, depth));
 }
 
 impl Gpu {
