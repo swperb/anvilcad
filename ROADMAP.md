@@ -23,20 +23,23 @@ when they are in the code and tested.
 ## CAM
 
 Inspired by what integrated CAM systems offer, built from published research. Detailed
-plans live in `docs/cam/`.
+plans live in `docs/cam/`. A first library (`crates/anvil-cam`) does 2.5D milling from
+recognised features to verified, simulated G-code; see the README. Next:
 
-1. 2.5D milling: adaptive (constant engagement) clearing, facing, contour and profile
-   finishing, drilling cycles; a tool and feeds-and-speeds library keyed to the material
-   library; setups, work offsets and stock.
-2. Feature recognition from the part: holes, pockets, bosses and faces become operations
-   automatically, with the rules editable.
-3. Simulation: stock removal, gouge checks against the part, holder and shank collisions,
-   rapid moves through material.
-4. Post processors as shared, declarative data with an authoritative verifier, a
-   community registry with human review, and optional AI-assisted edits and AI review of
-   edits (advisory only).
-5. 3-axis surfacing (parallel, waterline, scallop, pencil), rest machining, then 4- and
-   5-axis indexed and simultaneous machining, and turning and mill-turn.
+1. A CAM tab in the application: setups, stock, the operation list, tool library, tool
+   path display, simulation playback with findings shown on the part, posting.
+2. 2.5D milling: faster adaptive clearing with fewer links, trochoidal passes for narrow
+   channels, rest machining with smaller tools, open slots and steps, spot drilling,
+   tapping and boring, hole-making chains.
+3. Feature recognition: open slots and steps, counterbores and countersinks, floor
+   fillets and chamfers, tapped holes, features facing other directions for indexed
+   setups, with the rules editable.
+4. Post processors: the community registry service with signed index releases, pinning
+   and reporting; more example posts and verifier coverage; a post editor that shows the
+   diff and the certificate.
+5. 3-axis surfacing (parallel, waterline, scallop, pencil), holder-aware tool selection,
+   tool-maker cutting data, then 4- and 5-axis indexed and simultaneous machining, and
+   turning and mill-turn.
 
 ## PDM (product data management)
 

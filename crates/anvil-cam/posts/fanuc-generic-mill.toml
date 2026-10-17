@@ -1,0 +1,56 @@
+# Generic three-axis vertical mill with a Fanuc-style control.
+#
+# Written for AnvilCAD from the publicly documented RS274 dialect most Fanuc-style
+# controls accept. Check the codes against your machine's manual before use: builders
+# assign M codes differently, and travel and feed limits below are placeholders for a
+# mid-size machine with its home at machine X0 Y0 Z0.
+
+[post]
+name = "Generic Fanuc-style mill"
+version = "1.0.0"
+description = "Three-axis vertical machining centre with a Fanuc-style control, metric, automatic tool changer, canned drilling cycles."
+authors = ["AnvilCAD contributors"]
+license = "MIT OR Apache-2.0"
+
+[format]
+units = "mm"
+decimals = 3
+feed_decimals = 0
+line_start = 10
+line_step = 10
+comments = "parens"
+max_line_length = 128
+percent = true
+two_digit_codes = false
+
+[capabilities]
+arcs = true
+helical_arcs = true
+canned_cycles = true
+tool_changer = true
+max_arc_sweep_deg = 180.0
+
+[machine]
+x = [-800.0, 0.0]
+y = [-450.0, 0.0]
+z = [-500.0, 0.0]
+max_feed = 10000.0
+max_rpm = 12000.0
+min_rpm = 50.0
+max_tool = 30
+
+[allow]
+g = ["G0", "G1", "G2", "G3", "G4", "G17", "G21", "G28", "G40", "G43", "G49", "G54", "G55", "G56", "G57", "G58", "G59", "G73", "G80", "G81", "G82", "G83", "G90", "G91", "G98", "G99"]
+m = ["M0", "M1", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M30"]
+words = "GMXYZIJKFSTHPQRNO"
+
+[blocks]
+program_start = ["O{program_number} ({program_name})", "G90 G17 {units_code} G40 G49 G80", "{work_offset}"]
+tool_change = ["G91 G28 Z0.", "G90", "T{tool} M6 ({tool_name})", "G43 H{length_offset} Z{safe_z}"]
+spindle_on = ["S{rpm} {spindle_code}"]
+spindle_off = ["M5"]
+coolant_flood = ["M8"]
+coolant_mist = ["M7"]
+coolant_off = ["M9"]
+optional_stop = ["M1"]
+program_end = ["M5", "M9", "G91 G28 Z0.", "G90", "M30"]

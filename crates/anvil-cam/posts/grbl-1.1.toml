@@ -1,0 +1,52 @@
+# GRBL 1.1 router or small mill.
+#
+# Written for AnvilCAD from GRBL 1.1's published list of supported G-code
+# (https://github.com/gnea/grbl). GRBL has no canned cycles and no tool changer, so
+# drilling is written as plain moves and tool changes stop the program for the
+# operator. Travel limits are placeholders for a 300 x 300 x 80 machine homed at the
+# back right top (machine coordinates negative), as GRBL does by default.
+
+[post]
+name = "GRBL 1.1"
+version = "1.0.0"
+description = "GRBL 1.1 controller, metric, manual tool changes, no canned cycles."
+authors = ["AnvilCAD contributors"]
+license = "MIT OR Apache-2.0"
+
+[format]
+units = "mm"
+decimals = 3
+feed_decimals = 0
+comments = "parens"
+max_line_length = 70
+
+[capabilities]
+arcs = true
+helical_arcs = true
+canned_cycles = false
+tool_changer = false
+max_arc_sweep_deg = 180.0
+
+[machine]
+x = [-300.0, 0.0]
+y = [-300.0, 0.0]
+z = [-80.0, 0.0]
+max_feed = 5000.0
+max_rpm = 24000.0
+max_tool = 99
+
+[allow]
+g = ["G0", "G1", "G2", "G3", "G4", "G17", "G21", "G40", "G49", "G54", "G55", "G56", "G57", "G58", "G59", "G90", "G91.1", "G94"]
+m = ["M0", "M2", "M3", "M4", "M5", "M8", "M9", "M30"]
+words = "GMXYZIJKFSPN"
+
+[blocks]
+program_start = ["(PROGRAM {program_name})", "G17 {units_code} G90 G94 G91.1 G40 G49", "{work_offset}"]
+tool_change = ["M5", "G0 Z{safe_z}", "(CHANGE TO TOOL {tool} {tool_name} THEN RESUME)", "M0"]
+spindle_on = ["S{rpm} {spindle_code}", "G4 P2"]
+spindle_off = ["M5"]
+coolant_flood = ["M8"]
+coolant_mist = []
+coolant_off = ["M9"]
+optional_stop = ["M0"]
+program_end = ["M5", "M9", "M2"]

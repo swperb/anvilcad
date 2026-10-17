@@ -76,6 +76,27 @@ system are still ahead; see the roadmap.
   otherwise), STL (binary) and OBJ
 - SOLIDWORKS files are identified and explained (see below)
 
+**CAM (library and tests only; no user interface yet)**
+- `crates/anvil-cam`: 2.5D milling from the top of the part (see `docs/cam/`)
+- Feature recognition from the part: through and blind holes from cylindrical faces,
+  closed pockets with islands from planar floors and vertical walls
+- Adaptive clearing with a hard cap on radial engagement, checked by an independent
+  verifier that replays the tool path into its own material model; helical or side entry,
+  links through cleared space, optional feed raised for chip thinning
+- Facing, contour finishing with cutter compensation done in CAM (exact arcs, lead-in and
+  lead-out arcs), drilling cycles (drill, chip-break peck, full peck)
+- Tool library (flat, ball, bull nose, drill) with holders, and starting cutting data for
+  each material in the library; setups with work offsets and stock; an automatic
+  operation plan from the recognised features
+- Stock simulation on height fields with gouge, rapid-through-material, shank and holder
+  collision checks
+- Post processors as declarative TOML (examples for a generic Fanuc-style mill, LinuxCNC
+  and GRBL), a G-code verifier that rejects undeclared dangerous constructs (G10 writes,
+  macro variables, subprogram calls, file output, override locks and others), and
+  certification that requires both the verifier and the simulator to pass
+- Optional, off by default: AI-proposed post edits and AI review of edits through the
+  Claude API, advisory only (they can add warnings or block, never approve)
+
 **Application**
 - Undo/redo for every change, unsaved-changes prompts
 - Shaded view with edges, standard views, zoom to fit, face highlighting and picking

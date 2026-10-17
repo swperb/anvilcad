@@ -1,0 +1,51 @@
+# LinuxCNC three-axis mill.
+#
+# Written for AnvilCAD from the LinuxCNC G-code reference
+# (https://linuxcnc.org/docs/html/gcode/g-code.html). Travel limits are placeholders:
+# set them to your machine's [AXIS] limits, in machine coordinates.
+
+[post]
+name = "LinuxCNC mill"
+version = "1.0.0"
+description = "Three-axis mill running LinuxCNC, metric, tool changer configured in LinuxCNC, canned drilling cycles."
+authors = ["AnvilCAD contributors"]
+license = "MIT OR Apache-2.0"
+
+[format]
+units = "mm"
+decimals = 4
+feed_decimals = 1
+comments = "parens"
+max_line_length = 254
+percent = true
+
+[capabilities]
+arcs = true
+helical_arcs = true
+canned_cycles = true
+tool_changer = true
+max_arc_sweep_deg = 180.0
+
+[machine]
+x = [-10.0, 600.0]
+y = [-10.0, 400.0]
+z = [-300.0, 10.0]
+max_feed = 6000.0
+max_rpm = 24000.0
+max_tool = 99
+
+[allow]
+g = ["G0", "G1", "G2", "G3", "G4", "G17", "G21", "G40", "G43", "G49", "G54", "G55", "G56", "G57", "G58", "G59", "G64", "G73", "G80", "G81", "G82", "G83", "G90", "G91.1", "G94", "G98", "G99"]
+m = ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M30"]
+words = "GMXYZIJKFSTHPQRN"
+
+[blocks]
+program_start = ["(PROGRAM {program_name})", "G17 {units_code} G40 G49 G80 G90 G94 G91.1", "G64 P0.01", "{work_offset}"]
+tool_change = ["T{tool} M6 ({tool_name})", "G43 H{length_offset}", "G0 Z{safe_z}"]
+spindle_on = ["S{rpm} {spindle_code}"]
+spindle_off = ["M5"]
+coolant_flood = ["M8"]
+coolant_mist = ["M7"]
+coolant_off = ["M9"]
+optional_stop = ["M1"]
+program_end = ["M5", "M9", "M2"]
