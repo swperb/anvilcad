@@ -120,7 +120,7 @@ pub fn extrude(frame: &Frame, region: &Region, z0: f64, z1: f64) -> Result<Solid
 }
 
 /// The 3D curve for a 2D segment placed in `frame`, with its parameter range.
-fn segment_curve(frame: &Frame, seg: &Segment) -> (Curve, f64, f64) {
+pub(crate) fn segment_curve(frame: &Frame, seg: &Segment) -> (Curve, f64, f64) {
     match *seg {
         Segment::Line { a, b } => {
             let pa = frame.to_world(a);

@@ -372,8 +372,23 @@ impl Document {
                 };
                 let ang = num(&rf.angle, "angle")?.to_radians();
                 let tool = revolve(&profiles, &frame, a, b - a, ang, id).map_err(|e| e.to_string())?;
-                st.leave_exact(id, "revolves use the faceted kernel".into());
-                apply(&mut st.body, &tool, rf.op)?;
+                let mut exact_tools = None;
+                let done = st.exact_step(id, |bodies| {
+                    let tools = exact::revolve(&profiles, &frame, a, b - a, ang, id)?;
+                    let mut out = bodies.to_vec();
+                    for t in &tools {
+                        out = exact::combine(&out, t, rf.op)?;
+                    }
+                    exact_tools = Some(tools);
+                    Ok(out)
+                });
+                if done {
+                    if let Some(t) = exact_tools {
+                        st.exact_tools.insert(id, (t, rf.op));
+                    }
+                } else {
+                    apply(&mut st.body, &tool, rf.op)?;
+                }
                 st.tools.insert(id, (tool, rf.op));
             }
             FeatureKind::LinearPattern(pf) => {

@@ -8,8 +8,8 @@ when they are in the code and tested.
 
 ## CAD
 
-1. Kernel: surfaces of revolution, so revolves, shells and curved-edge fillets build
-   exactly; fillets on curved-to-curved edges, spherical corner blends, variable-radius
+1. Kernel: shells and curved-edge fillets built exactly; fillets on curved-to-curved
+   edges, spherical corner blends, variable-radius
    fillets, draft; freeform faces that touch other surfaces without crossing them, and
    results that would touch themselves at a single point.
 2. Features: a hole feature with standard sizes (ISO and ANSI clearance, tapped,
