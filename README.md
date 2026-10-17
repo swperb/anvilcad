@@ -280,16 +280,22 @@ Kernel design notes:
   reach) are cut tolerantly: a traced cut is bent onto the point where it crosses such
   an edge. `anvil-kernel` is a faceted kernel that covers everything else.
 - The rebuild runs on the exact kernel while every feature so far is one it supports
-  (extrudes, revolves, cuts, patterns, fillets and chamfers on straight edges between
-  flat faces). A revolved profile of lines and arcs sweeps planes, cylinders, cones,
-  spheres and tori exactly, with pointed cones and sphere poles where it meets the
-  axis.
+  (extrudes, revolves, cuts, patterns, shells, and fillets and chamfers on straight
+  edges between flat faces and on circular edges between faces round about the same
+  axis). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
+  and tori exactly, with pointed cones and sphere poles where it meets the axis. A round
+  edge is filleted with a torus (chamfered with a cone) by a boolean with the corner's
+  cross-section revolved about the axis. A shell is the part less its cavity: every
+  face offset inwards onto its exact offset surface (removed faces outwards), each edge
+  and corner solved where the offset faces meet, keeping the part's shape; a wall too
+  thick for that, a sealed hollow or a freeform face goes to the faceted kernel. The
+  behaviour is specified in [docs/re/shell-and-fillet.md](docs/re/shell-and-fillet.md).
   After each exact feature the faceted body is regenerated from the exact result, so
   display, picking, mass properties, export and later features work unchanged. The first
   feature the exact kernel cannot build, or declines, hands the part over to the faceted
   kernel for the rest of the tree. A feature is never built worse than the faceted kernel
-  alone would build it. On the bundled sample part the extrudes, cuts, linear pattern and
-  first fillet build exactly, and the result matches the faceted-only volume to 0.014%.
+  alone would build it. The bundled sample part builds exactly from start to finish, its
+  boss's rim and root filleted with tori, and matches the faceted-only volume to 0.013%.
 - Face names are shared by both kernels: the feature id plus a stable index derived from
   the sketch entity (0 start cap, 1 end cap, 2 + entity for side faces), so sketches on
   faces and edge selections survive whichever kernel built the face.
