@@ -82,6 +82,20 @@ pub fn tessellate(solid: &Solid, params: &TessParams) -> Result<TriMesh> {
         if let Some(last) = pts.last_mut() {
             *last = b.point;
         }
+        // A sample within tolerance of a pinned end (a knot just beside a healed vertex)
+        // only makes a sliver there, which faces on either side can lay out differently.
+        let n = pts.len();
+        if n > 2 {
+            let near =
+                |p: DVec3, q: DVec3| (p - q).length() <= crate::tol::LINEAR * (1.0 + q.length() * 1e-6);
+            let mut kept = Vec::with_capacity(n);
+            for (i, p) in pts.iter().enumerate() {
+                if i == 0 || i == n - 1 || !(near(*p, a.point) || near(*p, b.point)) {
+                    kept.push(*p);
+                }
+            }
+            pts = kept;
+        }
         edges.push(pts);
     }
     let mut mesh = TriMesh { edges, ..TriMesh::default() };

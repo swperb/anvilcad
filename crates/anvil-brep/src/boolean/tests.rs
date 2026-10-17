@@ -570,6 +570,58 @@ fn pointed_cone_cut_at_an_angle() {
     assert!(d[0].edges.iter().any(|e| matches!(e.curve, Curve::Spline(_))));
 }
 
+#[test]
+fn cut_through_a_drill_point() {
+    // A pointed cone (apex at the origin, radius 5 at height 10) and a 3 mm cylinder
+    // across it along y whose wall runs through the apex: the cut's edge on the cone
+    // passes through the tip, so the cone face is split there.
+    let c = pointed_cone(5.0, 10.0);
+    let bar = cylinder(DVec3::new(3.0, 0.0, 0.0), DVec3::Y, 3.0, -20.0, 20.0);
+    // What the bar takes: at height z the cone's disc (radius z / 2) within the strip
+    // |x - 3| <= sqrt(9 - z^2), integrated over 0 <= z <= 3 by Simpson's rule.
+    let disc_left_of = |x: f64, r: f64| {
+        let u = (x / r).clamp(-1.0, 1.0);
+        r * r * (u.asin() + u * (1.0 - u * u).sqrt() + PI / 2.0)
+    };
+    let slice = |z: f64| {
+        let (r, w) = (z / 2.0, (9.0 - z * z).max(0.0).sqrt());
+        if r <= 0.0 { 0.0 } else { disc_left_of(3.0 + w, r) - disc_left_of(3.0 - w, r) }
+    };
+    let n = 20_000;
+    let h = 3.0 / n as f64;
+    let taken = (0..=n)
+        .map(|i| {
+            let k = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            k * slice(i as f64 * h)
+        })
+        .sum::<f64>()
+        * h
+        / 3.0;
+    let fine = |s: &[Solid]| -> f64 {
+        s.iter()
+            .map(|x| {
+                check::validate(x).expect("valid");
+                let m = tess::tessellate(x, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+                assert!(m.is_watertight(), "not watertight");
+                mass::properties(&m).volume
+            })
+            .sum()
+    };
+    let i = boolean(&c, &bar, BoolOp::Intersect).expect("intersect");
+    assert!(close(fine(&i), taken, 1e-4), "{} vs {taken}", fine(&i));
+    let d = boolean(&c, &bar, BoolOp::Subtract).expect("subtract");
+    let whole = PI * 25.0 * 10.0 / 3.0;
+    assert!(close(fine(&d), whole - taken, 1e-4), "{} vs {}", fine(&d), whole - taken);
+    // The cut's edges on the cone end at its apex.
+    assert!(d.iter().flat_map(|s| &s.vertices).any(|v| v.point.length() < 1e-9));
+}
+
 /// A 30 x 20 block 5 deep whose top is a freeform bump (a bicubic patch over the same
 /// rectangle, flat along its edges), and its volume by integrating the patch's height.
 fn bumped_block() -> (Solid, f64) {
