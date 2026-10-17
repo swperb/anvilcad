@@ -343,6 +343,55 @@ mod import_tests {
 }
 
 #[cfg(test)]
+mod exact_shell {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A 40 x 30 x 20 box with its four upright edges rounded (radius 5), opened at the
+    /// top with walls 2 thick: built on the exact kernel, the inside rounds have radius 3.
+    #[test]
+    fn rounded_box_shells_exactly() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        sf.sketch.add_rectangle(v2(0.0, 0.0), v2(40.0, 30.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(20.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let side = |e: u32| FaceId::side(base, e);
+        let corners = (0..4).map(|i| EdgeRef::new(side(i), side((i + 1) % 4))).collect();
+        doc.add_feature(FeatureKind::Fillet(FilletFeature { edges: corners, radius: Dim::Value(5.0) }));
+        let top = FaceId { feature: base, index: FaceId::END_CAP };
+        let shell = doc
+            .add_feature(FeatureKind::Shell(ShellFeature { remove: vec![top], thickness: Dim::Value(2.0) }));
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert_eq!(st.faceted_from, None);
+        assert!(st.exact_features.contains(&shell));
+        // Outside: 40 x 30 less four corners (25 - 25 pi / 4), 20 tall. Inside: 36 x 26
+        // less four corners (9 - 9 pi / 4), 18 deep.
+        let pi = std::f64::consts::PI;
+        let want =
+            (1200.0 - 4.0 * (25.0 - 25.0 * pi / 4.0)) * 20.0 - (936.0 - 4.0 * (9.0 - 9.0 * pi / 4.0)) * 18.0;
+        let exact = st.exact.as_ref().expect("exact");
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        let v: f64 = exact
+            .iter()
+            .map(|b| {
+                anvil_brep::mass::properties(&anvil_brep::tess::tessellate(b, &fine).expect("tess")).volume
+            })
+            .sum();
+        assert!((v - want).abs() / want < 1e-5, "{v} vs {want}");
+        // The cavity's faces are the shell's, numbered after the faces they follow.
+        assert!(exact[0].faces.iter().any(|f| f.owner == shell));
+    }
+}
+
+#[cfg(test)]
 mod revolve_open_profile {
     use super::*;
     use anvil_kernel::v2;

@@ -481,8 +481,9 @@ impl Document {
             }
             FeatureKind::Shell(s) => {
                 let thickness = num(&s.thickness, "thickness")?;
-                st.leave_exact(id, "shells use the faceted kernel".into());
-                st.body = shell(&st.body, &s.remove, thickness, id).map_err(|e| e.to_string())?;
+                if !st.exact_step(id, |bodies| exact::shell(bodies, &s.remove, thickness, id)) {
+                    st.body = shell(&st.body, &s.remove, thickness, id).map_err(|e| e.to_string())?;
+                }
             }
         }
         Ok(())

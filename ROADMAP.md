@@ -8,9 +8,10 @@ when they are in the code and tested.
 
 ## CAD
 
-1. Kernel: shells and curved-edge fillets built exactly; fillets on curved-to-curved
-   edges, spherical corner blends, variable-radius
-   fillets, draft; freeform faces that touch other surfaces without crossing them, and
+1. Kernel: fillets on other curved edges (where faces are not round about the edge's
+   axis), spherical corner blends, variable-radius fillets, draft; shells of freeform
+   faces, sealed hollows (a second shell inside a solid), and walls thick enough to
+   change a part's shape; freeform faces that touch other surfaces without crossing them, and
    results that would touch themselves at a single point.
 2. Features: a hole feature with standard sizes (ISO and ANSI clearance, tapped,
    counterbored and countersunk holes), mirror, sweep, loft, multi-body parts, sheet metal

@@ -149,11 +149,11 @@ mod tests {
 
 #[cfg(test)]
 mod exact_tests {
-    /// The sample part builds on the exact kernel up to the first fillet on a curved
-    /// edge, then hands over to the faceted kernel, and still matches the volume the
-    /// faceted kernel alone produces (38845.67 mm^3 before the exact kernel existed).
+    /// The sample part builds entirely on the exact kernel (its boss's rim and root are
+    /// round edges, filleted with tori), and matches the volume the faceted kernel alone
+    /// produced (38845.67 mm^3 before the exact kernel existed).
     #[test]
-    fn sample_part_builds_exactly_then_hands_over() {
+    fn sample_part_builds_exactly() {
         let mut doc = super::sample_part();
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -163,12 +163,13 @@ mod exact_tests {
             .filter(|f| st.exact_features.contains(&f.id))
             .map(|f| f.name.as_str())
             .collect();
-        for name in ["Boss-Extrude1", "Cut-Extrude1", "Boss-Extrude2", "LPattern1", "Fillet1"] {
+        for name in
+            ["Boss-Extrude1", "Cut-Extrude1", "Boss-Extrude2", "LPattern1", "Fillet1", "Fillet2", "Fillet3"]
+        {
             assert!(exact.contains(&name), "{name} was not built exactly: {exact:?}");
         }
-        let (from, why) = st.faceted_from.clone().expect("hands over at the curved-edge fillet");
-        let name = doc.features.iter().find(|f| f.id == from).map(|f| f.name.clone());
-        assert_eq!(name.as_deref(), Some("Fillet2"), "{why}");
+        assert_eq!(st.faceted_from, None);
+        assert!(anvil_model::step::exact_step(&st, "sample").is_some());
         let v = st.body.mass_properties().volume;
         assert!((v - 38845.67).abs() / 38845.67 < 1e-3, "{v}");
         assert_eq!(st.body.open_edges(), 0);
@@ -228,13 +229,12 @@ mod exact_tests {
         }
     }
 
-    /// The sample part is not all exact, so its STEP export is faceted. Importing that
-    /// file back must give the same, closed solid.
+    /// A faceted STEP export (what a part not built exactly is written as) of the sample
+    /// part imports back as the same, closed solid.
     #[test]
     fn faceted_step_export_imports_back() {
         let mut doc = super::sample_part();
         let st = doc.rebuild();
-        assert!(anvil_model::step::exact_step(&st, "sample").is_none());
         let text = anvil_io::step::write(&st.body, "sample");
         if let Ok(dir) = std::env::var("ANVIL_DUMP_STEP") {
             let _ = std::fs::write(std::path::Path::new(&dir).join("sample-faceted.step"), &text);

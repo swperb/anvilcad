@@ -90,6 +90,37 @@ pub fn revolve(
     Ok(tools)
 }
 
+/// Shells the bodies: hollowed to a wall of `thickness`, open through the faces named in
+/// `remove`. Cavity faces belong to `feature`, numbered as the faceted kernel numbers
+/// them (2 plus the rank of the face they follow among all the part's face names).
+pub fn shell(
+    bodies: &[brep::Solid],
+    remove: &[FaceId],
+    thickness: f64,
+    feature: u32,
+) -> Result<Vec<brep::Solid>, String> {
+    let names: std::collections::BTreeSet<FaceId> =
+        bodies.iter().flat_map(|b| b.faces.iter().map(face_id)).collect();
+    if let Some(r) = remove.iter().find(|r| !names.contains(r)) {
+        return Err(format!("face <{}:{}> chosen for removal no longer exists", r.feature, r.index));
+    }
+    let rank: std::collections::HashMap<FaceId, u32> =
+        names.iter().enumerate().map(|(i, id)| (*id, 2 + i as u32)).collect();
+    let mut out = Vec::new();
+    for body in bodies {
+        let open: Vec<usize> =
+            (0..body.faces.len()).filter(|&f| remove.contains(&face_id(&body.faces[f]))).collect();
+        let mut cavity = brep::shell::cavity(body, &open, thickness).map_err(|e| e.to_string())?;
+        for (f, face) in cavity.faces.iter_mut().enumerate() {
+            let index = rank.get(&face_id(&body.faces[f])).copied().ok_or("a face has no name")?;
+            face.tag = BrepTag::Imported { index };
+            face.owner = feature;
+        }
+        out.extend(boolean::boolean(body, &cavity, BoolOp::Subtract).map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
 fn boxes_touch(a: (DVec3, DVec3), b: (DVec3, DVec3)) -> bool {
     let pad = 1e-6;
     a.0.cmple(b.1 + pad).all() && b.0.cmple(a.1 + pad).all()
