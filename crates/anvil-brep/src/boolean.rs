@@ -87,6 +87,20 @@ fn bent(c: &Curve, t0: f64, t1: f64, a: DVec3, b: DVec3) -> Option<(Curve, f64, 
     Some((Curve::Spline(std::sync::Arc::new(s)), t0, t1))
 }
 
+/// True when surfaces `a` and `b` touch along `c` rather than cross it: their normals
+/// are parallel at points spread along it.
+fn touching(c: &Curve, a: &Surface, b: &Surface) -> bool {
+    let (t0, t1) = match c {
+        Curve::Spline(sp) => sp.domain(),
+        Curve::Line { .. } => (0.0, 1.0),
+        Curve::Circle { .. } | Curve::Ellipse { .. } => (0.0, TAU),
+    };
+    (0..7).all(|k| {
+        let p = c.eval(t0 + (t1 - t0) * (k as f64 + 0.5) / 7.0);
+        a.normal_at(p).cross(b.normal_at(p)).length() < 1e-6
+    })
+}
+
 fn boxes_overlap(a: (DVec3, DVec3), b: (DVec3, DVec3), pad: f64) -> bool {
     a.0.x <= b.1.x + pad
         && b.0.x <= a.1.x + pad
@@ -161,6 +175,9 @@ struct Engine<'a> {
     pieces: [Vec<Vec<Use>>; 2],
     /// Per face: pooled edges cutting through its interior.
     cuts: [Vec<BTreeSet<usize>>; 2],
+    /// Points where a face of each solid touch without crossing: (point, face of the
+    /// first solid, face of the second).
+    touches: Vec<(DVec3, usize, usize)>,
 }
 
 fn unwrap(prev: f64, u: f64, period: f64) -> f64 {
@@ -246,6 +263,7 @@ impl<'a> Engine<'a> {
                 vec![BTreeSet::new(); solids[0].faces.len()],
                 vec![BTreeSet::new(); solids[1].faces.len()],
             ],
+            touches: Vec::new(),
         };
         for (s, solid) in solids.iter().enumerate() {
             let ids = solid.vertices.iter().map(|v| eng.add_point(v.point, 0.0)).collect();
@@ -295,6 +313,64 @@ impl<'a> Engine<'a> {
         locate_in(self.solids[s], f, &self.infos[s][f], p)
     }
 
+    /// Records where faces `fa` and `fb` touch along `c`: a point of `c` inside both.
+    fn note_touch(&mut self, fa: usize, fb: usize, c: &Curve) {
+        let (t0, t1) = match c {
+            Curve::Spline(sp) => sp.domain(),
+            Curve::Line { .. } => {
+                // A line is unbounded: look along it over both faces' boxes.
+                let (lo, hi) = self.infos[0][fa].bbox;
+                let r = (hi - lo).length();
+                let mid = c.param_of((lo + hi) * 0.5);
+                (mid - r, mid + r)
+            }
+            Curve::Circle { .. } | Curve::Ellipse { .. } => (0.0, TAU),
+        };
+        // Inside both faces if it can be; on their boundaries (a seam, say) otherwise.
+        let n = 64;
+        let pts: Vec<(DVec3, Loc, Loc)> = (0..n)
+            .map(|k| c.eval(t0 + (t1 - t0) * (k as f64 + 0.5) / n as f64))
+            .map(|p| (p, self.locate(0, fa, p), self.locate(1, fb, p)))
+            .filter(|(_, la, lb)| *la != Loc::Outside && *lb != Loc::Outside)
+            .collect();
+        let best = pts.iter().find(|(_, la, lb)| *la == Loc::Inside && *lb == Loc::Inside).or(pts.first());
+        if let Some(&(p, _, _)) = best {
+            self.touches.push((p, fa, fb));
+        }
+    }
+
+    /// Refuses a result in which one body touches itself where the solids' faces touched:
+    /// both faces kept in it, facing each other across no material (a hole grazing a
+    /// side, say). Faces that join smoothly there (a fillet meeting the faces it blends)
+    /// face the same way and are fine; bodies that only touch each other stay separate.
+    fn check_thickness(&self, bodies: &[Solid]) -> Result<()> {
+        for &(p, fa, fb) in &self.touches {
+            let (sa, sb) = (self.surface(0, fa), self.surface(1, fb));
+            for body in bodies {
+                // Outward normals at `p` of the body's faces on `s` through it.
+                let outward = |s: &Surface| -> Vec<DVec3> {
+                    body.faces
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, f)| {
+                            f.surface.coincident(s, TOL)
+                                && f.surface.distance(p) < ON
+                                && face_contains(body, *i, p)
+                        })
+                        .map(|(_, f)| f.normal_at(p))
+                        .collect()
+                };
+                let (na, nb) = (outward(sa), outward(sb));
+                if na.iter().any(|a| nb.iter().any(|b| a.dot(*b) < 0.0)) {
+                    return Err(KernelError::Unsupported(
+                        "zero-thickness geometry (the result would touch itself along a curve)".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Like [`Self::locate`] for pooled point `i`, but a point with slack that lies on one
     /// of the face's edges is on its boundary even where that edge strays off the surface.
     fn locate_point(&self, s: usize, f: usize, i: usize) -> Loc {
@@ -321,7 +397,9 @@ impl<'a> Engine<'a> {
         let mut pieces = self.split_faces()?;
         let mut keep = self.select(&pieces, op)?;
         self.heal_whole_faces(&mut pieces, &mut keep);
-        self.assemble(&pieces, &keep)
+        let bodies = self.assemble(&pieces, &keep)?;
+        self.check_thickness(&bodies)?;
+        Ok(bodies)
     }
 
     /// Step 2: crossings of each solid's edges with the other's faces.
@@ -373,8 +451,20 @@ impl<'a> Engine<'a> {
     fn split_edges(&mut self) {
         for s in 0..2 {
             let solid = self.solids[s];
+            // Seams: edges a face uses both ways. Each belongs to its face alone, so a
+            // seam lying on another (two cylinders touching along both their seams) must
+            // not be merged with it.
+            let mut owner: Vec<Option<usize>> = vec![None; solid.edges.len()];
+            let mut seam = vec![false; solid.edges.len()];
+            for (fi, face) in solid.faces.iter().enumerate() {
+                for c in face.loops().flat_map(|l| &l.coedges) {
+                    let k = c.edge.index();
+                    seam[k] = owner[k] == Some(fi);
+                    owner[k] = owner[k].or(Some(fi));
+                }
+            }
             let mut all = Vec::with_capacity(solid.edges.len());
-            for e in &solid.edges {
+            for (ei, e) in solid.edges.iter().enumerate() {
                 let v0 = self.vmap[s][e.start.index()];
                 let v1 = self.vmap[s][e.end.index()];
                 let dir = (e.t1 - e.t0).signum();
@@ -392,7 +482,12 @@ impl<'a> Engine<'a> {
                 let mut list = Vec::new();
                 let (mut t, mut v) = (e.t0, v0);
                 for (tc, vc) in cuts.into_iter().chain(std::iter::once((e.t1, v1))) {
-                    list.push(self.add_edge(e.curve.clone(), t, tc, v, vc));
+                    list.push(if seam[ei] {
+                        self.edges.push(PEdge { curve: e.curve.clone(), t0: t, t1: tc, v0: v, v1: vc });
+                        (self.edges.len() - 1, false)
+                    } else {
+                        self.add_edge(e.curve.clone(), t, tc, v, vc)
+                    });
                     t = tc;
                     v = vc;
                 }
@@ -435,6 +530,12 @@ impl<'a> Engine<'a> {
                     Ssi::Coincident => self.imprint_coincident(fa, fb)?,
                     Ssi::Curves(curves) => {
                         for c in curves {
+                            // Where the surfaces only touch, the other solid stays on one
+                            // side of each face, so the curve divides nothing.
+                            if touching(&c, self.surface(0, fa), self.surface(1, fb)) {
+                                self.note_touch(fa, fb, &c);
+                                continue;
+                            }
                             self.cut_along(fa, fb, c);
                         }
                     }
@@ -720,19 +821,56 @@ impl<'a> Engine<'a> {
         // The direction a polyline leaves its first point in. From a point with slack, the
         // first stretch of a bent cut can lie off the surface and project onto its edge,
         // so the direction is taken from beyond that stretch.
-        let dir_angle = |uv: &[DVec2], v: usize| -> (f64, f64) {
-            let reach = 8.0 * self.slack[v];
-            let k = (1..uv.len()).find(|&k| (uv[k] - uv[0]).length() > reach).unwrap_or(uv.len() - 1).max(1);
-            let k = k.min(uv.len() - 1);
-            let d = uv[k] - uv[0];
-            let turn =
-                if uv.len() > k + 1 { (uv[k] - uv[0]).perp_dot(uv[k + 1] - uv[k]).signum() } else { 0.0 };
+        //
+        // Otherwise it is taken on the curve itself, at a small distance from the node that
+        // is the same for every curve there: curves leaving tangent to each other (a pin's
+        // circle touching a rim) then come out in the order of their curvature, which a
+        // first sampled chord does not reliably give.
+        let (flo, fhi) = self.infos[s][f].bbox;
+        let delta = 1e-5 * (fhi - flo).length().max(1e-6);
+        let dir_angle = |uv: &[DVec2], edge: usize, reversed: bool, v: usize| -> (f64, f64) {
+            let turn = if uv.len() > 2 { (uv[1] - uv[0]).perp_dot(uv[2] - uv[1]).signum() } else { 0.0 };
+            if self.slack[v] > 0.0 {
+                let reach = 8.0 * self.slack[v];
+                let k =
+                    (1..uv.len()).find(|&k| (uv[k] - uv[0]).length() > reach).unwrap_or(uv.len() - 1).max(1);
+                let d = uv[k.min(uv.len() - 1)] - uv[0];
+                return (d.y.atan2(d.x), turn);
+            }
+            let pe = &self.edges[edge];
+            let (ta, tb) = if reversed { (pe.t1, pe.t0) } else { (pe.t0, pe.t1) };
+            let start = self.pts[v];
+            let dist = |g: f64| (pe.curve.eval(ta + (tb - ta) * g) - start).length();
+            // The first fraction of the edge reaching `delta` from the node, by doubling
+            // then bisection (an edge closing on its own start comes back to it).
+            let mut hi = 1e-9;
+            while hi < 1.0 && dist(hi) < delta {
+                hi = (hi * 2.0).min(1.0);
+            }
+            let d = if dist(hi) < delta {
+                uv[uv.len() - 1] - uv[0]
+            } else {
+                let mut lo = 0.0;
+                for _ in 0..60 {
+                    let m = 0.5 * (lo + hi);
+                    if dist(m) < delta {
+                        lo = m;
+                    } else {
+                        hi = m;
+                    }
+                }
+                let mut q = to_uv(pe.curve.eval(ta + (tb - ta) * hi));
+                if let Some(per) = period {
+                    q.x = unwrap(uv[0].x, q.x, per);
+                }
+                q - uv[0]
+            };
             (d.y.atan2(d.x), turn)
         };
         // Per node: (half-edge, leaving angle, turn direction).
         let mut outgoing: HashMap<Node, Vec<(usize, f64, f64)>> = HashMap::new();
         for (i, h) in halves.iter().enumerate() {
-            let (a, t) = dir_angle(&h.uv, h.from.0);
+            let (a, t) = dir_angle(&h.uv, h.edge, h.reversed, h.from.0);
             outgoing.entry(h.from).or_default().push((i, a, t));
         }
 
@@ -755,7 +893,7 @@ impl<'a> Engine<'a> {
                 cycle.push(h);
                 let half = &halves[h];
                 let back: Vec<DVec2> = half.uv.iter().rev().copied().collect();
-                let (twin_angle, twin_turn) = dir_angle(&back, half.to.0);
+                let (twin_angle, twin_turn) = dir_angle(&back, half.edge, !half.reversed, half.to.0);
                 let Some(cands) = outgoing.get(&half.to) else {
                     return fail("face split reached a dead end");
                 };
