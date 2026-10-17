@@ -5,7 +5,7 @@
 //! SOLIDWORKS' geometry.
 
 #[cfg(windows)]
-mod com;
+use anvil_io::com;
 #[cfg(windows)]
 mod export;
 mod report;

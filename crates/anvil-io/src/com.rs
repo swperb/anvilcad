@@ -1,7 +1,9 @@
-//! Minimal late-bound COM automation (IDispatch) for talking to SOLIDWORKS from Rust.
+//! Minimal late-bound COM automation (IDispatch) for the SOLIDWORKS and SOLIDWORKS Document
+//! Manager APIs that Dassault Systèmes publishes for third-party programs.
 //!
-//! Every SOLIDWORKS API interface is a dual interface, so calling methods and properties by
-//! name through IDispatch reaches all of it without generated bindings.
+//! Every interface in those APIs is a dual interface, so calling methods and properties by
+//! name through IDispatch reaches all of it without generated bindings. Nothing from
+//! Dassault is linked or shipped: the objects come from the user's own installation.
 
 use std::mem::ManuallyDrop;
 use windows::core::{Interface, BSTR, GUID, HSTRING, PCWSTR};
@@ -457,5 +459,15 @@ pub fn connect(progid: &str) -> ComResult<(Disp, bool)> {
         }
         let d: IDispatch = CoCreateInstance(&clsid, None, CLSCTX_LOCAL_SERVER)?;
         Ok((Disp::new(d), true))
+    }
+}
+
+/// Creates an in-process automation object, such as a class factory in an installed DLL.
+pub fn create_inproc(progid: &str) -> ComResult<Disp> {
+    unsafe {
+        let clsid = CLSIDFromProgID(&HSTRING::from(progid))
+            .map_err(|e| ComError(format!("'{progid}' is not registered: {}", e.message())))?;
+        let d: IDispatch = CoCreateInstance(&clsid, None, CLSCTX_INPROC_SERVER)?;
+        Ok(Disp::new(d))
     }
 }

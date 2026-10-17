@@ -107,6 +107,10 @@ name = "anvil-io"
 version = "0.1.0"
 dependencies = [
  "anvil-kernel",
+ "anvil-model",
+ "serde",
+ "serde_json",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -120,6 +124,7 @@ dependencies = [
 name = "anvil-migrate"
 version = "0.1.0"
 dependencies = [
+ "anvil-io",
  "anvil-kernel",
  "anvil-model",
  "anvil-sketch",
@@ -137,6 +142,16 @@ dependencies = [
  "anvil-sketch",
  "anvil-step",
  "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "anvil-props"
+version = "0.1.0"
+dependencies = [
+ "anvil-io",
+ "anvil-model",
  "serde",
  "serde_json",
 ]

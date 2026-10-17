@@ -55,6 +55,19 @@ struct Windows {
     about: bool,
 }
 
+/// Properties of another program's file (a SOLIDWORKS part, say): the file's own, shown
+/// read-only, and AnvilCAD's own for it, which are edited here and kept in its sidecar.
+struct FilePropsWindow {
+    sheet: anvil_io::props::sidecar::Sheet,
+    /// What the file is and how to convert its geometry.
+    about: String,
+    new_name: String,
+    unsaved: bool,
+    status: Option<String>,
+}
+
+const CLOSE_UNSAVED: &str = "Save the AnvilCAD properties, or discard the changes.";
+
 /// The design-for-manufacturing check window's state.
 struct DfmState {
     process: dfm::Process,
@@ -89,6 +102,7 @@ pub struct AnvilApp {
     tab: Tab,
     windows: Windows,
     message: Option<(String, String)>,
+    file_props: Option<FilePropsWindow>,
     confirm: Option<PendingAction>,
     show_edges: bool,
     rename: Option<(u32, String)>,
@@ -158,6 +172,7 @@ impl AnvilApp {
             tab: Tab::Features,
             windows: Windows::default(),
             message: None,
+            file_props: None,
             confirm: None,
             show_edges: true,
             rename: None,
@@ -367,7 +382,16 @@ impl AnvilApp {
     fn open_path(&mut self, p: &Path) {
         match anvil_io::solidworks::identify(p) {
             Ok(Some(info)) => {
-                self.message = Some(("SOLIDWORKS file".into(), info.explanation()));
+                use anvil_io::props::{sidecar, ReadOptions};
+                let sheet =
+                    sidecar::Sheet::open(p, &ReadOptions::from_env(), sidecar::store_from_env().as_deref());
+                self.file_props = Some(FilePropsWindow {
+                    sheet,
+                    about: info.explanation(),
+                    new_name: String::new(),
+                    unsaved: false,
+                    status: None,
+                });
                 return;
             }
             Err(e) => {
@@ -1924,6 +1948,191 @@ impl AnvilApp {
 
     // ----- UI: windows -------------------------------------------------------------------
 
+    fn file_props_window(&mut self, ctx: &egui::Context) {
+        use anvil_io::props::sidecar::Origin;
+        let Some(w) = &mut self.file_props else { return };
+        let name = w.sheet.target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut open = true;
+        let mut discard = false;
+        egui::Window::new(format!("File Properties - {name}"))
+            .id(egui::Id::new("file_props"))
+            .open(&mut open)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                let warn = Color32::from_rgb(170, 90, 0);
+                match (&w.sheet.file, &w.sheet.live_error) {
+                    (Some((Origin::FileLive(src), _)), _) => {
+                        ui.weak(format!(
+                            "Read from the file through its {}. AnvilCAD never modifies it.",
+                            src.label()
+                        ));
+                    }
+                    (Some((origin, _)), Some(e)) => {
+                        ui.weak(format!(
+                            "{}. This computer cannot read the file itself: {e}",
+                            origin.label()
+                        ));
+                        if w.sheet.stale {
+                            ui.colored_label(
+                                warn,
+                                "The file has changed since its properties were converted. Convert it again \
+                                 with anvil-props to refresh them.",
+                            );
+                        }
+                    }
+                    (_, Some(e)) => {
+                        ui.colored_label(warn, e);
+                    }
+                    _ => {}
+                }
+                if let Some(e) = &w.sheet.sidecar_error {
+                    ui.colored_label(warn, format!("AnvilCAD property file: {e}"));
+                }
+
+                let rows = w.sheet.rows();
+                let file_rows: Vec<_> = rows.iter().filter(|r| r.origin.is_file()).collect();
+                ui.add_space(4.0);
+                ui.label(RichText::new("Properties in the file").strong());
+                if file_rows.is_empty() {
+                    ui.weak("None found.");
+                } else {
+                    egui::Grid::new("file_props_grid").striped(true).num_columns(3).show(ui, |ui| {
+                        ui.strong("Property Name");
+                        ui.strong("Value");
+                        ui.strong("Applies to");
+                        ui.end_row();
+                        for r in &file_rows {
+                            ui.label(&r.name);
+                            let v = ui.label(&r.value);
+                            if let Some(e) = &r.expression {
+                                v.on_hover_text(format!("Text expression: {e}"));
+                            }
+                            ui.weak(
+                                r.configuration
+                                    .as_deref()
+                                    .map(|c| format!("Configuration {c}"))
+                                    .unwrap_or("File".into()),
+                            );
+                            ui.end_row();
+                        }
+                    });
+                }
+
+                ui.add_space(6.0);
+                ui.label(RichText::new("AnvilCAD properties").strong());
+                ui.weak(format!(
+                    "Kept beside the file in {}, so the file stays untouched.",
+                    w.sheet.sidecar_path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
+                ));
+                let mut del = None;
+                let names: Vec<String> = file_rows
+                    .iter()
+                    .filter(|r| r.configuration.is_none())
+                    .map(|r| r.name.to_lowercase())
+                    .collect();
+                egui::Grid::new("anvil_props_grid").striped(true).num_columns(4).show(ui, |ui| {
+                    for (i, p) in w.sheet.sidecar.properties.iter_mut().enumerate() {
+                        w.unsaved |=
+                            ui.add_sized([130.0, 20.0], egui::TextEdit::singleline(&mut p.name)).changed();
+                        egui::ComboBox::from_id_salt(("fptype", i))
+                            .selected_text(p.kind.label())
+                            .width(90.0)
+                            .show_ui(ui, |ui| {
+                                for k in PropertyKind::ALL {
+                                    w.unsaved |= ui.selectable_value(&mut p.kind, k, k.label()).changed();
+                                }
+                            });
+                        w.unsaved |=
+                            ui.add_sized([220.0, 20.0], egui::TextEdit::singleline(&mut p.value)).changed();
+                        ui.horizontal(|ui| {
+                            if ui.small_button("x").clicked() {
+                                del = Some(i);
+                            }
+                            if names.contains(&p.name.to_lowercase()) {
+                                ui.colored_label(warn, "(!)").on_hover_text(
+                                    "The file has a property with this name too. Both are kept; the file's \
+                                     own value is what other programs show.",
+                                );
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+                if let Some(i) = del {
+                    w.sheet.sidecar.properties.remove(i);
+                    w.unsaved = true;
+                }
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut w.new_name)
+                            .hint_text("new property name")
+                            .desired_width(160.0),
+                    );
+                    if ui.button("Add").clicked() && !w.new_name.trim().is_empty() {
+                        w.sheet.sidecar.properties.push(CustomProperty {
+                            name: w.new_name.trim().into(),
+                            kind: PropertyKind::Text,
+                            value: String::new(),
+                        });
+                        w.new_name.clear();
+                        w.unsaved = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(w.unsaved, egui::Button::new("Save AnvilCAD properties")).clicked() {
+                        match w.sheet.save() {
+                            Ok(()) => {
+                                w.unsaved = false;
+                                w.status = Some(format!("Saved to {}", w.sheet.sidecar_path.display()));
+                            }
+                            Err(e) => w.status = Some(format!("Save failed: {e}")),
+                        }
+                    }
+                    if w.unsaved {
+                        ui.colored_label(warn, "Unsaved changes");
+                        if w.status.as_deref() == Some(CLOSE_UNSAVED) && ui.button("Discard").clicked() {
+                            discard = true;
+                        }
+                    }
+                });
+                if let Some(s) = &w.status {
+                    ui.weak(s);
+                }
+
+                if let Some((_, fp)) = &w.sheet.file {
+                    if !fp.summary.is_empty() {
+                        ui.collapsing("Summary", |ui| {
+                            egui::Grid::new("file_summary").num_columns(2).show(ui, |ui| {
+                                for s in &fp.summary {
+                                    ui.label(&s.name);
+                                    ui.label(&s.value);
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                    if !fp.notes.is_empty() {
+                        ui.collapsing(format!("Notes ({})", fp.notes.len()), |ui| {
+                            for n in &fp.notes {
+                                ui.label(n);
+                            }
+                        });
+                    }
+                }
+                ui.separator();
+                ui.weak(&w.about);
+            });
+        if discard {
+            self.file_props = None;
+        } else if !open {
+            if w.unsaved {
+                w.status = Some(CLOSE_UNSAVED.into());
+            } else {
+                self.file_props = None;
+            }
+        }
+    }
+
     fn windows(&mut self, ctx: &egui::Context) {
         let mut open = self.windows.properties;
         egui::Window::new("Properties").open(&mut open).default_width(460.0).show(ctx, |ui| {
@@ -2249,6 +2458,8 @@ impl AnvilApp {
             ui.label("Licensed under MIT OR Apache-2.0.");
         });
         self.windows.about = open;
+
+        self.file_props_window(ctx);
 
         if let Some((title, body)) = self.message.clone() {
             egui::Window::new(title)

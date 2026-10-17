@@ -74,7 +74,8 @@ system are still ahead; see the roadmap.
   import as meshes too. Open a `.step` or `.stp` file to start a part.
 - Export to STEP AP214 (exact geometry whenever the whole part was built exactly, facets
   otherwise), STL (binary) and OBJ
-- SOLIDWORKS files are identified and explained (see below)
+- SOLIDWORKS files are identified and explained, and their custom properties shown
+  without SOLIDWORKS (see below)
 
 **Application**
 - Undo/redo for every change, unsaved-changes prompts
@@ -127,7 +128,54 @@ Limitations today: parts only (assemblies and drawings are next), the active con
 only, and edits to features above an imported body do not flow through that body.
 
 Native files (`.sldprt` etc.) are also recognised directly by the AnvilCAD app, which
-explains how to migrate them.
+shows their custom properties (next section) and explains how to migrate them.
+
+## SOLIDWORKS custom properties, without SOLIDWORKS
+
+Open `wheel.sldprt` in AnvilCAD and its File Properties window shows the properties your
+engineers already set (`Description: large wheel`, `Process: Lathe`, `Finish: galvanized`),
+with SOLIDWORKS neither running nor installed. The file is only ever read. The file's own
+properties are shown read-only and stay the file's. AnvilCAD's own properties for the file
+are kept beside it in `wheel.sldprt.anvilprops.json`, never inside the SOLIDWORKS file. If
+both use the same name, both are shown and the file's own value is kept.
+
+AnvilCAD reads them through public interfaces only (see
+[INTEROPERABILITY.md](INTEROPERABILITY.md)):
+
+| Files saved by | Read through | Where |
+|---|---|---|
+| SOLIDWORKS 2014 or earlier | the standard OLE property sets Microsoft documents ([MS-OLEPS]), the same ones Windows Explorer shows | any OS |
+| SOLIDWORKS 2015 or later | the SOLIDWORKS Document Manager API Dassault publishes, with your Document Manager licence key in `ANVIL_SWDM_KEY` | Windows |
+| either, once converted | the `.anvilprops.json` snapshot written by `anvil-props convert` | any OS, no licence |
+
+### Converting a whole company's files
+
+`anvil-props convert` walks folders, network shares (`\\server\eng`, `/mnt/eng`) and folders
+synced by cloud storage clients (OneDrive, SharePoint, Google Drive, Dropbox). For every
+SOLIDWORKS file it records the file-level and configuration properties, with link
+expressions, in a property file beside it. AnvilCAD properties already there are kept.
+Run it once, on Windows with a Document Manager key, while your SOLIDWORKS subscription is
+active. Afterwards every AnvilCAD user sees the properties on any computer with no
+SOLIDWORKS licence. Re-running only re-reads files that changed.
+
+```bash
+set ANVIL_SWDM_KEY=<your Document Manager key>
+anvil-props convert -o D:\props-report \\server\eng\projects
+```
+
+- `properties.csv`: every property of every file, a company-wide index you can load into a
+  spreadsheet or PDM.
+- `conversion-report.csv` / `.json`: one row per file (converted, up to date, failed),
+  with the reason for each failure.
+- `--store <DIR>` keeps property files in a separate folder, mirroring each file's full
+  path, when the share is read-only (AnvilCAD finds them through `ANVIL_PROPS_STORE`).
+  `--dry-run` reads and reports without writing; `--force` re-reads everything.
+- `anvil-props show [--json] wheel.sldprt` prints one file's properties.
+
+The Document Manager key comes from Dassault Systèmes under your SOLIDWORKS subscription.
+Check its terms for your use. AnvilCAD never stores the key. To try the feature without
+SOLIDWORKS, `cargo run -p anvil-props --example sample_part -- wheel.sldprt` writes a
+stand-in part with custom properties.
 
 ## Architecture
 
@@ -144,10 +192,14 @@ crates/
                  custom properties, file format
   anvil-step     STEP reader (ISO 10303-21, never panics on malformed files), B-rep
                  import as exact solids or meshes, exact AP214 export
-  anvil-io       faceted STEP / STL / OBJ export, SOLIDWORKS file identification
+  anvil-io       faceted STEP / STL / OBJ export, SOLIDWORKS file identification,
+                 file properties (compound files, OLE property sets, Document Manager,
+                 .anvilprops.json sidecars), late-bound COM automation
   anvil-app      desktop application (egui + wgpu: Metal, Vulkan, DX12)
   anvil-migrate  anvil-migrate: SOLIDWORKS to AnvilCAD converter (Windows; talks to
                  SOLIDWORKS through late-bound COM automation)
+  anvil-props    anvil-props: shows and bulk-converts custom properties of SOLIDWORKS
+                 files without SOLIDWORKS
 ```
 
 Kernel design notes:

@@ -15,9 +15,13 @@ reviewed by a lawyer in the relevant jurisdictions.
   software (SOLIDWORKS, CATIA, 3DEXPERIENCE, SOLIDWORKS PDM, or any other), its libraries
   or its installers.
 - It does not reverse-engineer proprietary file formats such as `.sldprt`, `.sldasm`,
-  `.slddrw` or `.CATPart`. AnvilCAD only recognises such files by their extension and the
+  `.slddrw` or `.CATPart`. AnvilCAD recognises such files by their extension and the
   generic, publicly documented Microsoft compound-file signature, so it can tell the user
-  what the file is and how to convert it.
+  what the file is and how to convert it. Where such a file is a Microsoft compound file
+  ([MS-CFB]) holding the standard summary and custom property set streams that Microsoft
+  documents in [MS-OLEPS] (the ones Windows Explorer shows), AnvilCAD reads those streams,
+  and only those, using Microsoft's published specifications. It reads nothing else in the
+  file and never writes to it.
 - It does not use leaked material, documentation or SDKs obtained under a non-disclosure
   or restricted licence, or anything a contributor learned in confidence.
 - It does not circumvent licence checks, copy protection, encryption or any other
@@ -45,6 +49,11 @@ stays well clear of that ground.
    reads the file; AnvilCAD only receives what the public API returns. AnvilCAD ships no
    Dassault code, libraries or type libraries; it binds late, at run time, to what the
    user's installation provides. Use is governed by the user's own SOLIDWORKS licence.
+   Likewise, `anvil-props` and the AnvilCAD app read custom properties of SOLIDWORKS files
+   through the SOLIDWORKS Document Manager API, which Dassault publishes for reading file
+   data without SOLIDWORKS. It uses the customer's own Document Manager licence key, opens
+   files read-only, and never stores the key. AnvilCAD keeps its own properties for such
+   files in a separate `.anvilprops.json` file and never writes into the vendor's file.
 3. **Published PDM and PLM interfaces.** Integration with SOLIDWORKS PDM and the
    3DEXPERIENCE platform will use only their documented APIs and web services, with the
    customer's own licences and credentials, and respecting those services' terms. No
