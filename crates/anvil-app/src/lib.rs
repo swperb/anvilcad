@@ -7,3 +7,4 @@ pub mod headless;
 pub mod render;
 mod sample;
 mod sketcher;
+pub mod theme;
