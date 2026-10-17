@@ -305,7 +305,8 @@ Kernel design notes:
   edges between flat faces and on circular edges or arcs between faces round about the
   same axis; selected edges that run smoothly one into the next, such as a slot's
   outline, are blended together so their rounds join; any other edge between two faces
-  gets a rolling-ball round, a B-spline surface fitted to exact ball sections). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
+  gets a rolling-ball round, a B-spline surface fitted to exact ball sections, one round
+  along a whole smooth run of such edges). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
   and tori exactly, with pointed cones and sphere poles where it meets the axis. A round
   edge is filleted with a torus (chamfered with a cone) by a boolean with the corner's
   cross-section revolved about the axis. A shell is the part less its cavity: every

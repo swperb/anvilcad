@@ -438,6 +438,16 @@ impl<'a> Engine<'a> {
                     if !boxes_overlap(ebox, (lo, hi), ON) {
                         continue;
                     }
+                    // An edge of a face known to touch `g` (a round's contact edge) lies on
+                    // `g`, where every point is a root: `g` is cut there by the faces that
+                    // cross it instead.
+                    let touching = faces_of[ei].iter().any(|&f| {
+                        let pair = if s == 0 { (f, g) } else { (g, f) };
+                        self.contacts.contains(&pair)
+                    });
+                    if touching {
+                        continue;
+                    }
                     if let CurveHit::Params(ts) =
                         intersect::curve_surface(&e.curve, e.t0, e.t1, &face.surface, TOL)
                     {

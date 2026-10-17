@@ -87,7 +87,10 @@ Silent or ambiguous:
   round: its sections are solved exactly, square to the edge, and joined into a B-spline
   surface (rational across, cubic along) refined until it follows them to 1e-7 mm. The
   round meets both faces tangentially. Closed edges are rounded all the way round.
-- Chamfers on such edges, rolling-ball rounds along a smooth run of several edges, runs
-  mixing convex and concave edges, conic and curvature-continuous profiles, hold lines,
+- Edges selected together that run smoothly one into the next, where any of them needs a
+  rolling ball (the root of a slot-shaped boss standing on a shaft, say), get one round
+  along the whole run: one ball rolls along the edges in order, touching the faces of each
+  in turn, so the round is a single face, closed where the run closes.
+- Chamfers on such edges, runs mixing convex and concave edges, conic and curvature-continuous profiles, hold lines,
   overflow choices and round corners are not offered yet; those fall back to the faceted
   kernel or are refused.

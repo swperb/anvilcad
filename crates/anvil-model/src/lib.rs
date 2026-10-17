@@ -516,6 +516,82 @@ mod exact_rolling_fillets {
 }
 
 #[cfg(test)]
+mod exact_rolling_runs {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A slot-shaped boss standing across a shaft: its root runs along the shaft beside
+    /// the boss's straight sides and round it in saddles at the ends, smooth all the way
+    /// round. Filleted in one feature, one rolling ball goes round all four edges and the
+    /// part stays on the exact kernel.
+    #[test]
+    fn slot_boss_root_on_a_shaft_fillets_exactly() {
+        let mut doc = Document::new();
+        // The shaft: a circle of radius 10 on the right plane, extruded both ways.
+        let mut sf = SketchFeature::new(PlaneRef::Right);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        let shaft_circle = sf.sketch.add_circle(c, 10.0);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let shaft = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::MidPlane,
+            depth: Dim::Value(50.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        // The boss: a slot (half circles of radius 3, 8 apart) on the top plane, 16 tall.
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let s = &mut sf.sketch;
+        let p: Vec<usize> = [v2(0.0, -3.0), v2(8.0, -3.0), v2(8.0, 3.0), v2(0.0, 3.0)]
+            .iter()
+            .map(|&q| s.add_point(q))
+            .collect();
+        let (c1, c0) = (s.add_point(v2(8.0, 0.0)), s.add_point(v2(0.0, 0.0)));
+        let entities = [
+            s.add_line(p[0], p[1]),
+            s.add_arc(c1, p[1], p[2]),
+            s.add_line(p[2], p[3]),
+            s.add_arc(c0, p[3], p[0]),
+        ];
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let boss = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(16.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let before = doc.rebuild();
+        assert_eq!(before.faceted_from, None);
+        let shaft_face = FaceId::side(shaft, shaft_circle as u32);
+        let edges =
+            entities.iter().map(|&e| EdgeRef::new(shaft_face, FaceId::side(boss, e as u32))).collect();
+        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature { edges, radius: Dim::Value(1.0) }));
+        let st = doc.rebuild();
+        assert_eq!(st.faceted_from, None);
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert!(st.exact_features.contains(&fillet));
+        let exact = st.exact.as_ref().expect("exact");
+        let rounds = exact[0]
+            .faces
+            .iter()
+            .filter(|f| f.owner == fillet && matches!(f.surface, anvil_brep::Surface::BSpline(_)))
+            .count();
+        assert_eq!(rounds, 1);
+        // The round adds material: more than a 120 degree corner's worth, less than a
+        // right angle's, along the root.
+        let added = st.body.mass_properties().volume - before.body.mass_properties().volume;
+        let pi = std::f64::consts::PI;
+        let length = 16.0 + 2.0 * pi * 3.0;
+        assert!(
+            added > (1.0 / (pi / 3.0).tan() - pi / 6.0) * length && added < (1.0 - pi / 4.0) * length * 1.2,
+            "{added}"
+        );
+        assert_eq!(st.body.open_edges(), 0);
+    }
+}
+
+#[cfg(test)]
 mod revolve_open_profile {
     use super::*;
     use anvil_kernel::v2;

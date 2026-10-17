@@ -8,7 +8,7 @@ when they are in the code and tested.
 
 ## CAD
 
-1. Kernel: rolling-ball rounds along runs of edges and chamfers on freeform edges,
+1. Kernel: chamfers on freeform edges,
    conic and curvature-continuous profiles, tangent propagation to unselected edges,
    overflow choices and round corners, spherical corner blends, variable-radius fillets, draft; shells of freeform
    faces, sealed hollows (a second shell inside a solid), and walls thick enough to
