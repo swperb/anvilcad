@@ -280,7 +280,7 @@ pub fn arc_steps(radius: f64, sweep: f64, chord: f64, max_angle: f64) -> usize {
     n.clamp(min, 4096.0) as usize
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Surface {
     /// The plane through `frame.origin` with normal `frame.z`.
     Plane { frame: Frame },
@@ -324,6 +324,9 @@ pub enum Surface {
     /// true. The projection has no poles or seam and keeps angles, so a face anywhere
     /// but at the far point lays out flat; `frame.z` is chosen in the face's middle.
     Sphere { frame: Frame, radius: f64 },
+    /// A rational B-spline patch (see [`crate::patch`]): freeform faces. Its parameters
+    /// are the patch's own, scaled to millimetres.
+    BSpline(Arc<crate::patch::SplineSurface>),
 }
 
 impl Surface {
@@ -346,6 +349,7 @@ impl Surface {
                 (p - (frame.origin + radial * *major)).normalize_or(radial)
             }
             Surface::Sphere { frame, .. } => (p - frame.origin).normalize_or(frame.z),
+            Surface::BSpline(s) => s.normal_st(s.closest(p)),
         }
     }
 
@@ -364,6 +368,7 @@ impl Surface {
             | Surface::Cone { frame, .. }
             | Surface::Torus { frame, .. }
             | Surface::Sphere { frame, .. } => frame,
+            Surface::BSpline(s) => &s.frame,
         }
     }
 
@@ -379,6 +384,7 @@ impl Surface {
                 Surface::Torus { frame: frame.moved(m), major, minor, v_mid }
             }
             Surface::Sphere { frame, radius } => Surface::Sphere { frame: frame.moved(m), radius },
+            Surface::BSpline(ref s) => Surface::BSpline(Arc::new(s.moved(m))),
         }
     }
 
@@ -393,6 +399,7 @@ impl Surface {
             Surface::Cone { .. } => self.cone_offset(p).abs(),
             Surface::Torus { .. } => self.torus_offset(p).abs(),
             Surface::Sphere { frame, radius } => ((p - frame.origin).length() - radius).abs(),
+            Surface::BSpline(s) => (s.eval_st(s.closest(p)) - p).length(),
         }
     }
 
@@ -460,6 +467,7 @@ impl Surface {
                 let d = l / l.length().max(1e-300);
                 DVec2::new(d.x, d.y) * (2.0 * radius / (1.0 + d.z).max(1e-12))
             }
+            Surface::BSpline(s) => s.to_uv(s.closest(p)),
         }
     }
 
@@ -491,6 +499,7 @@ impl Surface {
                 let d = DVec3::new(2.0 * q.x, 2.0 * q.y, 1.0 - s) / (1.0 + s);
                 frame.to_world3(d * *radius)
             }
+            Surface::BSpline(s) => s.eval_st(s.to_st(uv)),
         }
     }
 
@@ -498,6 +507,7 @@ impl Surface {
     pub fn u_period(&self) -> Option<f64> {
         match self {
             Surface::Plane { .. } | Surface::Sphere { .. } => None,
+            Surface::BSpline(s) => s.period(),
             Surface::Cone { apex: true, .. } => None,
             Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => Some(TAU * radius),
             Surface::Torus { major, .. } => Some(TAU * major),
@@ -539,6 +549,7 @@ impl Surface {
             (Surface::Sphere { frame: a, radius: ra }, Surface::Sphere { frame: b, radius: rb }) => {
                 (a.origin - b.origin).length() < tol && (ra - rb).abs() < tol
             }
+            (Surface::BSpline(a), Surface::BSpline(b)) => Arc::ptr_eq(a, b) || a == b,
             _ => false,
         }
     }

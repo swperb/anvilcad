@@ -62,7 +62,7 @@ system are still ahead; see the roadmap.
 - Native part format `.anvprt` (versioned JSON, written atomically)
 - STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
   B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes,
-  cylinders, cones, tori and spheres import as exact solids, so features added to them build exactly
+  cylinders, cones, tori, spheres and B-spline surfaces import as exact solids, so features added to them build exactly
   (files written to a looser tolerance are healed: each vertex moves to where its edges
   meet, within ten times the accuracy the file declares); everything
   else imports as a watertight mesh body. AP242 tessellated bodies (triangulated faces)
@@ -129,7 +129,7 @@ explains how to migrate them.
 ```
 crates/
   anvil-brep     exact kernel: curves (line, circle, ellipse, B-spline) and surfaces
-                 (plane, cylinder, cone, torus, sphere), exact booleans, traced intersection curves,
+                 (plane, cylinder, cone, torus, sphere, B-spline), exact booleans, traced intersection curves,
                  extrude, fillets and chamfers, topology checks, watertight tessellation
   anvil-kernel   faceted kernel: math, profiles, triangulation, polygon B-rep solids,
                  booleans (BSP), extrude/revolve, shell, mass properties, picking
@@ -153,7 +153,9 @@ Kernel design notes:
   on its own axis in exact circles, and so does a sphere (any axis through its centre).
   Sphere faces are laid out by stereographic projection from the point opposite the
   face, and cone faces that reach their apex (drill points) by projection along the
-  axis, so neither has poles or seams to handle. Traced curves are found this way: each straight line of one
+  axis, so neither has poles or seams to handle. Freeform (B-spline) faces lie in their
+  patch's own parameters scaled to millimetres, with seams added where a patch wraps;
+  booleans that would intersect a freeform face are reported as unsupported for now. Traced curves are found this way: each straight line of one
   surface meets the other at the roots of a quadratic, so every traced point is exact,
   and the points are joined into a cubic B-spline refined until it stays within 1e-7 mm
   of both surfaces. `anvil-kernel` is a faceted kernel that covers everything else.
@@ -202,7 +204,8 @@ dimensioning, dragging, face picking, extruding and undo are covered without a w
 
 STEP import is checked against the NIST MBE PMI CAD test models (33 files from several
 CAD systems, AP203 and AP242). Every file imports, every solid is watertight, and the
-volumes of the same part exported by different systems agree to within 0.15%. Five of the
+volumes of the same part exported by different systems agree to within 0.15%. 32 of the
+33 import as exact solids (the last stores only triangles). Five of the
 files are kept in `crates/anvil-step/tests/data` as regression tests (see the NOTICE
 there). To check a folder of your own STEP files:
 `cargo run --release -p anvil-step --example report -- <folder>`.
@@ -230,13 +233,13 @@ Part loads a model that uses most features.
 
 ## Roadmap
 
-1. Kernel: surfaces of revolution and B-spline surfaces, torus intersections off its
-   axis, so revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
+1. Kernel: intersections with freeform (B-spline) faces, surfaces of revolution, torus
+   intersections off its axis, so revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
    variable-radius fillets, draft; later NURBS
 2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
    custom properties
-4. STEP: assembly placement, colours and names, exact import of B-spline surfaces;
+4. STEP: assembly placement, colours and names;
    then SOLIDWORKS format research for the five-year compatibility window
 5. A scripting and plugin API
 6. CAM (tracked as a feature request in the issues)

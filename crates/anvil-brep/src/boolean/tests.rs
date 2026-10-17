@@ -569,3 +569,104 @@ fn pointed_cone_cut_at_an_angle() {
     assert!(close(volume(&d) + volume(&i), whole, 3e-3), "{} + {}", volume(&d), volume(&i));
     assert!(d[0].edges.iter().any(|e| matches!(e.curve, Curve::Spline(_))));
 }
+
+/// A 30 x 20 block 5 deep whose top is a freeform bump (a bicubic patch over the same
+/// rectangle, flat along its edges), and its volume by integrating the patch's height.
+fn bumped_block() -> (Solid, f64) {
+    let patch = crate::patch::tests::bump();
+    let mut b = cuboid(DVec3::new(0.0, 0.0, -5.0), DVec3::new(30.0, 20.0, 0.0));
+    let top = b
+        .faces
+        .iter()
+        .position(|f| matches!(&f.surface, Surface::Plane { frame } if frame.origin.z.abs() < 1e-12 && frame.z.z.abs() > 0.5))
+        .expect("top face");
+    let Surface::Plane { frame } = &b.faces[top].surface else { unreachable!() };
+    // The patch's natural normal is up; the face keeps the plane's outward sense.
+    let up = frame.z.z > 0.0;
+    b.faces[top].reversed = b.faces[top].reversed == up;
+    b.faces[top].surface = Surface::BSpline(std::sync::Arc::new(patch.clone()));
+    // Height under the patch: z over the area it covers in x and y, by the midpoint rule.
+    let ((s0, s1), (t0, t1)) = patch.domain();
+    let n = 300;
+    let (hs, ht) = ((s1 - s0) / n as f64, (t1 - t0) / n as f64);
+    let mut bump = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let st = DVec2::new(s0 + hs * (i as f64 + 0.5), t0 + ht * (j as f64 + 0.5));
+            let (a, c) = patch.partials(st);
+            bump += patch.eval_st(st).z * (a.x * c.y - a.y * c.x).abs() * hs * ht;
+        }
+    }
+    (b, 30.0 * 20.0 * 5.0 + bump)
+}
+
+#[test]
+fn freeform_top_tessellates_closed() {
+    let (b, want) = bumped_block();
+    check::validate(&b).expect("valid");
+    let m = tess::tessellate(&b, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+    assert!(m.is_watertight());
+    let v = mass::properties(&m).volume;
+    assert!(close(v, want, 2e-5), "{v} vs {want}");
+    assert!(close(volume(&[b]), want, 2e-3));
+}
+
+#[test]
+fn freeform_block_cut_below_its_patch() {
+    // A hole up from the bottom that stops short of the freeform top: the patch is
+    // never intersected, but rays through it decide what is inside.
+    let (b, _) = bumped_block();
+    let whole = volume(std::slice::from_ref(&b));
+    let hole = cylinder(DVec3::new(15.0, 10.0, -10.0), DVec3::Z, 3.0, 0.0, 8.0);
+    let d = boolean(&b, &hole, BoolOp::Subtract).expect("subtract");
+    assert_eq!(d.len(), 1);
+    let removed = PI * 9.0 * 3.0;
+    assert!(close(volume(&d), whole - removed, 2e-3), "{} vs {}", volume(&d), whole - removed);
+    // Cutting into the patch itself needs freeform intersections: refused, not guessed.
+    let deep = cylinder(DVec3::new(15.0, 10.0, -10.0), DVec3::Z, 3.0, 0.0, 30.0);
+    assert!(boolean(&b, &deep, BoolOp::Subtract).is_err());
+}
+
+/// The seam test's cylinder band (radius 2, height 3, no seam) with its cylinder given as
+/// a B-spline patch that wraps: straight along its height, an exact rational circle
+/// around (whose natural normal points inward).
+#[test]
+fn wrapping_patch_band_gets_a_seam() {
+    let mut s = crate::seam::tests::band_solid(0.0);
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let ring = [
+        (1.0, 0.0, 1.0),
+        (1.0, 1.0, w),
+        (0.0, 1.0, 1.0),
+        (-1.0, 1.0, w),
+        (-1.0, 0.0, 1.0),
+        (-1.0, -1.0, w),
+        (0.0, -1.0, 1.0),
+        (1.0, -1.0, w),
+        (1.0, 0.0, 1.0),
+    ];
+    let mut points = Vec::new();
+    let mut weights = Vec::new();
+    for z in [0.0, 3.0] {
+        for (x, y, wt) in ring {
+            points.push(DVec3::new(2.0 * x, 2.0 * y, z));
+            weights.push(wt);
+        }
+    }
+    let knots_t = vec![0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0];
+    let patch =
+        crate::patch::SplineSurface::new((1, 2), vec![0.0, 0.0, 1.0, 1.0], knots_t, (2, 9), points, weights)
+            .expect("patch");
+    assert_eq!(patch.wraps, Some(crate::patch::Wrap::T));
+    s.faces[2].surface = Surface::BSpline(std::sync::Arc::new(patch));
+    s.faces[2].reversed = true;
+    check::validate(&s).expect("valid before");
+    crate::seam::add_seams(&mut s).expect("seam");
+    check::validate(&s).expect("valid after");
+    assert!(s.faces[2].inners.is_empty());
+    let m = tess::tessellate(&s, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+    assert!(m.is_watertight());
+    let v = mass::properties(&m).volume;
+    let want = PI * 4.0 * 3.0;
+    assert!(close(v, want, 1e-4), "{v} vs {want}");
+}

@@ -128,33 +128,7 @@ impl Spline {
 
     fn eval_raw(&self, t: f64) -> DVec3 {
         let p = self.degree;
-        let n = self.points.len();
-        let (lo, hi) = (self.knots[p], self.knots[n]);
-        let t = t.clamp(lo, hi);
-        // Span: the last i in [p, n - 1] with knots[i] <= t < knots[i + 1].
-        let mut span = match self.knots[p..n].partition_point(|k| *k <= t) {
-            0 => p,
-            k => p + k - 1,
-        };
-        while span > p && self.knots[span] >= self.knots[span + 1] {
-            span -= 1;
-        }
-        let mut left = [0.0; MAX_DEGREE + 1];
-        let mut right = [0.0; MAX_DEGREE + 1];
-        let mut basis = [0.0; MAX_DEGREE + 1];
-        basis[0] = 1.0;
-        for j in 1..=p {
-            left[j] = t - self.knots[span + 1 - j];
-            right[j] = self.knots[span + j] - t;
-            let mut saved = 0.0;
-            for r in 0..j {
-                let den = right[r + 1] + left[j - r];
-                let tmp = if den.abs() < 1e-300 { 0.0 } else { basis[r] / den };
-                basis[r] = saved + right[r + 1] * tmp;
-                saved = left[j - r] * tmp;
-            }
-            basis[j] = saved;
-        }
+        let (span, basis) = basis(p, &self.knots, self.points.len(), t);
         let mut acc = DVec3::ZERO;
         let mut w = 0.0;
         for (j, bj) in basis.iter().take(p + 1).enumerate() {
@@ -164,6 +138,73 @@ impl Spline {
             w += bj * wi;
         }
         if w.abs() < 1e-300 { acc } else { acc / w }
+    }
+
+    /// The piece of the curve from `a` to `b` (within the domain, `a < b`) as a clamped
+    /// spline of its own, exactly: each end is inserted as a knot until the curve passes
+    /// through a control point there (Boehm's algorithm, on weighted points).
+    pub fn piece(&self, a: f64, b: f64) -> Result<Spline> {
+        let (lo, hi) = self.domain();
+        let p = self.degree;
+        if a.partial_cmp(&b) != Some(std::cmp::Ordering::Less) || a < lo || b > hi {
+            return Err(KernelError::Unsupported("spline piece: range outside the curve".into()));
+        }
+        let mut knots = self.knots.clone();
+        // Weighted points (w P, w).
+        let mut pts: Vec<(DVec3, f64)> = self
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, q)| {
+                let w = self.weights.get(i).copied().unwrap_or(1.0);
+                (*q * w, w)
+            })
+            .collect();
+        for x in [a, b] {
+            let have = knots.iter().filter(|k| **k == x).count();
+            for _ in have..p {
+                let n = pts.len();
+                let k = match knots[p..n].partition_point(|v| *v <= x) {
+                    0 => p,
+                    j => p + j - 1,
+                };
+                let mut next = Vec::with_capacity(n + 1);
+                next.extend_from_slice(&pts[..=k - p]);
+                for i in k - p + 1..=k {
+                    let den = knots[i + p] - knots[i];
+                    let al = if den.abs() < 1e-300 { 0.0 } else { (x - knots[i]) / den };
+                    let (pi, wi) = pts[i];
+                    let (pj, wj) = pts[i - 1];
+                    next.push((pi * al + pj * (1.0 - al), wi * al + wj * (1.0 - al)));
+                }
+                next.extend_from_slice(&pts[k..]);
+                pts = next;
+                knots.insert(k + 1, x);
+            }
+        }
+        // The control point the curve passes through at x.
+        let n = pts.len();
+        let at = |x: f64| -> usize {
+            if x == lo {
+                0
+            } else if x == hi {
+                n - 1
+            } else {
+                knots.iter().position(|k| *k == x).map_or(0, |i| i.saturating_sub(1))
+            }
+        };
+        let (ia, ib) = (at(a), at(b));
+        if ib <= ia {
+            return Err(KernelError::Unsupported("spline piece: degenerate range".into()));
+        }
+        let mut piece_knots = vec![a; p + 1];
+        piece_knots.extend(knots.iter().filter(|k| **k > a && **k < b));
+        piece_knots.extend(std::iter::repeat_n(b, p + 1));
+        let slice = &pts[ia..=ib];
+        let rational = !self.weights.is_empty();
+        let points = slice.iter().map(|(q, w)| *q / *w).collect();
+        let weights = if rational { slice.iter().map(|(_, w)| *w).collect() } else { Vec::new() };
+        Spline::new(p, piece_knots, points, weights)
     }
 
     /// The curve moved by a rigid motion given as a point map.
@@ -291,6 +332,39 @@ impl Spline {
     }
 }
 
+/// The knot span holding `t` and the `degree + 1` basis functions not zero there, for
+/// a B-spline with `n` control points (Cox-de Boor). `t` is clamped to the domain.
+pub(crate) fn basis(degree: usize, knots: &[f64], n: usize, t: f64) -> (usize, [f64; MAX_DEGREE + 1]) {
+    let p = degree;
+    let (lo, hi) = (knots[p], knots[n]);
+    let t = t.clamp(lo, hi);
+    // Span: the last i in [p, n - 1] with knots[i] <= t < knots[i + 1].
+    let mut span = match knots[p..n].partition_point(|k| *k <= t) {
+        0 => p,
+        k => p + k - 1,
+    };
+    while span > p && knots[span] >= knots[span + 1] {
+        span -= 1;
+    }
+    let mut left = [0.0; MAX_DEGREE + 1];
+    let mut right = [0.0; MAX_DEGREE + 1];
+    let mut out = [0.0; MAX_DEGREE + 1];
+    out[0] = 1.0;
+    for j in 1..=p {
+        left[j] = t - knots[span + 1 - j];
+        right[j] = knots[span + j] - t;
+        let mut saved = 0.0;
+        for r in 0..j {
+            let den = right[r + 1] + left[j - r];
+            let tmp = if den.abs() < 1e-300 { 0.0 } else { out[r] / den };
+            out[r] = saved + right[r + 1] * tmp;
+            saved = left[j - r] * tmp;
+        }
+        out[j] = saved;
+    }
+    (span, out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +393,32 @@ mod tests {
         let pts = s.sample(lo, hi, 0.01, 0.2);
         assert!(pts.len() > 30);
         assert!((pts[0] - pts[pts.len() - 1]).length() < 1e-12);
+    }
+
+    #[test]
+    fn pieces_follow_the_curve_exactly() {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let arc = Spline::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+            vec![
+                DVec3::new(2.0, 0.0, 0.0),
+                DVec3::new(2.0, 2.0, 0.0),
+                DVec3::new(0.0, 2.0, 0.0),
+                DVec3::new(-2.0, 2.0, 0.0),
+                DVec3::new(-2.0, 0.0, 0.0),
+            ],
+            vec![1.0, w, 1.0, w, 1.0],
+        )
+        .expect("half circle");
+        let piece = arc.piece(0.3, 1.6).expect("piece");
+        assert_eq!(piece.domain(), (0.3, 1.6));
+        assert!((piece.points[0] - arc.eval(0.3)).length() < 1e-12);
+        assert!((piece.points[piece.points.len() - 1] - arc.eval(1.6)).length() < 1e-12);
+        for i in 0..=20 {
+            let t = 0.3 + 1.3 * i as f64 / 20.0;
+            assert!((piece.eval(t) - arc.eval(t)).length() < 1e-12, "{t}");
+        }
     }
 
     #[test]

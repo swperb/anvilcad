@@ -24,6 +24,9 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
         return Ok(Ssi::Coincident);
     }
     match (a, b) {
+        (Surface::BSpline(_), _) | (_, Surface::BSpline(_)) => {
+            Err(KernelError::Unsupported("intersections with freeform (B-spline) surfaces".into()))
+        }
         (Surface::Plane { frame: fa }, Surface::Plane { frame: fb }) => Ok(plane_plane(fa, fb)),
         (Surface::Plane { frame: fp }, Surface::Cylinder { frame, radius })
         | (Surface::Cylinder { frame, radius }, Surface::Plane { frame: fp }) => {
@@ -460,6 +463,8 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
             }
         }
         (_, Surface::Sphere { .. }) => numeric_roots(curve, lo, hi, surface, tol),
+        (Curve::Line { origin, dir }, Surface::BSpline(s)) => s.line_hits(*origin, *dir, lo, hi),
+        (_, Surface::BSpline(_)) => numeric_roots(curve, lo, hi, surface, tol),
         (Curve::Spline(_), Surface::Plane { .. }) => numeric_roots(curve, lo, hi, surface, tol),
     };
     let mut out: Vec<f64> = Vec::new();
@@ -563,6 +568,11 @@ fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -
             Surface::Cone { .. } => surface.cone_offset(p),
             Surface::Torus { .. } => surface.torus_offset(p),
             Surface::Sphere { frame, radius } => (p - frame.origin).length() - radius,
+            // Signed along the normal at the nearest point.
+            Surface::BSpline(s) => {
+                let st = s.closest(p);
+                (p - s.eval_st(st)).dot(s.normal_st(st))
+            }
             Surface::Plane { frame } => (p - frame.origin).dot(frame.z),
         }
     };

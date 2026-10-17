@@ -126,9 +126,7 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
     for (l3, luv) in loops3.iter().zip(&loops_uv) {
         let mut handles = Vec::with_capacity(l3.len());
         for (p, uv) in l3.iter().zip(luv) {
-            let h = cdt
-                .insert(Point2::new(uv.x, uv.y))
-                .map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
+            let h = cdt.insert(point(*uv)).map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
             let hi = h.index();
             if vmap.len() <= hi {
                 vmap.resize(hi + 1, None);
@@ -136,7 +134,7 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
             if vmap[hi].is_none() {
                 vmap[hi] = Some(mesh.positions.len() as u32);
                 mesh.positions.push(*p);
-                mesh.normals.push(face.normal_at(*p));
+                mesh.normals.push(normal_at_uv(face, *p, *uv));
             }
             handles.push(h);
         }
@@ -154,22 +152,32 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
 
     // Curved faces get interior points on a grid, so triangles stay small in
     // the curved direction instead of spanning chords across the surface.
-    if let Surface::Cylinder { radius: scale, .. }
-    | Surface::Cone { radius: scale, .. }
-    | Surface::Torus { major: scale, .. }
-    | Surface::Sphere { radius: scale, .. } = face.surface
-    {
+    // A freeform patch's parameters are lengths; its steps come from its tightest bend.
+    let freeform = matches!(face.surface, Surface::BSpline(_));
+    let scale_of = match &face.surface {
+        Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } | Surface::Sphere { radius, .. } => {
+            Some(*radius)
+        }
+        Surface::Torus { major, .. } => Some(*major),
+        Surface::BSpline(s) => Some(1.0 / s.max_curvature().max(1e-6)),
+        Surface::Plane { .. } => None,
+    };
+    if let Some(scale) = scale_of {
         // The angle step comes from the widest point of the face; `u` is the angle
         // times `scale`.
         let frame = face.surface.frame();
-        let radius = loops3
-            .iter()
-            .flatten()
-            .map(|p| {
-                let l = frame.to_local(*p);
-                DVec2::new(l.x, l.y).length()
-            })
-            .fold(0.0, f64::max);
+        let radius = if freeform {
+            scale
+        } else {
+            loops3
+                .iter()
+                .flatten()
+                .map(|p| {
+                    let l = frame.to_local(*p);
+                    DVec2::new(l.x, l.y).length()
+                })
+                .fold(0.0, f64::max)
+        };
         let step_for = |radius: f64| {
             let mut a = params.max_angle.max(1e-3);
             if params.chord > 0.0 && params.chord < radius {
@@ -178,8 +186,11 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
             a
         };
         // A sphere's parameters are lengths near the face's middle, at its own radius.
-        let step_angle =
-            if matches!(face.surface, Surface::Sphere { .. }) { step_for(scale) } else { step_for(radius) };
+        let step_angle = if matches!(face.surface, Surface::Sphere { .. } | Surface::BSpline(_)) {
+            step_for(scale)
+        } else {
+            step_for(radius)
+        };
         // A cone laid out across its axis has lengths for parameters, like a sphere.
         let across_axis = matches!(face.surface, Surface::Cone { apex: true, .. });
         let mut du = if across_axis { radius * step_angle } else { scale * step_angle };
@@ -198,7 +209,7 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         // Cylinders and cones are straight along `v`, so a few rows do; a sphere is not.
         let dv = if across_axis {
             du
-        } else if matches!(face.surface, Surface::Sphere { .. }) {
+        } else if matches!(face.surface, Surface::Sphere { .. } | Surface::BSpline(_)) {
             v_step
         } else {
             v_step.max((hi.y - lo.y) / 64.0)
@@ -261,9 +272,7 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
                 if !inside || near_boundary(q) {
                     continue;
                 }
-                let h = cdt
-                    .insert(Point2::new(q.x, q.y))
-                    .map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
+                let h = cdt.insert(point(q)).map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
                 let hi = h.index();
                 if vmap.len() <= hi {
                     vmap.resize(hi + 1, None);
@@ -272,7 +281,7 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
                     let p = face.surface.eval_uv(q);
                     vmap[hi] = Some(mesh.positions.len() as u32);
                     mesh.positions.push(p);
-                    mesh.normals.push(face.normal_at(p));
+                    mesh.normals.push(normal_at_uv(face, p, q));
                 }
             }
         }
@@ -326,6 +335,18 @@ pub(crate) fn align_holes(loops: &mut [Vec<DVec2>], period: f64) {
     }
 }
 
+/// The face's outward normal at `p`, whose parameters `uv` are already known (which
+/// spares a freeform patch the search for them).
+fn normal_at_uv(face: &Face, p: DVec3, uv: DVec2) -> DVec3 {
+    match &face.surface {
+        Surface::BSpline(sp) => {
+            let n = sp.normal_st(sp.to_st(uv));
+            if face.reversed { -n } else { n }
+        }
+        _ => face.normal_at(p),
+    }
+}
+
 /// For every face of the triangulation, whether it lies inside the constraints.
 fn boundary_parity(cdt: &ConstrainedDelaunayTriangulation<Point2<f64>>) -> Vec<bool> {
     let n = cdt.num_all_faces();
@@ -371,6 +392,29 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
             })
             .collect(),
         Surface::Sphere { .. } => pts.iter().map(|p| surface.uv(*p)).collect(),
+        // Neighbouring boundary points have neighbouring parameters: each search
+        // starts from the last answer.
+        Surface::BSpline(sp) => {
+            let mut seed: Option<DVec2> = None;
+            let mut prev: Option<f64> = None;
+            let period = sp.period();
+            pts.iter()
+                .map(|p| {
+                    let st = match seed {
+                        Some(s0) => sp.closest_from(*p, s0),
+                        None => sp.closest(*p),
+                    };
+                    seed = Some(st);
+                    let mut q = sp.to_uv(st);
+                    // On a wrapping patch, stay on the previous point's turn.
+                    if let (Some(per), Some(pr)) = (period, prev) {
+                        q.x += per * ((pr - q.x) / per).round();
+                    }
+                    prev = Some(q.x);
+                    q
+                })
+                .collect()
+        }
         Surface::Cone { apex: true, .. } => pts.iter().map(|p| surface.uv(*p)).collect(),
         Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Torus { .. } => {
             let period = surface.u_period().unwrap_or(TAU);
@@ -387,4 +431,12 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
                 .collect()
         }
     }
+}
+
+/// A triangulation point. The triangulator refuses coordinates that are not zero but
+/// smaller than about 1e-19 (parameters on a patch's edge can come out at 1e-28), so
+/// those are flushed to zero.
+fn point(q: DVec2) -> Point2<f64> {
+    let flush = |v: f64| if v.abs() < 1e-15 { 0.0 } else { v };
+    Point2::new(flush(q.x), flush(q.y))
 }

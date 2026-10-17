@@ -307,9 +307,15 @@ fn cube(s: f64, spline_top: bool, faceted: bool) -> String {
 fn bspline_top_face_and_edges() {
     let imp = import(&cube(10.0, true, false)).expect("import");
     let b = &imp.bodies[0];
-    assert!(b.exact.is_none());
     assert!(watertight(&b.mesh));
     assert!((mesh_volume(&b.mesh) - 1000.0).abs() < 1e-6, "{}", mesh_volume(&b.mesh));
+    // The B-spline top is an exact freeform face, and survives an exact round trip.
+    let e = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+    assert!(e.faces.iter().any(|f| matches!(f.surface, anvil_brep::Surface::BSpline(_))));
+    assert!((exact_volume(e) - 1000.0).abs() < 1e-6);
+    let back = round_trip(e);
+    let again = back.bodies[0].exact.as_ref().expect("exact after round trip");
+    assert!((exact_volume(again) - 1000.0).abs() < 1e-6);
 }
 
 #[test]

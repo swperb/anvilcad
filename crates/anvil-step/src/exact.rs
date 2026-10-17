@@ -1,5 +1,5 @@
 //! Converts a read body to an exact `anvil-brep` solid when every face is a plane,
-//! cylinder, cone, torus or sphere. Edges keep the file's line, circle or ellipse; other edges are
+//! cylinder, cone, torus, sphere or B-spline patch. Edges keep the file's line, circle or ellipse; other edges are
 //! traced exactly from the two surfaces they join, or else keep the file's B-spline.
 
 use crate::reader::{Body, LoopKind, Model};
@@ -127,6 +127,25 @@ fn surface(
             let v_mid = after + gap + 0.5 * (TAU - gap);
             Some(Surface::Torus { frame: *frame, major: *major, minor: *minor, v_mid })
         }
+        shapes::Surface::BSpline(b) => {
+            let n = b.points.len();
+            let m = b.points.first()?.len();
+            if b.points.iter().any(|row| row.len() != m) {
+                return None;
+            }
+            let points: Vec<DVec3> = b.points.iter().flatten().copied().collect();
+            let weights: Vec<f64> = b.weights.iter().flatten().copied().collect();
+            let patch = anvil_brep::patch::SplineSurface::new(
+                (b.u.degree, b.v.degree),
+                b.u.knots.clone(),
+                b.v.knots.clone(),
+                (n, m),
+                points,
+                weights,
+            )
+            .ok()?;
+            Some(Surface::BSpline(Arc::new(patch)))
+        }
         shapes::Surface::Sphere { frame, radius } => {
             // The face's vector area (half the sum of its loops' Newell vectors) points
             // into its middle; the kernel lays the face out from the point opposite.
@@ -141,7 +160,6 @@ fn surface(
             let frame = Frame::new(frame.origin, area, hint).ok()?;
             Some(Surface::Sphere { frame, radius: *radius })
         }
-        _ => None,
     }
 }
 
@@ -164,6 +182,99 @@ fn file_spline(c: &shapes::Curve) -> Option<Curve> {
     let shapes::Curve::BSpline(b) = c else { return None };
     let s = Spline::new(b.basis.degree, b.basis.knots.clone(), b.points.clone(), b.weights.clone()).ok()?;
     Some(Curve::Spline(Arc::new(s)))
+}
+
+/// True for a curve that can be bent to end at `p`: the file's own line, circle or
+/// ellipse (not one traced exactly from its surfaces), or an open spline from the file
+/// passing within `reach` of `p` (its piece is cut out and its end moved there).
+fn bendable(c: &Curve, traced: bool, p: DVec3, reach: f64) -> bool {
+    match c {
+        Curve::Line { .. } | Curve::Circle { .. } | Curve::Ellipse { .. } => !traced,
+        Curve::Spline(sp) => !traced && !sp.closed && c.distance_to_curve(p) <= reach,
+    }
+}
+
+/// A clamped spline whose ends (those of `t0`, `t1` at its domain's ends) are moved to
+/// `ps` and `pe`, by moving its first and last control points, which it passes through.
+fn pin_ends(c: &Curve, t0: f64, t1: f64, ps: DVec3, pe: DVec3) -> Option<Curve> {
+    // A line through both ends; an arc as its exact rational spline, then pinned.
+    match c {
+        Curve::Line { .. } => {
+            let dir = (pe - ps).try_normalize()?;
+            return Some(Curve::Line { origin: ps, dir });
+        }
+        Curve::Circle { .. } | Curve::Ellipse { .. } => {
+            let arc = Curve::Spline(Arc::new(arc_spline(c, t0, t1)?));
+            let (lo, hi) = match &arc {
+                Curve::Spline(sp) => sp.domain(),
+                _ => return None,
+            };
+            return pin_ends(&arc, lo, hi, ps, pe);
+        }
+        _ => {}
+    }
+    let Curve::Spline(sp) = c else { return None };
+    if sp.closed {
+        return None;
+    }
+    let (lo, hi) = sp.domain();
+    let p = sp.degree;
+    let n = sp.points.len();
+    let clamped = sp.knots[..=p].iter().all(|k| *k == lo) && sp.knots[n..].iter().all(|k| *k == hi);
+    let near = |t: f64, k: f64| (t - k).abs() <= 1e-9 * (hi - lo);
+    let ends = |t: f64| near(t, lo) || near(t, hi);
+    // An edge that is a piece of a longer (or unclamped) spline: cut the piece out as a
+    // clamped spline of its own first, so its ends are control points.
+    if !clamped || !ends(t0) || !ends(t1) {
+        let (a, b) = (t0.min(t1).max(lo), t0.max(t1).min(hi));
+        let piece = Curve::Spline(Arc::new(sp.piece(a, b).ok()?));
+        return pin_ends(&piece, t0.clamp(a, b), t1.clamp(a, b), ps, pe);
+    }
+    let mut points = sp.points.clone();
+    let mut changed = false;
+    for (t, q) in [(t0, ps), (t1, pe)] {
+        if near(t, lo) {
+            points[0] = q;
+            changed = true;
+        } else if near(t, hi) {
+            points[n - 1] = q;
+            changed = true;
+        }
+    }
+    if !changed {
+        return None;
+    }
+    let s = Spline::new(p, sp.knots.clone(), points, sp.weights.clone()).ok()?;
+    Some(Curve::Spline(Arc::new(s)))
+}
+
+/// The piece of a circle or ellipse from `t0` to `t1` as a rational quadratic spline,
+/// exactly: one piece per quarter turn or less, each with its middle control point
+/// where the end tangents meet.
+fn arc_spline(c: &Curve, t0: f64, t1: f64) -> Option<Spline> {
+    let (frame, a, b) = match *c {
+        Curve::Circle { frame, radius } => (frame, radius, radius),
+        Curve::Ellipse { frame, a, b } => (frame, a, b),
+        _ => return None,
+    };
+    let at = |t: f64, k: f64| frame.origin + frame.x * (a * k * t.cos()) + frame.y * (b * k * t.sin());
+    let sweep = t1 - t0;
+    let pieces = ((sweep.abs() / (0.5 * std::f64::consts::PI)).ceil() as usize).max(1);
+    let half = 0.5 * sweep / pieces as f64;
+    let mut points = vec![at(t0, 1.0)];
+    let mut weights = vec![1.0];
+    let mut knots = vec![0.0; 3];
+    for k in 0..pieces {
+        let mid = t0 + sweep * (k as f64 + 0.5) / pieces as f64;
+        let end = t0 + sweep * (k as f64 + 1.0) / pieces as f64;
+        points.push(at(mid, 1.0 / half.cos()));
+        weights.push(half.cos());
+        points.push(at(end, 1.0));
+        weights.push(1.0);
+        let m = if k + 1 == pieces { 3 } else { 2 };
+        knots.extend(std::iter::repeat_n((k + 1) as f64, m));
+    }
+    Spline::new(2, knots, points, weights).ok()
 }
 
 /// Direction the edge runs at `p` along the file's curve.
@@ -412,7 +523,16 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
             if curves.is_empty() || curves.iter().all(|c| c.distance_to_curve(p0) <= allowed(p0)) {
                 continue;
             }
-            let (p, off) = snap(p0, &curves);
+            // Splines from the file that end here can be bent to meet the vertex (their end
+            // control points move); lines, circles and traced curves cannot. The vertex
+            // goes where the rigid ones meet, or where all meet if none is rigid.
+            let rigid: Vec<&Curve> = edges
+                .iter()
+                .filter_map(|e| chosen.get(e))
+                .filter(|c| !bendable(&c.0, c.2, p0, heal))
+                .map(|c| &c.0)
+                .collect();
+            let (p, off) = snap(p0, if rigid.is_empty() { &curves } else { &rigid });
             if (p - p0).length() <= heal && off <= allowed(p) {
                 pos.insert(*v, p);
             } else if round == 0 {
@@ -437,7 +557,7 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
     let mut vids: HashMap<u64, VertexId> = HashMap::new();
     let mut eids: HashMap<u64, EdgeId> = HashMap::new();
     for (index, f) in body.faces.iter().enumerate() {
-        let surf = surfaces[index].ok_or_else(|| match f.surface_type.as_str() {
+        let surf = surfaces[index].clone().ok_or_else(|| match f.surface_type.as_str() {
             "POLY" => "the file stores this body as flat facets, so it is imported as a mesh".to_string(),
             "CONICAL_SURFACE" => "a cone face reaches its apex, so it is imported as a mesh".to_string(),
             "SPHERICAL_SURFACE" => {
@@ -481,7 +601,7 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                 let id = match eids.get(&oe.edge) {
                     Some(id) => *id,
                     None => {
-                        let (c, forward, _) = chosen.get(&oe.edge).cloned().ok_or_else(|| {
+                        let (mut c, forward, _) = chosen.get(&oe.edge).cloned().ok_or_else(|| {
                             format!(
                                 "{} edges are not exact yet",
                                 e.curve_type.to_lowercase().replace('_', " ")
@@ -498,10 +618,20 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
                         };
                         let (start, end) = (vertex(e.start)?, vertex(e.end)?);
                         let (ps, pe) = (pos[&e.start], pos[&e.end]);
-                        let (t0, t1) = range(&c, ps, pe, forward);
+                        let (mut t0, mut t1) = range(&c, ps, pe, forward);
+                        let mut gap = (c.eval(t0) - ps).length().max((c.eval(t1) - pe).length());
+                        // A spline edge still short of its healed vertices: move its end
+                        // control points onto them, which changes it only near its ends.
+                        if gap > allowed(ps).max(allowed(pe))
+                            && gap <= heal
+                            && let Some(pinned) = pin_ends(&c, t0, t1, ps, pe)
+                        {
+                            c = pinned;
+                            (t0, t1) = range(&c, ps, pe, forward);
+                            gap = (c.eval(t0) - ps).length().max((c.eval(t1) - pe).length());
+                        }
                         // What healing could not close: the exact kernel needs every vertex
                         // on its edges' curves (to 1e-5 mm).
-                        let gap = (c.eval(t0) - ps).length().max((c.eval(t1) - pe).length());
                         if gap > allowed(ps).max(allowed(pe)) {
                             return Err(match model.uncertainty {
                                 Some(u) if gap > heal => format!(

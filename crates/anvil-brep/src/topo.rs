@@ -182,8 +182,14 @@ impl Solid {
                 }
             }
         }
-        // A cone face that reaches its apex runs on to it.
+        // A cone face that reaches its apex runs on to it; a freeform face lies within
+        // its patch's control net.
         for f in &self.faces {
+            if let Surface::BSpline(s) = &f.surface {
+                let (a, b) = s.bounds();
+                lo = lo.min(a);
+                hi = hi.max(b);
+            }
             if let Surface::Cone { frame, radius, half_angle, apex: true } = f.surface {
                 let tip = crate::geom::cone_apex(&frame, radius, half_angle);
                 lo = lo.min(tip);

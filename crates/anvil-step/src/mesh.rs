@@ -189,7 +189,7 @@ fn triangulate(
     for (l3, l2) in loops3.iter().zip(loops2) {
         let mut handles = Vec::with_capacity(l2.len());
         for (p3, p2) in l3.iter().zip(l2) {
-            let Ok(h) = cdt.insert(Point2::new(p2.x, p2.y)) else { continue };
+            let Ok(h) = cdt.insert(point(*p2)) else { continue };
             map.entry(h.index()).or_insert_with(|| b.vertex(*p3));
             handles.push(h);
         }
@@ -205,7 +205,7 @@ fn triangulate(
         }
     }
     for q in interior {
-        if let Ok(h) = cdt.insert(Point2::new(q.x, q.y)) {
+        if let Ok(h) = cdt.insert(point(*q)) {
             map.entry(h.index()).or_insert_with(|| b.vertex(lift(*q)));
         }
     }
@@ -742,9 +742,95 @@ fn sphere_face(
     Some(triangulate(b, loops3, &loops2, &interior, &lift, sense > 0.0))
 }
 
+/// A B-spline face, laid out in the kernel patch's own millimetre-scaled parameters
+/// (its closest-point search is the one that holds up on long, thin patches).
+fn bspline_face(
+    b: &mut Builder,
+    s: &crate::shapes::BSplineSurface,
+    sense: f64,
+    loops3: &[Vec<DVec3>],
+) -> Option<Vec<[u32; 3]>> {
+    let n = s.points.len();
+    let m = s.points.first()?.len();
+    let patch = anvil_brep::patch::SplineSurface::new(
+        (s.u.degree, s.v.degree),
+        s.u.knots.clone(),
+        s.v.knots.clone(),
+        (n, m),
+        s.points.iter().flatten().copied().collect(),
+        s.weights.iter().flatten().copied().collect(),
+    )
+    .ok()?;
+    let loops2: Vec<Vec<DVec2>> = loops3
+        .iter()
+        .map(|l| {
+            let mut seed: Option<DVec2> = None;
+            l.iter()
+                .map(|p| {
+                    let st = match seed {
+                        Some(s0) => patch.closest_from(*p, s0),
+                        None => patch.closest(*p),
+                    };
+                    seed = Some(st);
+                    patch.to_uv(st)
+                })
+                .collect()
+        })
+        .collect();
+    let radius = 1.0 / patch.max_curvature().max(1e-6);
+    let mut step = chord_step(radius);
+    let mut interior = grid(&loops2, DVec2::splat(step));
+    while interior.is_empty() && step < 1e6 {
+        step *= 1.5;
+        interior = grid(&loops2, DVec2::splat(step));
+        if step > 1e3 * chord_step(radius) {
+            break;
+        }
+    }
+    let lift = |q: DVec2| patch.eval_st(patch.to_st(q));
+    // Counter-clockwise in the patch parameters is about its natural normal.
+    Some(triangulate(b, loops3, &loops2, &interior, &lift, sense > 0.0))
+}
+
 fn chord_step(radius: f64) -> f64 {
     let angle = if CHORD < radius { 2.0 * (1.0 - CHORD / radius).acos() } else { PI / 4.0 };
     (radius * angle.min(PI / 18.0)).max(1e-3)
+}
+
+/// The mesh of an exact body: the kernel's tessellation at the importer's tolerances,
+/// one face per source face (in the source's order). `None` when a face does not lay
+/// out or the result is not closed.
+pub fn from_exact(solid: &anvil_brep::Solid, faces: usize) -> Option<Mesh> {
+    let params = anvil_brep::tess::TessParams { chord: CHORD, max_angle: PI / 18.0 };
+    let tm = anvil_brep::tess::tessellate(solid, &params).ok()?;
+    if !tm.is_watertight() {
+        return None;
+    }
+    let mut b = Builder { mesh: Mesh::default(), index: HashMap::new() };
+    b.mesh.faces = (0..faces).map(|_| MeshFace { planar: false, triangles: Vec::new() }).collect();
+    for f in &solid.faces {
+        if let anvil_brep::topo::FaceTag::Imported { index } = f.tag
+            && let Some(mf) = b.mesh.faces.get_mut(index as usize)
+        {
+            mf.planar = matches!(f.surface, anvil_brep::Surface::Plane { .. });
+        }
+    }
+    // The kernel shares points exactly along edges, so merge only identical points (the
+    // importer's rounding would also fuse distinct ones that sit very close).
+    let mut ids: HashMap<[u64; 3], u32> = HashMap::new();
+    for (t, fi) in tm.triangles.iter().zip(&tm.triangle_face) {
+        let face = solid.faces.get(*fi as usize)?;
+        let anvil_brep::topo::FaceTag::Imported { index } = face.tag else { return None };
+        let tri = t.map(|i| {
+            let p = tm.positions[i as usize];
+            *ids.entry([p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]).or_insert_with(|| {
+                b.mesh.vertices.push([p.x, p.y, p.z]);
+                (b.mesh.vertices.len() - 1) as u32
+            })
+        });
+        b.mesh.faces.get_mut(index as usize)?.triangles.push(tri);
+    }
+    Some(b.mesh)
 }
 
 /// Tessellates every face of `body`.
@@ -779,6 +865,7 @@ pub fn tessellate(model: &Model, body: &Body, warnings: &mut Vec<String>) -> Mes
                         Surface::Sphere { frame, radius } if attempt == 0 => {
                             sphere_face(&mut b, frame.origin, *radius, sense, &loops3)
                         }
+                        Surface::BSpline(bs) if attempt == 0 => bspline_face(&mut b, bs, sense, &loops3),
                         _ => None,
                     };
                     let tris = match attempt {
@@ -916,4 +1003,12 @@ fn closed_surface(b: &mut Builder, s: &Surface, sense: f64) -> Vec<[u32; 3]> {
         }
     }
     tris
+}
+
+/// A triangulation point. The triangulator refuses coordinates that are not zero but
+/// smaller than about 1e-19 (parameters on a patch's edge can come out at 1e-28), so
+/// those are flushed to zero.
+fn point(q: DVec2) -> Point2<f64> {
+    let flush = |v: f64| if v.abs() < 1e-15 { 0.0 } else { v };
+    Point2::new(flush(q.x), flush(q.y))
 }

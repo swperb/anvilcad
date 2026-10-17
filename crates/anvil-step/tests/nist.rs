@@ -34,11 +34,11 @@ fn ftc_11_bands_without_seams() {
     let imp = load("nist_ftc_11_asme1_rb.stp");
     let solid = imp.bodies.iter().find(|b| b.solid).expect("solid");
     assert_eq!(open_edges(&solid.mesh), 0);
+    // Its fillets are tori, so the body is exact, and its mesh is the kernel's at the
+    // importer's (coarser) tolerances. Finely tessellated, the exact solid converges on
+    // 5129.0 mm^3; the coarse mesh runs a little low on the 1.5 mm fillets.
     let v = volume(&solid.mesh);
-    assert!((v - 5103.7).abs() / 5103.7 < 2e-3, "{v}");
-    // Its fillets are tori, so the body is exact too. Finely tessellated, the exact
-    // solid converges on 5129.0 mm^3; the importer's coarser mesh above runs about
-    // 0.5% low on the 1.5 mm fillets.
+    assert!((v - 5129.0).abs() / 5129.0 < 3e-3, "{v}");
     let exact = solid.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", solid.not_exact));
     assert!(exact.faces.iter().any(|f| matches!(f.surface, anvil_brep::Surface::Torus { .. })));
     let params = anvil_brep::tess::TessParams { chord: 2e-4, max_angle: 0.01 };

@@ -58,11 +58,19 @@ pub fn import(text: &str) -> Result<Import, StepError> {
     }
     let mut bodies = Vec::new();
     for b in &model.bodies {
-        let (exact, not_exact) = match exact::convert(&model, b) {
-            Ok(s) => (Some(s), None),
-            Err(why) => (None, Some(why)),
+        // An exact body's mesh is the kernel's own tessellation of it (which also proves
+        // every face lays out); otherwise the importer meshes the file's faces itself.
+        let (exact, not_exact, mesh) = match exact::convert(&model, b) {
+            Ok(s) => match mesh::from_exact(&s, b.faces.len()) {
+                Some(m) => (Some(s), None, m),
+                None => (
+                    None,
+                    Some("a face could not be laid out exactly, so it is imported as a mesh".into()),
+                    mesh::tessellate(&model, b, &mut warnings),
+                ),
+            },
+            Err(why) => (None, Some(why), mesh::tessellate(&model, b, &mut warnings)),
         };
-        let mesh = mesh::tessellate(&model, b, &mut warnings);
         let name = if b.name.is_empty() { format!("Body #{}", b.id) } else { b.name.clone() };
         bodies.push(Body { name, exact, not_exact, mesh, solid: b.solid });
     }

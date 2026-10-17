@@ -40,6 +40,35 @@ impl Writer {
         self.ent(format!("DIRECTION('',({},{},{}))", real(d.x), real(d.y), real(d.z)))
     }
 
+    /// A B-spline surface; rational ones need STEP's complex-instance form.
+    fn patch(&mut self, sp: &anvil_brep::patch::SplineSurface) -> usize {
+        let (n, m) = sp.count;
+        let mut rows = Vec::with_capacity(n);
+        for i in 0..n {
+            let row: Vec<String> = (0..m).map(|j| format!("#{}", self.point(sp.points[i * m + j]))).collect();
+            rows.push(format!("({})", row.join(",")));
+        }
+        let net = rows.join(",");
+        let (ms, ks) = knot_lists(&sp.knots_s);
+        let (mt, kt) = knot_lists(&sp.knots_t);
+        let (p, q) = sp.degree;
+        if sp.weights.is_empty() {
+            self.ent(format!(
+                "B_SPLINE_SURFACE_WITH_KNOTS('',{p},{q},({net}),.UNSPECIFIED.,.F.,.F.,.F.,({ms}),({mt}),({ks}),({kt}),.UNSPECIFIED.)"
+            ))
+        } else {
+            let weights: Vec<String> = (0..n)
+                .map(|i| {
+                    format!("({})", (0..m).map(|j| real(sp.weights[i * m + j])).collect::<Vec<_>>().join(","))
+                })
+                .collect();
+            let weights = weights.join(",");
+            self.ent(format!(
+                "(BOUNDED_SURFACE()B_SPLINE_SURFACE({p},{q},({net}),.UNSPECIFIED.,.F.,.F.,.F.)B_SPLINE_SURFACE_WITH_KNOTS(({ms}),({mt}),({ks}),({kt}),.UNSPECIFIED.)GEOMETRIC_REPRESENTATION_ITEM()RATIONAL_B_SPLINE_SURFACE(({weights}))REPRESENTATION_ITEM('')SURFACE())"
+            ))
+        }
+    }
+
     /// A B-spline curve; rational ones need STEP's complex-instance form.
     fn spline(&mut self, sp: &anvil_brep::spline::Spline) -> usize {
         let pts: Vec<String> = sp.points.iter().map(|p| format!("#{}", self.point(*p))).collect();
@@ -146,7 +175,8 @@ pub fn write(solids: &[Solid], name: &str) -> String {
         }
         let mut faces = Vec::with_capacity(solid.faces.len());
         for f in &solid.faces {
-            let surf = match f.surface {
+            let surf = match f.surface.clone() {
+                Surface::BSpline(sp) => w.patch(&sp),
                 Surface::Plane { frame } => {
                     let a = w.placement(&frame);
                     w.ent(format!("PLANE('',#{a})"))
@@ -216,4 +246,27 @@ pub fn write(solids: &[Solid], name: &str) -> String {
     let _ = writeln!(s, "ENDSEC;");
     let _ = writeln!(s, "END-ISO-10303-21;");
     s
+}
+
+/// STEP's form of a knot vector: multiplicities and distinct knots, comma separated.
+fn knot_lists(knots: &[f64]) -> (String, String) {
+    let mut values: Vec<f64> = Vec::new();
+    let mut mults: Vec<usize> = Vec::new();
+    for k in knots {
+        match values.last() {
+            Some(last) if last == k => {
+                if let Some(m) = mults.last_mut() {
+                    *m += 1;
+                }
+            }
+            _ => {
+                values.push(*k);
+                mults.push(1);
+            }
+        }
+    }
+    (
+        mults.iter().map(|m| m.to_string()).collect::<Vec<_>>().join(","),
+        values.iter().map(|k| real(*k)).collect::<Vec<_>>().join(","),
+    )
 }

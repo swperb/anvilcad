@@ -18,6 +18,7 @@ pub mod extrude;
 pub mod geom;
 pub mod intersect;
 pub mod mass;
+pub mod patch;
 pub mod profile;
 pub mod seam;
 pub mod spline;

@@ -184,6 +184,12 @@ fn face_info(solid: &Solid, face: &Face) -> FaceInfo {
     // The box is only a quick rejection test, so it errs wide: sampled curves fall
     // short of their true extremes (by r(1 - cos(step / 2))), and torus and sphere faces
     // bulge past their boundary (a fillet's crown, say) by up to their radius.
+    // A freeform face lies within its patch's control net.
+    if let Surface::BSpline(s) = &face.surface {
+        let (a, b) = s.bounds();
+        lo = lo.min(a);
+        hi = hi.max(b);
+    }
     // A cone face laid out across its axis runs on to the apex.
     if let Surface::Cone { frame, radius, half_angle, apex: true } = face.surface {
         let tip = crate::geom::cone_apex(&frame, radius, half_angle);
@@ -931,7 +937,7 @@ impl<'a> Engine<'a> {
                 let outer = to_loop(&mut solid, outer);
                 let inners = inners.iter().map(|l| to_loop(&mut solid, l)).collect();
                 solid.add_face(Face {
-                    surface: src.surface,
+                    surface: src.surface.clone(),
                     reversed: src.reversed != *flip,
                     outer,
                     inners,

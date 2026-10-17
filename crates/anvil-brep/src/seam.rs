@@ -53,7 +53,7 @@ fn loop_uv(solid: &Solid, surface: &Surface, l: &Loop, period: f64) -> (Vec<DVec
 
 fn seam_face(solid: &mut Solid, fi: usize) -> Result<()> {
     let face = &solid.faces[fi];
-    let surface = face.surface;
+    let surface = face.surface.clone();
     let Some(period) = surface.u_period() else {
         return Ok(());
     };
@@ -119,17 +119,51 @@ fn seam_face(solid: &mut Solid, fi: usize) -> Result<()> {
         }
     };
 
-    let theta = u / surface_scale(&surface);
-    let frame = *surface.frame();
-    let radial = frame.x * theta.cos() + frame.y * theta.sin();
-    let cut = Surface::Plane { frame: Frame::new(frame.origin, frame.z.cross(radial), frame.z)? };
-    let pa = vertex_at(solid, fi, ia, &cut, radial)?;
-    let pb = vertex_at(solid, fi, ib, &cut, radial)?;
-
-    let (Some(a), Some(b)) = (solid.vertex(pa).map(|v| v.point), solid.vertex(pb).map(|v| v.point)) else {
-        return Err(KernelError::Topology("seam vertex missing".into()));
+    let (pa, pb, seam) = if let Surface::BSpline(patch) = &surface {
+        // A wrapping patch: the seam is the patch's curve across the wrap, at the u
+        // where the first loop is crossed; the piece between the two crossings, its ends
+        // set exactly on them.
+        let pa = vertex_at_u(solid, fi, ia, &surface, u, period)?;
+        let a = solid
+            .vertex(pa)
+            .map(|v| v.point)
+            .ok_or_else(|| KernelError::Topology("seam vertex missing".into()))?;
+        let ua = surface.uv(a).x;
+        let pb = vertex_at_u(solid, fi, ib, &surface, ua, period)?;
+        let b = solid
+            .vertex(pb)
+            .map(|v| v.point)
+            .ok_or_else(|| KernelError::Topology("seam vertex missing".into()))?;
+        let iso = patch.iso(ua).ok_or_else(|| KernelError::Topology("patch does not wrap".into()))?;
+        let (lo, hi) = iso.domain();
+        let (ta, tb) = (iso.closest(a, lo, hi), iso.closest(b, lo, hi));
+        let mut piece = iso.piece(ta.min(tb), ta.max(tb))?;
+        let last = piece.points.len() - 1;
+        let (first_end, last_end) = if ta <= tb { (a, b) } else { (b, a) };
+        piece.points[0] = first_end;
+        piece.points[last] = last_end;
+        let piece = crate::spline::Spline::new(
+            piece.degree,
+            piece.knots.clone(),
+            piece.points.clone(),
+            piece.weights.clone(),
+        )?;
+        let (t0, t1) = if ta <= tb { (ta.min(tb), ta.max(tb)) } else { (ta.max(tb), ta.min(tb)) };
+        let curve = Curve::Spline(std::sync::Arc::new(piece));
+        (pa, pb, solid.add_edge(Edge { curve, start: pa, end: pb, t0, t1 }))
+    } else {
+        let theta = u / surface_scale(&surface);
+        let frame = *surface.frame();
+        let radial = frame.x * theta.cos() + frame.y * theta.sin();
+        let cut = Surface::Plane { frame: Frame::new(frame.origin, frame.z.cross(radial), frame.z)? };
+        let pa = vertex_at(solid, fi, ia, &cut, radial)?;
+        let pb = vertex_at(solid, fi, ib, &cut, radial)?;
+        let (Some(a), Some(b)) = (solid.vertex(pa).map(|v| v.point), solid.vertex(pb).map(|v| v.point))
+        else {
+            return Err(KernelError::Topology("seam vertex missing".into()));
+        };
+        (pa, pb, solid.add_edge(seam_edge(&surface, radial, a, b, pa, pb)?))
     };
-    let seam = solid.add_edge(seam_edge(&surface, radial, a, b, pa, pb)?);
 
     let face = &solid.faces[fi];
     let mut loops: Vec<Loop> = face.loops().cloned().collect();
@@ -174,7 +208,7 @@ fn surface_scale(s: &Surface) -> f64 {
     match s {
         Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => *radius,
         Surface::Torus { major, .. } => *major,
-        Surface::Plane { .. } | Surface::Sphere { .. } => 1.0,
+        Surface::Plane { .. } | Surface::Sphere { .. } | Surface::BSpline(_) => 1.0,
     }
 }
 
@@ -200,6 +234,53 @@ fn vertex_at(solid: &mut Solid, fi: usize, li: usize, cut: &Surface, radial: DVe
     let (_, edge, t) =
         best.ok_or_else(|| KernelError::Topology("seam does not cross a band boundary".into()))?;
     split_edge(solid, edge, t)
+}
+
+/// The vertex where loop `li` of face `fi` crosses the line `u` = `u` (on any turn) in
+/// the surface's parameters, splitting the crossed edge when no vertex is there: found
+/// along the loop's samples, then by bisection on the edge.
+fn vertex_at_u(
+    solid: &mut Solid,
+    fi: usize,
+    li: usize,
+    surface: &Surface,
+    u: f64,
+    period: f64,
+) -> Result<VertexId> {
+    let l = solid.faces[fi].loops().nth(li).cloned().unwrap_or_default();
+    // Signed offset of a point's u from the line, on the nearest turn.
+    let off = |p: DVec3| {
+        let d = surface.uv(p).x - u;
+        d - period * (d / period).round()
+    };
+    for c in &l.coedges {
+        let Some(e) = solid.edge(c.edge).cloned() else { continue };
+        let n = 64;
+        let ts: Vec<f64> = (0..=n).map(|k| e.t0 + (e.t1 - e.t0) * k as f64 / n as f64).collect();
+        let offs: Vec<f64> = ts.iter().map(|t| off(e.curve.eval(*t))).collect();
+        for k in 0..n {
+            let (a, b) = (offs[k], offs[k + 1]);
+            // A real crossing changes sign by a little, not by a whole turn.
+            if a == 0.0 {
+                return split_edge(solid, c.edge, ts[k]);
+            }
+            if a.signum() != b.signum() && (a - b).abs() < 0.5 * period {
+                let (mut lo, mut hi, mut flo) = (ts[k], ts[k + 1], a);
+                for _ in 0..60 {
+                    let m = 0.5 * (lo + hi);
+                    let fm = off(e.curve.eval(m));
+                    if fm.signum() == flo.signum() {
+                        lo = m;
+                        flo = fm;
+                    } else {
+                        hi = m;
+                    }
+                }
+                return split_edge(solid, c.edge, 0.5 * (lo + hi));
+            }
+        }
+    }
+    Err(KernelError::Topology("seam does not cross a band boundary".into()))
 }
 
 /// Splits `edge` at parameter `t`, or returns the end vertex already there.

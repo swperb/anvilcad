@@ -27,13 +27,16 @@ const SAMPLES: usize = 720;
 /// The intersection curves of `a` and `b`, at least one of which must be a
 /// cylinder or cone. Tries sweeping each in turn.
 pub fn intersect(a: &Surface, b: &Surface) -> Result<Vec<Curve>> {
-    if matches!(a, Surface::Torus { .. }) || matches!(b, Surface::Torus { .. }) {
-        return Err(KernelError::Unsupported("traced intersections with a torus".into()));
+    let traceable = |s: &Surface| !matches!(s, Surface::Torus { .. } | Surface::BSpline(_));
+    if !traceable(a) || !traceable(b) {
+        return Err(KernelError::Unsupported("traced intersections with a torus or freeform surface".into()));
     }
     let sweepable = |s: &Surface| matches!(s, Surface::Cylinder { .. } | Surface::Cone { .. });
     let radius = |s: &Surface| match s {
         Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => *radius,
-        Surface::Plane { .. } | Surface::Torus { .. } | Surface::Sphere { .. } => f64::INFINITY,
+        Surface::Plane { .. } | Surface::Torus { .. } | Surface::Sphere { .. } | Surface::BSpline(_) => {
+            f64::INFINITY
+        }
     };
     // The narrower surface first: its generators are the likelier to all hit the other.
     let order = if radius(a) <= radius(b) { [(a, b), (b, a)] } else { [(b, a), (a, b)] };
@@ -60,7 +63,9 @@ fn generator(s: &Surface, theta: f64) -> (DVec3, DVec3) {
         Surface::Cone { radius, half_angle, .. } => {
             (f.origin + radial * radius, f.z + radial * half_angle.tan())
         }
-        Surface::Plane { .. } | Surface::Torus { .. } | Surface::Sphere { .. } => (f.origin, f.z),
+        Surface::Plane { .. } | Surface::Torus { .. } | Surface::Sphere { .. } | Surface::BSpline(_) => {
+            (f.origin, f.z)
+        }
     }
 }
 
@@ -86,8 +91,8 @@ fn on_nappe(s: &Surface, p: DVec3) -> bool {
 fn quadric(s: &Surface, o: DVec3, d: DVec3) -> (f64, f64, f64) {
     match *s {
         Surface::Plane { frame } => (0.0, frame.z.dot(d), frame.z.dot(o - frame.origin)),
-        // Never swept against: `intersect` refuses tori first.
-        Surface::Torus { .. } => (0.0, 0.0, 1.0),
+        // Never swept against: `intersect` refuses these first.
+        Surface::Torus { .. } | Surface::BSpline(_) => (0.0, 0.0, 1.0),
         Surface::Sphere { frame, radius } => {
             let r = o - frame.origin;
             (d.dot(d), 2.0 * d.dot(r), r.dot(r) - radius * radius)
