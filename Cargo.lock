@@ -198,6 +198,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "anvil-bulk"
+version = "0.1.0"
+dependencies = [
+ "anvil-io",
+ "anvil-kernel",
+ "anvil-model",
+ "anvil-sketch",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "anvil-cam"
 version = "0.1.0"
 dependencies = [
@@ -206,7 +219,7 @@ dependencies = [
  "cavalier_contours",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "toml",
  "ureq",
@@ -217,6 +230,10 @@ name = "anvil-io"
 version = "0.1.0"
 dependencies = [
  "anvil-kernel",
+ "anvil-model",
+ "serde",
+ "serde_json",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -230,6 +247,7 @@ dependencies = [
 name = "anvil-migrate"
 version = "0.1.0"
 dependencies = [
+ "anvil-io",
  "anvil-kernel",
  "anvil-model",
  "anvil-sketch",
@@ -247,6 +265,16 @@ dependencies = [
  "anvil-sketch",
  "anvil-step",
  "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "anvil-props"
+version = "0.1.0"
+dependencies = [
+ "anvil-io",
+ "anvil-model",
  "serde",
  "serde_json",
 ]
@@ -3172,6 +3200,17 @@ name = "sha1"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",

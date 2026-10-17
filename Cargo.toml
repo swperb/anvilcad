@@ -16,6 +16,8 @@ anvil-model = { path = "crates/anvil-model" }
 anvil-io = { path = "crates/anvil-io" }
 anvil-brep = { path = "crates/anvil-brep" }
 anvil-step = { path = "crates/anvil-step" }
+anvil-props = { path = "crates/anvil-props" }
+anvil-bulk = { path = "crates/anvil-bulk" }
 
 # Geometry code is numerically heavy, so keep dependencies optimized even in dev builds.
 [profile.dev]
