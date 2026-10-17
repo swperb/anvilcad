@@ -142,6 +142,10 @@ pub(crate) fn run_plugin(
                 continue;
             }
         };
+        // Re-check with the claim held: another worker may have finished it meanwhile.
+        if !run::is_pending(job, project.result(&job.hash).as_ref(), opts.retry_failed) {
+            continue;
+        }
         taken += 1;
         if !run::plugin_takes(job) {
             let s = run::record_native(project, job, opts, summary);

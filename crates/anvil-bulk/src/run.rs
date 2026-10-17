@@ -292,6 +292,12 @@ fn run_native(
                         continue;
                     }
                 };
+                // Re-check now that the claim is held: another worker may have written the
+                // result between the check above and this claim. The claim is the point
+                // where exactly one worker proceeds, so a job is never converted twice.
+                if !is_pending(job, project.result(&job.hash).as_ref(), opts.retry_failed) {
+                    continue;
+                }
                 if taken.fetch_add(1, Ordering::Relaxed) >= limit {
                     break;
                 }

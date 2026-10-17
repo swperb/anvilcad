@@ -154,7 +154,10 @@ fn migrates_a_file_share() {
     let files = csv_rows(&project.reports_dir().join("files.csv"));
     assert_eq!(files.len(), 5);
     let copy_row = files.iter().find(|r| r.contains("wheel_copy.sldprt")).unwrap();
-    assert!(copy_row.contains(&share.join("projA/wheel.sldprt").display().to_string()), "{copy_row}");
+    // Build the original's path component by component so separators match the OS (the
+    // report stores native paths: backslashes on Windows).
+    let original = share.join("projA").join("wheel.sldprt").display().to_string();
+    assert!(copy_row.contains(&original), "{copy_row}\nexpected to contain {original}");
     assert!(copy_row.contains(",exact,step,1,1,8000.000,3,"), "{copy_row}");
     let hub_row = files.iter().find(|r| r.contains("hub.sldprt")).unwrap();
     assert!(hub_row.contains("no geometry source"), "{hub_row}");
