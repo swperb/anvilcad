@@ -4,6 +4,7 @@
 use crate::camera::Camera;
 use anvil_kernel::{v2, Frame, Vec2};
 use anvil_model::SketchFeature;
+use anvil_sketch::dimension::{self, Pick};
 use anvil_sketch::{Constraint, EntityId, Geom, PointId, Sketch, SolveResult, ORIGIN};
 use eframe::egui::{self, Align2, Color32, FontId, Painter, Pos2, Rect, Response, Shape, Stroke};
 use std::f64::consts::TAU;
@@ -28,7 +29,7 @@ impl Tool {
             Tool::Rectangle => "Rectangle",
             Tool::Circle => "Circle",
             Tool::Arc => "Centerpoint Arc",
-            Tool::Dimension => "Smart Dimension",
+            Tool::Dimension => "Dimension",
         }
     }
 }
@@ -52,7 +53,11 @@ pub struct SketchSession {
     pub frame: Frame,
     pub tool: Tool,
     pending: Vec<Click>,
-    pending_pick: Option<SkSel>,
+    /// What the Dimension tool has picked so far.
+    pub picks: Vec<Pick>,
+    /// A dimension just added that over-defines the sketch. It is held as a reference
+    /// dimension until the user chooses what to do with it.
+    pub over_define: Option<usize>,
     pub selection: Vec<SkSel>,
     pub hover: Option<SkSel>,
     dragging: Option<SkSel>,
@@ -78,7 +83,8 @@ impl SketchSession {
             frame,
             tool: Tool::Line,
             pending: Vec::new(),
-            pending_pick: None,
+            picks: Vec::new(),
+            over_define: None,
             selection: Vec::new(),
             hover: None,
             dragging: None,
@@ -95,11 +101,11 @@ impl SketchSession {
 
     pub fn cancel_pending(&mut self) {
         self.pending.clear();
-        self.pending_pick = None;
+        self.picks.clear();
     }
 
     pub fn has_pending(&self) -> bool {
-        !self.pending.is_empty() || self.pending_pick.is_some()
+        !self.pending.is_empty() || !self.picks.is_empty()
     }
 
     fn to_sketch(&self, cam: &Camera, rect: Rect, p: Pos2) -> Option<Vec2> {
@@ -135,8 +141,8 @@ impl SketchSession {
         if let Some(id) = sk.pick_point(p, radius) {
             return Some(SkSel::Point(id));
         }
-        for (ci, c) in sk.constraints.iter().enumerate() {
-            if let Some(anchor) = dimension_anchor(sk, c) {
+        for ci in 0..sk.constraints.len() {
+            if let Some(anchor) = dimension::label_position(sk, ci) {
                 let s = self.to_screen(cam, rect, anchor);
                 if (s.x - screen.x).abs() < 28.0 && (s.y - screen.y).abs() < 9.0 {
                     return Some(SkSel::Constraint(ci));
@@ -171,7 +177,10 @@ impl SketchSession {
             )
         });
         if esc {
-            if self.has_pending() {
+            if !self.picks.is_empty() {
+                // Esc takes back the last pick.
+                self.picks.pop();
+            } else if self.has_pending() {
                 self.cancel_pending();
             } else if self.tool != Tool::Select {
                 self.tool = Tool::Select;
@@ -226,7 +235,13 @@ impl SketchSession {
                                 }
                             }
                         }
-                        SkSel::Constraint(_) => {}
+                        SkSel::Constraint(ci) => {
+                            // Dragging a dimension moves its value.
+                            let sk = &mut sf.sketch;
+                            if let Some(a) = sk.constraints.get(ci).and_then(|c| dimension::anchor(sk, c)) {
+                                sk.annotation_mut(ci).offset = mouse - a;
+                            }
+                        }
                     }
                     out.modified = true;
                     out.dragging = true;
@@ -340,10 +355,21 @@ impl SketchSession {
                 }
                 Tool::Dimension => {
                     let hit = self.pick(sk, cam, rect, screen, mouse, radius);
-                    if let Some(ci) = self.dimension_click(sk, hit) {
+                    if let Some(ci) = self.dimension_click(sk, hit, mouse) {
+                        self.selection = vec![SkSel::Constraint(ci)];
+                        if dimension::over_defines(sk, ci) {
+                            // Hold it as a reference dimension until the user decides.
+                            sk.set_reference(ci, true);
+                            self.over_define = Some(ci);
+                            self.dim_edit = None;
+                        } else {
+                            self.begin_dim_edit(sf, ci);
+                        }
+                        out.modified = true;
+                    } else if let (Some(SkSel::Constraint(ci)), true) = (hit, self.picks.is_empty()) {
+                        // Clicking an existing dimension's value edits it.
                         self.selection = vec![SkSel::Constraint(ci)];
                         self.begin_dim_edit(sf, ci);
-                        out.modified = true;
                     }
                 }
             }
@@ -355,37 +381,58 @@ impl SketchSession {
         out
     }
 
-    /// Smart Dimension: one click on a circle or arc dimensions it; a line needs a second
-    /// (placement) click, or a second line for an angle; two points give a distance.
-    fn dimension_click(&mut self, sk: &mut Sketch, hit: Option<SkSel>) -> Option<usize> {
-        let first = self.pending_pick.take();
-        let c = match (first, hit) {
-            (None, Some(SkSel::Entity(e))) => match sk.entities[e].geom {
-                Geom::Circle { r, .. } => Constraint::Diameter { entity: e, value: 2.0 * r },
-                Geom::Arc { .. } => Constraint::Radius { entity: e, value: sk.radius(e) },
-                Geom::Line { .. } => {
-                    self.pending_pick = hit;
-                    return None;
-                }
-            },
-            (None, Some(SkSel::Point(p))) => {
-                self.pending_pick = Some(SkSel::Point(p));
-                return None;
-            }
-            (Some(SkSel::Entity(l)), Some(SkSel::Entity(m))) if l != m && sk.entities[m].is_line() => {
-                let (u, w) = (line_dir(sk, l), line_dir(sk, m));
-                Constraint::Angle { a: l, b: m, degrees: u.cross(w).atan2(u.dot(w)).to_degrees() }
-            }
-            (Some(SkSel::Entity(l)), _) => Constraint::Length { line: l, value: sk.line_length(l) },
-            (Some(SkSel::Point(p)), Some(SkSel::Point(q))) if p != q => {
-                Constraint::Distance { p, q, value: sk.pos(p).distance(sk.pos(q)) }
-            }
-            _ => return None,
+    /// The Dimension tool (see `docs/re/sketch-dimension.md`). Clicking a point or curve
+    /// adds it to the picks; clicking empty space, or a curve already picked, places the
+    /// dimension the picks make there. Returns the new dimension's index.
+    fn dimension_click(&mut self, sk: &mut Sketch, hit: Option<SkSel>, at: Vec2) -> Option<usize> {
+        let pick = match hit {
+            Some(SkSel::Point(p)) => Some(Pick::Point(p)),
+            Some(SkSel::Entity(e)) => Some(Pick::Entity(e)),
+            _ => None,
         };
-        Some(sk.add_constraint(c))
+        match pick {
+            Some(pk) if !self.picks.contains(&pk) => {
+                self.picks.push(pk);
+                // Start again from this pick when it cannot join the others.
+                let lone_point = matches!(self.picks.as_slice(), [Pick::Point(_)]);
+                if self.picks.len() > dimension::MAX_PICKS
+                    || (!lone_point && dimension::infer(sk, &self.picks, at).is_none())
+                {
+                    self.picks = vec![pk];
+                }
+                None
+            }
+            _ => {
+                let c = dimension::infer(sk, &self.picks, at)?;
+                self.picks.clear();
+                let ci = sk.add_constraint(c);
+                if let Some(a) = dimension::anchor(sk, &c) {
+                    sk.annotation_mut(ci).offset = at - a;
+                }
+                Some(ci)
+            }
+        }
+    }
+
+    /// The user's answer for a dimension that over-defines the sketch: keep it as a
+    /// reference dimension, keep it driving anyway, or take it back out.
+    pub fn resolve_over_define(&mut self, sf: &mut SketchFeature, choice: OverDefine) {
+        let Some(ci) = self.over_define.take() else { return };
+        match choice {
+            OverDefine::Reference => {}
+            OverDefine::Driving => sf.sketch.set_reference(ci, false),
+            OverDefine::Cancel => {
+                sf.delete_constraint(ci);
+                self.selection.clear();
+            }
+        }
+        self.status = sf.sketch.solve();
     }
 
     pub fn begin_dim_edit(&mut self, sf: &SketchFeature, ci: usize) {
+        if self.over_define.is_some() {
+            return;
+        }
         if let Some(v) = sf.sketch.constraints.get(ci).and_then(|c| c.value()) {
             let text = match sf.driven_expr(ci) {
                 Some(e) => format!("={e}"),
@@ -436,6 +483,7 @@ impl SketchSession {
         }
         self.selection.clear();
         self.dim_edit = None;
+        self.over_define = None;
         self.status = sf.sketch.solve();
     }
 
@@ -504,7 +552,14 @@ impl SketchSession {
 
     /// Draws the sketch being edited, with tool previews.
     pub fn draw(&self, sf: &SketchFeature, painter: &Painter, cam: &Camera, rect: Rect) {
-        let sel = |s: SkSel| self.selection.contains(&s);
+        let sel = |s: SkSel| {
+            self.selection.contains(&s)
+                || match s {
+                    SkSel::Point(p) => self.picks.contains(&Pick::Point(p)),
+                    SkSel::Entity(e) => self.picks.contains(&Pick::Entity(e)),
+                    SkSel::Constraint(_) => false,
+                }
+        };
         let conflicted: Vec<usize> = self
             .status
             .unsatisfied
@@ -543,18 +598,16 @@ impl SketchSession {
         draw_origin(&self.frame, painter, cam, rect);
 
         // Dimensions.
-        for (ci, c) in sf.sketch.constraints.iter().enumerate() {
-            let (Some(anchor), Some(v)) = (dimension_anchor(&sf.sketch, c), c.value()) else {
+        let sk = &sf.sketch;
+        for (ci, c) in sk.constraints.iter().enumerate() {
+            let (Some(at), Some(v)) = (dimension::label_position(sk, ci), c.value()) else {
                 continue;
             };
-            let s = cam.project(self.frame.to_world(anchor), rect);
-            let mut text = format_num(display_value(c, v));
-            text = match c {
-                Constraint::Diameter { .. } => format!("Ø{text}"),
-                Constraint::Radius { .. } => format!("R{text}"),
-                Constraint::Angle { .. } => format!("{text}°"),
-                _ => text,
-            };
+            let reference = sk.is_reference(ci);
+            let mut text = dimension_text(c, v);
+            if reference {
+                text = format!("({text})");
+            }
             if sf.driven_expr(ci).is_some() {
                 text = format!("Σ {text}");
             }
@@ -564,12 +617,30 @@ impl SketchSession {
                 Color32::from_rgb(220, 30, 30)
             } else if self.hover == Some(SkSel::Constraint(ci)) {
                 Color32::from_rgb(240, 170, 60)
+            } else if reference {
+                Color32::from_rgb(120, 120, 120)
             } else {
                 Color32::from_rgb(10, 30, 140)
             };
-            let r = painter.text(s, Align2::CENTER_CENTER, &text, FontId::proportional(13.0), color);
-            painter.rect_filled(r.expand(2.0), 2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 170));
-            painter.text(s, Align2::CENTER_CENTER, text, FontId::proportional(13.0), color);
+            draw_dimension(sk, &self.frame, painter, cam, rect, c, at, &text, color);
+        }
+
+        // The dimension the picks make, following the cursor.
+        if let (Tool::Dimension, Some(m)) = (self.tool, self.mouse) {
+            if let Some(c) = dimension::infer(sk, &self.picks, m) {
+                let text = c.value().map(|v| dimension_text(&c, v)).unwrap_or_default();
+                draw_dimension(
+                    sk,
+                    &self.frame,
+                    painter,
+                    cam,
+                    rect,
+                    &c,
+                    m,
+                    &text,
+                    Color32::from_rgb(80, 120, 255),
+                );
+            }
         }
 
         // Tool preview.
@@ -721,36 +792,66 @@ fn rect_corner_near(sk: &Sketch, lines: &[EntityId; 4], p: Vec2) -> PointId {
         .unwrap()
 }
 
-/// Where a dimension's value label is drawn, in sketch coordinates.
-pub fn dimension_anchor(sk: &Sketch, c: &Constraint) -> Option<Vec2> {
-    use Constraint::*;
-    let mid = |e: EntityId| match sk.entities.get(e)?.geom {
-        Geom::Line { a, b } => {
-            let (pa, pb) = (sk.pos(a), sk.pos(b));
-            Some((pa + pb) * 0.5)
-        }
-        _ => None,
-    };
-    let rim = |e: EntityId| {
-        let ent = sk.entities.get(e)?;
-        let center = match ent.geom {
-            Geom::Circle { c, .. } | Geom::Arc { c, .. } => sk.pos(c),
-            _ => return None,
-        };
-        let r = sk.radius(e);
-        Some(center + Vec2::from_angle(std::f64::consts::FRAC_PI_4) * r)
-    };
-    match *c {
-        Length { line, .. } => mid(line),
-        Radius { entity, .. } | Diameter { entity, .. } => rim(entity),
-        Distance { p, q, .. } => Some((sk.pos(p) + sk.pos(q)) * 0.5),
-        // Horizontal distances sit level with the second point, vertical ones in line
-        // with it, so a pair of them on the same points never overlap.
-        HDistance { p, q, .. } => Some(v2((sk.pos(p).x + sk.pos(q).x) * 0.5, sk.pos(q).y)),
-        VDistance { p, q, .. } => Some(v2(sk.pos(q).x, (sk.pos(p).y + sk.pos(q).y) * 0.5)),
-        Angle { a, b, .. } => Some((mid(a)? + mid(b)?) * 0.5),
-        _ => None,
+/// How the Dimension tool's over-define prompt was answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverDefine {
+    Reference,
+    Driving,
+    Cancel,
+}
+
+/// A dimension's value as shown on screen, with its symbol.
+pub fn dimension_text(c: &Constraint, v: f64) -> String {
+    let text = format_num(display_value(c, v));
+    match c {
+        Constraint::Diameter { .. } | Constraint::AxisDiameter { .. } => format!("Ø{text}"),
+        Constraint::Radius { .. } => format!("R{text}"),
+        Constraint::Angle { .. } | Constraint::RayAngle { .. } => format!("{text}°"),
+        _ => text,
     }
+}
+
+/// Draws one dimension: extension and dimension lines, arrows, and its value at `at`.
+#[allow(clippy::too_many_arguments)]
+fn draw_dimension(
+    sk: &Sketch,
+    frame: &Frame,
+    painter: &Painter,
+    cam: &Camera,
+    rect: Rect,
+    c: &Constraint,
+    at: Vec2,
+    text: &str,
+    color: Color32,
+) {
+    let to = |p: Vec2| cam.project(frame.to_world(p), rect);
+    let g = dimension::graphic(sk, c, at);
+    let stroke = Stroke::new(1.0_f32, color);
+    for (a, b) in &g.lines {
+        painter.line_segment([to(*a), to(*b)], stroke);
+    }
+    for &(center, r, a0, sweep) in &g.arcs {
+        let n = ((sweep / TAU) * 72.0).ceil().max(4.0) as usize;
+        let pts: Vec<Pos2> =
+            (0..=n).map(|i| to(center + Vec2::from_angle(a0 + sweep * i as f64 / n as f64) * r)).collect();
+        painter.add(Shape::line(pts, stroke));
+    }
+    for &(tip, dir) in &g.arrows {
+        let t = to(tip);
+        let d = to(tip + dir) - t;
+        let len = d.length();
+        if len < 1e-6 {
+            continue;
+        }
+        let d = d / len;
+        let n = egui::vec2(-d.y, d.x);
+        let back = t - d * 9.0;
+        painter.add(Shape::convex_polygon(vec![t, back + n * 3.0, back - n * 3.0], color, Stroke::NONE));
+    }
+    let s = to(at);
+    let r = painter.text(s, Align2::CENTER_CENTER, text, FontId::proportional(13.0), color);
+    painter.rect_filled(r.expand(2.0), 2.0, Color32::from_rgba_unmultiplied(255, 255, 255, 200));
+    painter.text(s, Align2::CENTER_CENTER, text, FontId::proportional(13.0), color);
 }
 
 /// HDistance and VDistance store a signed value; show its magnitude.

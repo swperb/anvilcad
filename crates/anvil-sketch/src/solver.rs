@@ -6,7 +6,7 @@
 //! geometry as little as possible. That keeps under-defined sketches stable while the user
 //! drags them, the same way commercial sketchers behave.
 
-use crate::sketch::{Constraint, Geom, PointId, Sketch};
+use crate::sketch::{arc_sweep, Constraint, Geom, PointId, Sketch};
 use anvil_kernel::{v2, Vec2};
 
 const TOL: f64 = 1e-9;
@@ -39,6 +39,8 @@ struct Layout {
     n_points: usize,
     radius_var: Vec<Option<usize>>,
     n: usize,
+    /// Constraints the solver leaves out: reference dimensions.
+    skip: Vec<bool>,
 }
 
 impl Sketch {
@@ -56,7 +58,13 @@ impl Sketch {
                 _ => None,
             })
             .collect();
-        Layout { n_points, radius_var, n }
+        let mut skip = vec![false; self.constraints.len()];
+        for a in &self.annotations {
+            if a.reference && a.constraint < skip.len() {
+                skip[a.constraint] = true;
+            }
+        }
+        Layout { n_points, radius_var, n, skip }
     }
 
     fn gather(&self, l: &Layout) -> Vec<f64> {
@@ -124,6 +132,9 @@ impl Sketch {
         let norm_dot = |u: Vec2, v: Vec2| u.dot(v) / (u.length() * v.length()).max(1e-12);
 
         for (ci, c) in self.constraints.iter().enumerate() {
+            if l.skip[ci] {
+                continue;
+            }
             let mut push = |v: f64| {
                 out.push(v);
                 owner.push(ci);
@@ -190,6 +201,24 @@ impl Sketch {
                     let (ca, cb) = (center(a), center(b));
                     push(ca.x - cb.x);
                     push(ca.y - cb.y);
+                }
+                ArcLength { entity, value } => match self.entities[entity].geom {
+                    Geom::Arc { c, a, b } => {
+                        let (cc, pa, pb) = (p(c), p(a), p(b));
+                        push(pa.distance(cc) * arc_sweep((pa - cc).angle(), (pb - cc).angle()) - value);
+                    }
+                    _ => push(0.0),
+                },
+                RayAngle { a, b, flip_a, flip_b, degrees } => {
+                    let u = if flip_a { -dir(a) } else { dir(a) };
+                    let v = if flip_b { -dir(b) } else { dir(b) };
+                    let d = u.cross(v).atan2(u.dot(v)) - degrees.to_radians();
+                    push((d + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI);
+                }
+                AxisDiameter { p: i, axis, value } => {
+                    let (a, b) = line(axis);
+                    let d = b - a;
+                    push(2.0 * (d.cross(p(i) - a) / d.length().max(1e-12)).abs() - value);
                 }
             }
         }
@@ -291,6 +320,11 @@ impl Sketch {
             .collect();
         unsatisfied.dedup();
         self.scatter(&l, &x);
+        for (ci, skipped) in l.skip.iter().enumerate() {
+            if *skipped {
+                self.refresh_reference(ci);
+            }
+        }
         SolveResult {
             converged,
             iterations: iters,

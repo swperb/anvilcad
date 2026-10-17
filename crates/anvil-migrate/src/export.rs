@@ -561,7 +561,7 @@ impl Ctx<'_> {
             bad.dedup();
             for ci in bad.into_iter().rev() {
                 if ci != 0 {
-                    s.constraints.remove(ci);
+                    s.remove_constraint(ci);
                     dims.retain(|(_, c)| *c != ci);
                     for d in &mut dims {
                         if d.1 > ci {

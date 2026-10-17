@@ -2,7 +2,7 @@
 
 use crate::camera::{Camera, StdView};
 use crate::render::{Renderer, SceneData};
-use crate::sketcher::{self, SkSel, SketchSession, Tool};
+use crate::sketcher::{self, OverDefine, SkSel, SketchSession, Tool};
 use crate::theme::{self, Icon, Palette, RowLook};
 use anvil_kernel::{EdgeRef, FaceId, Mesh, ModelEdge, Vec2, Vec3};
 use anvil_model::*;
@@ -1634,33 +1634,81 @@ impl AnvilApp {
         });
         ui.separator();
 
-        // Dimension editor.
         let mut solve = false;
+
+        // A new dimension that over-defines the sketch: ask what to do with it.
+        if let Some(ci) = s.over_define {
+            let what = sf.sketch.constraints.get(ci).map_or("dimension", |c| c.label());
+            ui.label(RichText::new("Over-defining dimension").strong().color(Color32::from_rgb(200, 30, 30)));
+            ui.label(format!(
+                "This {} is already set by the sketch's other dimensions and relations.",
+                what.to_lowercase()
+            ));
+            let mut choice = None;
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Make Reference").clicked() {
+                    choice = Some(OverDefine::Reference);
+                }
+                if ui.button("Keep Driving").clicked() {
+                    choice = Some(OverDefine::Driving);
+                }
+                if ui.button("Cancel Dimension").clicked() {
+                    choice = Some(OverDefine::Cancel);
+                }
+            });
+            ui.weak("A reference dimension shows the size in parentheses and follows the geometry.");
+            if let Some(c) = choice {
+                s.resolve_over_define(sf, c);
+            }
+            ui.separator();
+        }
+
+        // Dimension editor.
         if let Some((ci, text)) = &mut s.dim_edit {
             let ci = *ci;
             if let Some(c) = sf.sketch.constraints.get(ci).copied() {
                 ui.label(RichText::new(format!("Modify {}", c.label())).strong());
-                let r = ui.add(
-                    egui::TextEdit::singleline(text).desired_width(140.0).hint_text("value or =expression"),
-                );
-                ui.weak("Enter a number, or =name to link a global variable.");
-                if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    let d = Dim::parse(text);
-                    match d.eval(&self.state.variables) {
-                        Ok(v) => {
-                            sf.sketch.constraints[ci].set_value(v);
-                            sf.set_driven(
-                                ci,
-                                match d {
-                                    Dim::Expr(e) => Some(e),
-                                    Dim::Value(_) => None,
-                                },
-                            );
+                if sf.sketch.is_reference(ci) {
+                    let v = c.value().map(|v| sketcher::dimension_text(&c, v)).unwrap_or_default();
+                    ui.label(format!("Reference dimension: ({v})"));
+                    ui.weak("A reference dimension follows the geometry and cannot be edited.");
+                    if ui.button("Make Driving").clicked() {
+                        if anvil_sketch::dimension::over_defines(&sf.sketch, ci) {
+                            self.status = "That dimension would over-define the sketch.".into();
+                        } else {
+                            sf.sketch.set_reference(ci, false);
                             solve = true;
                         }
-                        Err(e) => {
-                            self.status = format!("Invalid dimension: {e}");
+                    }
+                } else {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(text)
+                            .desired_width(140.0)
+                            .hint_text("value, or =expression"),
+                    );
+                    ui.weak("Type a value, arithmetic or units (1in + 2mm, 30deg). Start with = to link an equation.");
+                    if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        let angle = matches!(
+                            c,
+                            anvil_sketch::Constraint::Angle { .. }
+                                | anvil_sketch::Constraint::RayAngle { .. }
+                        );
+                        let vars = &self.state.variables;
+                        match equations::parse_dimension_input(text, angle, &|n| vars.get(n).copied()) {
+                            Ok(input) => {
+                                sf.sketch.constraints[ci].set_value(input.value);
+                                sf.set_driven(ci, input.equation);
+                                solve = true;
+                            }
+                            Err(e) => {
+                                self.status = format!("Invalid dimension: {e}");
+                            }
                         }
+                    }
+                    if ui.button("Make Reference").clicked() {
+                        sf.sketch.set_reference(ci, true);
+                        sf.set_driven(ci, None);
+                        solve = true;
                     }
                 }
                 ui.separator();
@@ -1706,11 +1754,10 @@ impl AnvilApp {
                     let bad = s.status.unsatisfied.contains(&ci);
                     ui.horizontal(|ui| {
                         let mut t = RichText::new(match c.value() {
-                            Some(v) => format!(
-                                "{} = {}",
-                                c.label(),
-                                sketcher::format_num(sketcher::display_value(c, v))
-                            ),
+                            Some(v) if sf.sketch.is_reference(ci) => {
+                                format!("{} = ({})", c.label(), sketcher::dimension_text(c, v))
+                            }
+                            Some(v) => format!("{} = {}", c.label(), sketcher::dimension_text(c, v)),
                             None => c.label().to_string(),
                         });
                         if bad {
@@ -2912,6 +2959,9 @@ impl AnvilApp {
                 "constraints": sk.map(|k| k.constraints.len()),
                 "selected": s.selection.len(),
                 "editing_dimension": s.dim_edit.as_ref().map(|(i, text)| json!({ "constraint": i, "text": text })),
+                "dimension_picks": s.picks.len(),
+                "over_defining_dimension": s.over_define,
+                "reference_dimensions": sk.map(|k| k.annotations.iter().filter(|a| a.reference).count()),
             })
         });
         let editor = match &self.editor {
@@ -3230,7 +3280,7 @@ mod ui_tests {
             _ => panic!("expected a circle"),
         }
 
-        // Smart Dimension on the bottom edge: pick the line, then click to place.
+        // Dimension tool on the bottom edge: pick the line, then click to place.
         h.tool(Tool::Dimension);
         let (mid, place) = (h.screen(0.0, -10.0), h.screen(0.0, -16.0));
         h.click(mid);
@@ -3259,6 +3309,102 @@ mod ui_tests {
         h.app.redo();
         h.step(vec![]);
         assert!(!h.app.state.body.is_empty());
+    }
+
+    #[test]
+    fn dimension_tool_infers_places_and_flags_over_defining() {
+        let mut h = Harness::new();
+        h.app.start_sketch(PlaneRef::Front);
+        h.step(vec![]);
+        h.tool(Tool::Rectangle);
+        let (a, b) = (h.screen(-20.0, -10.0), h.screen(20.0, 10.0));
+        h.click(a);
+        h.click(b);
+        h.tool(Tool::Circle);
+        let (c, r) = (h.screen(0.0, 0.0), h.screen(5.0, 0.0));
+        h.click(c);
+        h.click(r);
+        let radius = h.sketch().radius(4);
+
+        h.tool(Tool::Dimension);
+        // A circle, placed up and to the right: its diameter, with the value where it was
+        // placed.
+        let (rim, place) = (h.screen(radius, 0.0), h.screen(12.0, 8.0));
+        h.click(rim);
+        assert_eq!(h.app.sketch.as_ref().unwrap().picks.len(), 1);
+        h.click(place);
+        let ci = h.sketch().constraints.len() - 1;
+        assert_eq!(h.sketch().constraints[ci], Constraint::Diameter { entity: 4, value: 2.0 * radius });
+        let at = anvil_sketch::dimension::label_position(h.sketch(), ci).unwrap();
+        assert!(at.distance(v2(12.0, 8.0)) < 0.2, "label at {at:?}");
+        assert!(h.app.sketch.as_ref().unwrap().dim_edit.is_some(), "the value box opens");
+
+        // The bottom edge: its length.
+        let (mid, place) = (h.screen(0.0, -10.0), h.screen(0.0, -16.0));
+        h.click(mid);
+        h.click(place);
+        let len = h.sketch().constraints.len() - 1;
+        assert!(
+            matches!(h.sketch().constraints[len], Constraint::Length { line: 0, value } if (value - 40.0).abs() < 1e-3)
+        );
+
+        // Esc takes back the last pick.
+        h.click(h.screen(20.0, 0.0));
+        assert_eq!(h.app.sketch.as_ref().unwrap().picks.len(), 1);
+        h.step(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }]);
+        h.step(vec![]);
+        assert!(h.app.sketch.as_ref().unwrap().picks.is_empty());
+        assert_eq!(h.app.sketch.as_ref().unwrap().tool, Tool::Dimension, "Esc with picks keeps the tool");
+
+        // Two opposite corners, placed above: the horizontal distance, which the length
+        // already sets, so it over-defines the sketch and is held as a reference.
+        let n = h.sketch().constraints.len();
+        h.click(h.screen(-20.0, -10.0));
+        h.click(h.screen(20.0, 10.0));
+        h.click(h.screen(0.0, 15.0));
+        let sk = h.sketch();
+        assert_eq!(sk.constraints.len(), n + 1);
+        assert!(
+            matches!(sk.constraints[n], Constraint::HDistance { value, .. } if (value.abs() - 40.0).abs() < 1e-3)
+        );
+        assert!(sk.is_reference(n));
+        let s = h.app.sketch.as_ref().unwrap();
+        assert_eq!(s.over_define, Some(n));
+        assert!(s.status.converged, "a reference dimension does not over-define: {:?}", s.status);
+
+        // Changing the driving length moves the reference dimension with it.
+        let id = s.feature;
+        let sf = h.app.doc.sketch_mut(id).unwrap();
+        sf.sketch.constraints[len].set_value(50.0);
+        sf.sketch.solve();
+        assert!(
+            matches!(sf.sketch.constraints[n], Constraint::HDistance { value, .. } if (value.abs() - 50.0).abs() < 1e-6)
+        );
+
+        // Keeping it driving instead makes it redundant, and a different value conflicts.
+        let s = h.app.sketch.as_mut().unwrap();
+        s.resolve_over_define(h.app.doc.sketch_mut(id).unwrap(), OverDefine::Driving);
+        assert!(!h.sketch().is_reference(n));
+        assert!(anvil_sketch::dimension::over_defines(h.sketch(), n));
+        let sf = h.app.doc.sketch_mut(id).unwrap();
+        sf.sketch.constraints[n].set_value(45.0);
+        assert!(!sf.sketch.solve().converged);
+        sf.sketch.constraints[n].set_value(50.0);
+        h.app.sketch.as_mut().unwrap().status = h.app.doc.sketch_mut(id).unwrap().sketch.solve();
+
+        // Dragging a value in the select tool moves its label.
+        h.tool(Tool::Select);
+        let from = anvil_sketch::dimension::label_position(h.sketch(), ci).unwrap();
+        let (f, t) = (h.screen(from.x, from.y), h.screen(-14.0, 12.0));
+        h.drag(f, t);
+        let at = anvil_sketch::dimension::label_position(h.sketch(), ci).unwrap();
+        assert!(at.distance(v2(-14.0, 12.0)) < 0.2, "label dragged to {at:?}");
     }
 
     #[test]
