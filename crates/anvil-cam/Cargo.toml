@@ -1,0 +1,31 @@
+[package]
+name = "anvil-cam"
+description = "AnvilCAD CAM: adaptive clearing and 2.5D operations, feature recognition, tooling, simulation, declarative post processors and a G-code verifier"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+
+[features]
+default = []
+# AI-assisted post edits and AI review of edits through the Claude Messages API.
+# Off by default; needs network access and an ANTHROPIC_API_KEY at run time.
+ai = ["dep:ureq"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anvil-kernel.workspace = true
+anvil-model.workspace = true
+cavalier_contours = "0.9"
+toml = "1.1"
+sha2 = "0.11"
+thiserror = "2"
+ureq = { version = "3.4", optional = true, default-features = false, features = ["rustls"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
