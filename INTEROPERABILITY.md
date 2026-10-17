@@ -50,6 +50,16 @@ stays well clear of that ground.
    customer's own licences and credentials, and respecting those services' terms. No
    undocumented endpoints, no scraping, and credentials are never stored in plain text.
 
+## Analysis tools in the repository
+
+`third_party/rea` is a git submodule pinning [REA](https://github.com/morluto/rea) (MIT),
+a general-purpose reverse-engineering toolkit, kept so it is available offline and in cloud
+development sessions. It is not part of AnvilCAD's build and nothing in AnvilCAD links to or
+ships it. Having it here changes none of the rules above: it is never pointed at Dassault
+Systèmes software, its libraries or installers, at proprietary CAD formats, or at any other
+software whose licence forbids reverse engineering, and nothing learned that way may enter
+AnvilCAD. Fetch it with `git submodule update --init third_party/rea`.
+
 ## Trademarks
 
 SOLIDWORKS, CATIA, 3DEXPERIENCE, eDrawings and Dassault Systèmes are trademarks or
