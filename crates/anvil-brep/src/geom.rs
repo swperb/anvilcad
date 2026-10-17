@@ -467,7 +467,7 @@ impl Surface {
                 let d = l / l.length().max(1e-300);
                 DVec2::new(d.x, d.y) * (2.0 * radius / (1.0 + d.z).max(1e-12))
             }
-            Surface::BSpline(s) => s.to_uv(s.closest(p)),
+            Surface::BSpline(s) => s.to_uv(s.closest_beyond(p)),
         }
     }
 

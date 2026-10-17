@@ -8,7 +8,7 @@
 //! refined by Gauss-Newton steps.
 
 use crate::geom::Frame;
-use crate::spline::{MAX_DEGREE, basis};
+use crate::spline::{MAX_DEGREE, basis, basis_free};
 use crate::{KernelError, Result, tol};
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,10 @@ pub struct SplineSurface {
     /// or revolved closed profile, say). The kernel's `u` is laid along it.
     #[serde(default)]
     pub wraps: Option<Wrap>,
+    /// Whether the patch closes on itself along s and along t. Both can (a torus); the
+    /// kernel's `u` follows only `wraps`, but closest-point searches wrap round either.
+    #[serde(default)]
+    pub closed: (bool, bool),
     /// Reference frame (moves with the patch); the patch has no axis of its own.
     pub frame: Frame,
     #[serde(skip)]
@@ -107,6 +111,7 @@ impl SplineSurface {
             weights,
             scale: (1.0, 1.0),
             wraps: None,
+            closed: (false, false),
             frame: Frame::world(),
             grid: OnceLock::new(),
         };
@@ -138,11 +143,15 @@ impl SplineSurface {
         };
         let along_t = |f: f64| t0 + (t1 - t0) * f;
         let along_s = |f: f64| s0 + (s1 - s0) * f;
-        if meets(&|f| DVec2::new(s0, along_t(f)), &|f| DVec2::new(s1, along_t(f))) {
-            s.wraps = Some(Wrap::S);
-        } else if meets(&|f| DVec2::new(along_s(f), t0), &|f| DVec2::new(along_s(f), t1)) {
-            s.wraps = Some(Wrap::T);
-        }
+        s.closed = (
+            meets(&|f| DVec2::new(s0, along_t(f)), &|f| DVec2::new(s1, along_t(f))),
+            meets(&|f| DVec2::new(along_s(f), t0), &|f| DVec2::new(along_s(f), t1)),
+        );
+        s.wraps = match s.closed {
+            (true, _) => Some(Wrap::S),
+            (false, true) => Some(Wrap::T),
+            _ => None,
+        };
         Ok(s)
     }
 
@@ -156,8 +165,10 @@ impl SplineSurface {
     pub fn eval_st(&self, st: DVec2) -> DVec3 {
         let (p, q) = self.degree;
         let (n, m) = self.count;
-        let (span_s, bs) = basis(p, &self.knots_s, n, st.x);
-        let (span_t, bt) = basis(q, &self.knots_t, m, st.y);
+        // Just past an edge the patch carries on smoothly (an imported face's boundary
+        // can lie a little beyond its patch).
+        let (span_s, bs) = basis_free(p, &self.knots_s, n, st.x);
+        let (span_t, bt) = basis_free(q, &self.knots_t, m, st.y);
         let mut acc = DVec3::ZERO;
         let mut w = 0.0;
         for (a, ba) in bs.iter().take(p + 1).enumerate() {
@@ -212,13 +223,19 @@ impl SplineSurface {
     pub fn iso(&self, u: f64) -> Option<crate::spline::Spline> {
         let wrap = self.wraps?;
         let st = self.to_st(DVec2::new(u, 0.0));
+        self.iso_line(wrap, if wrap == Wrap::S { st.x } else { st.y })
+    }
+
+    /// The patch with parameter `fixed` held at `value`, exactly, as a spline in the
+    /// other parameter (whose values it keeps).
+    pub fn iso_line(&self, fixed: Wrap, value: f64) -> Option<crate::spline::Spline> {
         let (p, q) = self.degree;
         let (n, m) = self.count;
         let w = |i: usize, j: usize| self.weights.get(i * m + j).copied().unwrap_or(1.0);
         let rational = !self.weights.is_empty();
-        let (deg, knots, pts): (usize, Vec<f64>, Vec<(DVec3, f64)>) = match wrap {
+        let (deg, knots, pts): (usize, Vec<f64>, Vec<(DVec3, f64)>) = match fixed {
             Wrap::S => {
-                let (span, b) = basis(p, &self.knots_s, n, st.x);
+                let (span, b) = basis(p, &self.knots_s, n, value);
                 let pts = (0..m)
                     .map(|j| {
                         (0..=p).fold((DVec3::ZERO, 0.0), |(acc, wa), a| {
@@ -231,7 +248,7 @@ impl SplineSurface {
                 (q, self.knots_t.clone(), pts)
             }
             Wrap::T => {
-                let (span, b) = basis(q, &self.knots_t, m, st.y);
+                let (span, b) = basis(q, &self.knots_t, m, value);
                 let pts = (0..n)
                     .map(|i| {
                         (0..=q).fold((DVec3::ZERO, 0.0), |(acc, wa), a| {
@@ -254,8 +271,12 @@ impl SplineSurface {
         let ((s0, s1), (t0, t1)) = self.domain();
         let (hs, ht) = ((s1 - s0) * 1e-6, (t1 - t0) * 1e-6);
         let d = |a: DVec2, b: DVec2, h: f64| (self.eval_st(b) - self.eval_st(a)) / h;
-        let (sa, sb) = ((st.x - hs).max(s0), (st.x + hs).min(s1));
-        let (ta, tb) = ((st.y - ht).max(t0), (st.y + ht).min(t1));
+        // Within the domain, one-sided at its edges; past them, on the extrapolated patch.
+        let within = |x: f64, h: f64, lo: f64, hi: f64| {
+            if x < lo || x > hi { (x - h, x + h) } else { ((x - h).max(lo), (x + h).min(hi)) }
+        };
+        let (sa, sb) = within(st.x, hs, s0, s1);
+        let (ta, tb) = within(st.y, ht, t0, t1);
         (
             d(DVec2::new(sa, st.y), DVec2::new(sb, st.y), (sb - sa).max(1e-300)),
             d(DVec2::new(st.x, ta), DVec2::new(st.x, tb), (tb - ta).max(1e-300)),
@@ -297,6 +318,13 @@ impl SplineSurface {
         })
     }
 
+    /// The sample grid: its size in cells along s and t, then each node's parameters and
+    /// point, node (i, j) at index `i * (nt + 1) + j`.
+    pub(crate) fn samples(&self) -> ((usize, usize), &[DVec2], &[DVec3]) {
+        let g = self.grid();
+        (g.n, &g.params, &g.points)
+    }
+
     /// Parameters (s, t) of the patch point closest to `p`: the nearest few of a coarse
     /// pass over the samples, each searched around in full, then refined.
     pub fn closest(&self, p: DVec3) -> DVec2 {
@@ -334,16 +362,65 @@ impl SplineSurface {
         if (self.eval_st(st) - p).length() <= 1e-7 * (1.0 + p.length()) { st } else { self.closest(p) }
     }
 
+    /// Like [`Self::closest`], but a point beyond an open edge finds its foot on the patch
+    /// extrapolated a little past that edge (at most `MARGIN` of the domain). Laying out
+    /// an imported face whose boundary strays past its patch keeps that boundary's shape
+    /// rather than folding it onto the edge.
+    pub fn closest_beyond(&self, p: DVec3) -> DVec2 {
+        self.beyond(p, self.closest(p))
+    }
+
+    /// From `st`, the closest point to `p` within the domain, carries the search past an
+    /// open edge it rests on (see [`Self::closest_beyond`]).
+    pub fn beyond(&self, p: DVec3, mut st: DVec2) -> DVec2 {
+        const MARGIN: f64 = 0.05;
+        let ((s0, s1), (t0, t1)) = self.domain();
+        let at_edge = |x: f64, lo: f64, hi: f64, closed: bool| {
+            !closed && (x <= lo + 1e-12 * (hi - lo) || x >= hi - 1e-12 * (hi - lo))
+        };
+        if !at_edge(st.x, s0, s1, self.closed.0) && !at_edge(st.y, t0, t1, self.closed.1) {
+            return st;
+        }
+        let (ms, mt) = (MARGIN * (s1 - s0), MARGIN * (t1 - t0));
+        let bound = |x: DVec2| {
+            DVec2::new(
+                if self.closed.0 { x.x } else { x.x.clamp(s0 - ms, s1 + ms) },
+                if self.closed.1 { x.y } else { x.y.clamp(t0 - mt, t1 + mt) },
+            )
+        };
+        let mut err = (self.eval_st(st) - p).length_squared();
+        for _ in 0..30 {
+            let f = self.eval_st(st) - p;
+            let (a, b) = self.partials(st);
+            let (aa, ab, bb) = (a.dot(a), a.dot(b), b.dot(b));
+            let det = aa * bb - ab * ab;
+            if det.abs() < 1e-300 {
+                break;
+            }
+            let (g1, g2) = (a.dot(f), b.dot(f));
+            let step = DVec2::new((bb * g1 - ab * g2) / det, (aa * g2 - ab * g1) / det);
+            let next = bound(st - step);
+            let e = (self.eval_st(next) - p).length_squared();
+            if e >= err {
+                break;
+            }
+            let done = (next - st).length() < 1e-15 * (s1 - s0 + t1 - t0);
+            st = next;
+            err = e;
+            if done {
+                break;
+            }
+        }
+        st
+    }
+
     /// `st` brought into the domain: wrapped along a wrapping parameter, clamped otherwise.
-    fn keep_in(&self, st: DVec2) -> DVec2 {
+    pub(crate) fn keep_in(&self, st: DVec2) -> DVec2 {
         let ((s0, s1), (t0, t1)) = self.domain();
         let fit = |x: f64, lo: f64, hi: f64, wraps: bool| {
             if wraps { lo + (x - lo).rem_euclid(hi - lo) } else { x.clamp(lo, hi) }
         };
-        DVec2::new(
-            fit(st.x, s0, s1, self.wraps == Some(Wrap::S)),
-            fit(st.y, t0, t1, self.wraps == Some(Wrap::T)),
-        )
+        DVec2::new(fit(st.x, s0, s1, self.closed.0), fit(st.y, t0, t1, self.closed.1))
     }
 
     /// Gauss-Newton on the distance from `p`, from `st`, within the domain.
@@ -362,10 +439,8 @@ impl SplineSurface {
             let mut step = DVec2::new((bb * g1 - ab * g2) / det, (aa * g2 - ab * g1) / det);
             // At an edge of the domain with the step pointing out, hold that parameter
             // and solve for the other alone (a clamped joint step points the wrong way).
-            let out_s =
-                self.wraps != Some(Wrap::S) && ((st.x <= s0 && step.x > 0.0) || (st.x >= s1 && step.x < 0.0));
-            let out_t =
-                self.wraps != Some(Wrap::T) && ((st.y <= t0 && step.y > 0.0) || (st.y >= t1 && step.y < 0.0));
+            let out_s = !self.closed.0 && ((st.x <= s0 && step.x > 0.0) || (st.x >= s1 && step.x < 0.0));
+            let out_t = !self.closed.1 && ((st.y <= t0 && step.y > 0.0) || (st.y >= t1 && step.y < 0.0));
             if out_s || out_t {
                 step = DVec2::new(
                     if out_s || aa < 1e-300 { 0.0 } else { g1 / aa },
