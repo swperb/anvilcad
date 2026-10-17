@@ -59,8 +59,11 @@ licences and credentials, and credentials are never stored in plain text.
 
 `third_party/rea` is a git submodule pinning [REA](https://github.com/morluto/rea) (MIT),
 a general-purpose reverse-engineering toolkit, kept so it is available offline and in cloud
-development sessions. It is not part of AnvilCAD's build and nothing in AnvilCAD links to or
-ships it. Having it here changes none of the rules above: for SOLIDWORKS it is used on
+development sessions. It is a deliberate, trusted reference, not third-party code that got
+in by accident: contributors and coding agents read its documentation for research method,
+agent and skill structure, handoff and reporting conventions, and how to record evidence
+and unknowns. It is not part of AnvilCAD's build and nothing in AnvilCAD links to or ships
+it. Where its guidance differs from AnvilCAD's own rules, AnvilCAD's rules apply. Having it here changes none of the rules above: for SOLIDWORKS it is used on
 published information only, as described above; it is never pointed at Dassault Systèmes
 software, its libraries or installers, or at any other software whose licence forbids
 reverse engineering, and nothing learned that way may enter AnvilCAD. Fetch it with `git submodule update --init third_party/rea`.
