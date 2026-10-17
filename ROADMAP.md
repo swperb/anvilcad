@@ -46,7 +46,8 @@ Open formats and an open API, usable on one laptop or a team server.
    derived files, with check-in and check-out, revisions, where-used and references, and
    an audit log. Works offline and syncs.
 2. Metadata from custom properties, searchable; part numbering schemes; data cards defined
-   in plain files.
+   in plain files. The starting point exists: `anvil-props` converts SOLIDWORKS custom
+   properties into `.anvilprops.json` files and a company-wide `properties.csv` index.
 3. Life-cycle states (work in progress, in review, released, obsolete) with transitions,
    permissions and approvals.
 4. An open REST API (OpenAPI described), command-line tools and file-based configuration,

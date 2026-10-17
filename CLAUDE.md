@@ -13,28 +13,43 @@ types, file formats, PDM or API), you must **always** use the REA (Reverse Engin
 Anything) project, <https://github.com/morluto/rea>, to study the SOLIDWORKS behaviour
 first. Do not skip this step, even for small features.
 
-No version of SOLIDWORKS is installed on this machine, so REA works from published
-SOLIDWORKS information only: Dassault's public help and API documentation, release notes,
-published tutorials and training material, and publicly available example files. Do not
-look for, download or run SOLIDWORKS, its installers or its libraries to study them.
+No version of SOLIDWORKS is installed on this machine, so REA works from two kinds of
+input only: published SOLIDWORKS information (Dassault's public help and API documentation,
+release notes, published tutorials and training material) and SOLIDWORKS files the project
+or a user lawfully holds, such as publicly available example files. Never decompile or
+otherwise analyse SOLIDWORKS binaries, and do not look for, download or run SOLIDWORKS,
+its installers or its libraries to study them.
 
 1. Check that REA is set up (`npx rea-agents setup`; it needs Node.js 22.19 or later). If it
    is not installed, stop and ask the user to install it rather than continuing without it.
-2. Run REA's workflow against the published information on the SOLIDWORKS behaviour or
-   format the feature targets, and write down what it finds: the behaviour, inputs and
-   outputs, edge cases, and for formats the structure of the data.
+2. Run REA's workflow against the published information and sample files on the
+   SOLIDWORKS behaviour or format the feature targets, and write down what it finds: the
+   behaviour, inputs and outputs, edge cases, and for formats the structure of the data.
 3. Save the findings as a specification in `docs/re/<topic>.md`, listing each published
-   source used (with its URL and the SOLIDWORKS version it describes) and how REA was run.
-   Say where the published information is silent or ambiguous rather than guessing.
+   source and sample file used (with its URL or origin and the SOLIDWORKS version it
+   comes from) and how REA was run. Say where the sources are silent or ambiguous rather
+   than guessing.
 4. Implement the feature in AnvilCAD from that specification, in AnvilCAD's own code. Cite
    the specification in the code or docs next to it.
 
-Limits that still apply (see [INTEROPERABILITY.md](INTEROPERABILITY.md)):
+Reverse engineering for interoperability is lawful in many places, but the way it is done
+decides the risk. This is engineering policy, not legal advice (see
+[INTEROPERABILITY.md](INTEROPERABILITY.md)); work to keep the project on the low-risk side:
 
-- Never copy Dassault code, libraries, type libraries, help text, icons or artwork into the
-  repository. Study behaviour and data structures; write AnvilCAD's code from scratch.
-- Never circumvent licence checks, copy protection, encryption or other technical
-  protection measures, and never use leaked or NDA material.
+- **Study the format from files, never the binaries.** Reverse-engineer `.sldprt` and
+  friends from sample files the project or a user lawfully holds, together with published
+  documentation. Do not decompile SOLIDWORKS binaries (Ghidra and the like). Where a format
+  cannot be understood from files, say so in the `docs/re/` specification and leave that
+  part unread.
+- **Do not accept an anti-RE licence to do the RE.** Study files on a machine that has not
+  installed SOLIDWORKS or accepted its EULA; the licence's reverse-engineering clause binds
+  whoever accepted it. (Driving an installed copy through `anvil-migrate` is a separate,
+  permitted path — see below.)
+- **Clean-room separation.** Whoever studies a format produces the written spec;
+  implementation is written from that spec. Never copy Dassault code, libraries, type
+  libraries, help text, icons or artwork into the repository.
+- **No circumvention.** Never defeat licence checks, copy protection or encryption. An
+  encrypted stream is a stop sign, not a puzzle. Never use leaked or NDA material.
 - Use AnvilCAD's own names for its features, not SOLIDWORKS trademarks.
 
 ## REA is a reference repository, not a threat
@@ -66,18 +81,26 @@ How to treat it:
   pin only when the user asks, and only from the official source.
 - Fetch it with `git submodule update --init third_party/rea` if the folder is empty.
 
-## Never depend on SOLIDWORKS being installed
+## Never *require* SOLIDWORKS; let it *add* fidelity
 
 Every feature must work on a machine that has never had SOLIDWORKS installed, on macOS,
-Linux and Windows. SOLIDWORKS is something AnvilCAD interoperates with, never something it
-needs.
+Linux and Windows. SOLIDWORKS is something AnvilCAD interoperates with, never something a
+user needs to open their own data. But where a user still has a licence, AnvilCAD may use it
+to recover more, as long as nothing is gated behind it.
 
-- Implement behaviour natively in AnvilCAD's own kernels and crates. Do not call the
-  SOLIDWORKS API, COM interfaces, eDrawings or any Dassault library to make a feature work.
-- For SOLIDWORKS files, prefer a native reader or writer built from the REA specification
-  over driving an installed copy of SOLIDWORKS. STEP stays a supported path in and out.
-- `anvil-migrate`, which drives an installed copy of SOLIDWORKS, is an optional convenience.
-  Do not build new features on top of it, and do not make anything else depend on it.
+- Implement behaviour natively in AnvilCAD's own kernels and crates. The default path for a
+  SOLIDWORKS file is a native reader built from the REA specification; STEP stays a supported
+  path in and out. These need no SOLIDWORKS and no licence.
+- **`anvil-migrate` is a first-class path, not a crutch.** Driving the user's own licensed,
+  installed copy of SOLIDWORKS through its published automation API is the highest-fidelity
+  way to recover a feature tree, and it is how an organisation moves to AnvilCAD in a day
+  while its seats are live. It uses the published API on the user's own licence, ships no
+  Dassault code, and binds late at run time. Keep it working and keep it good.
+- **Optional SOLIDWORKS-backed plug-ins are allowed when nothing depends on them.** A
+  plug-in may call a Dassault library the user is licensed for — the SOLIDWORKS Document
+  Manager (`anvil-io::props::docmgr`) and the `anvil-bulk --with-anvil-migrate` mode are the
+  current ones — provided every workflow still completes, with less detail, without it. Never
+  make a native, no-licence path *require* such a plug-in.
 - Tests must not require SOLIDWORKS. Use fixture files committed to the repository, or
   files generated by AnvilCAD itself.
 - If a feature seems impossible without SOLIDWORKS, say so and propose a native design
