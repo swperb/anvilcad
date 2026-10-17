@@ -6,7 +6,7 @@ use crate::sketcher::{self, SkSel, SketchSession, Tool};
 use anvil_kernel::{EdgeRef, FaceId, Mesh, ModelEdge, Vec2, Vec3};
 use anvil_model::*;
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Sense, Stroke};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -118,6 +118,18 @@ pub struct AnvilApp {
     /// and picked from.
     pick_body: Option<PickBody>,
     hover_edge: Option<EdgeRef>,
+    /// `Some` when file dialogs are answered by a script instead of the native dialog
+    /// (the headless harness): each answer is a path, or `None` for Cancel.
+    scripted_dialogs: Option<VecDeque<Option<PathBuf>>>,
+    /// File dialogs asked for since the harness last looked, with the answer each got.
+    dialog_log: Vec<DialogRequest>,
+}
+
+/// A file dialog the app asked for while dialogs were scripted.
+#[derive(Clone, Debug)]
+pub struct DialogRequest {
+    pub title: &'static str,
+    pub answer: Option<PathBuf>,
 }
 
 struct PickBody {
@@ -186,6 +198,8 @@ impl AnvilApp {
             view_rect: egui::Rect::NOTHING,
             pick_body: None,
             hover_edge: None,
+            scripted_dialogs: None,
+            dialog_log: Vec::new(),
         };
         if let Some(p) = open {
             if p.as_os_str() == "--sample" {
@@ -336,6 +350,19 @@ impl AnvilApp {
 
     // ----- files -------------------------------------------------------------------------
 
+    /// Asks the user for a file. While dialogs are scripted the next queued answer is used
+    /// (Cancel when the queue is empty), so a headless run never opens a native window.
+    fn file_dialog(
+        &mut self,
+        title: &'static str,
+        native: impl FnOnce() -> Option<PathBuf>,
+    ) -> Option<PathBuf> {
+        let Some(queue) = &mut self.scripted_dialogs else { return native() };
+        let answer = queue.pop_front().flatten();
+        self.dialog_log.push(DialogRequest { title, answer: answer.clone() });
+        answer
+    }
+
     fn request(&mut self, a: PendingAction) {
         if self.is_dirty() {
             self.confirm = Some(a);
@@ -349,27 +376,32 @@ impl AnvilApp {
             PendingAction::New => self.load_document(Document::new(), None),
             PendingAction::OpenSample => self.load_document(crate::sample::sample_part(), None),
             PendingAction::Open => {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter(
-                        "AnvilCAD, STEP and SOLIDWORKS files",
-                        &[
-                            "anvprt",
-                            "anvprtdot",
-                            "fprt",
-                            "step",
-                            "stp",
-                            "sldprt",
-                            "sldasm",
-                            "slddrw",
-                            "prtdot",
-                        ],
-                    )
-                    .add_filter("AnvilCAD part", &["anvprt"])
-                    .add_filter("STEP", &["step", "stp"])
-                    .add_filter("AnvilCAD part template", &["anvprtdot"])
-                    .add_filter("SOLIDWORKS", &["sldprt", "sldasm", "slddrw", "prtdot", "asmdot", "drwdot"])
-                    .pick_file()
-                {
+                let picked = self.file_dialog("Open", || {
+                    rfd::FileDialog::new()
+                        .add_filter(
+                            "AnvilCAD, STEP and SOLIDWORKS files",
+                            &[
+                                "anvprt",
+                                "anvprtdot",
+                                "fprt",
+                                "step",
+                                "stp",
+                                "sldprt",
+                                "sldasm",
+                                "slddrw",
+                                "prtdot",
+                            ],
+                        )
+                        .add_filter("AnvilCAD part", &["anvprt"])
+                        .add_filter("STEP", &["step", "stp"])
+                        .add_filter("AnvilCAD part template", &["anvprtdot"])
+                        .add_filter(
+                            "SOLIDWORKS",
+                            &["sldprt", "sldasm", "slddrw", "prtdot", "asmdot", "drwdot"],
+                        )
+                        .pick_file()
+                });
+                if let Some(p) = picked {
                     self.open_path(&p);
                 }
             }
@@ -435,10 +467,15 @@ impl AnvilApp {
     fn save(&mut self, save_as: bool) {
         let path = match (&self.path, save_as) {
             (Some(p), false) => Some(p.clone()),
-            _ => rfd::FileDialog::new()
-                .add_filter("AnvilCAD part", &[PART_EXT])
-                .set_file_name(format!("{}.{PART_EXT}", self.part_name()))
-                .save_file(),
+            _ => {
+                let name = format!("{}.{PART_EXT}", self.part_name());
+                self.file_dialog("Save As", || {
+                    rfd::FileDialog::new()
+                        .add_filter("AnvilCAD part", &[PART_EXT])
+                        .set_file_name(name)
+                        .save_file()
+                })
+            }
         };
         let Some(path) = path else { return };
         match self.doc.save(&path) {
@@ -452,11 +489,12 @@ impl AnvilApp {
     }
 
     fn save_template(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("AnvilCAD part template", &[PART_TEMPLATE_EXT])
-            .set_file_name(format!("Template.{PART_TEMPLATE_EXT}"))
-            .save_file()
-        {
+        if let Some(path) = self.file_dialog("Save Template", || {
+            rfd::FileDialog::new()
+                .add_filter("AnvilCAD part template", &[PART_TEMPLATE_EXT])
+                .set_file_name(format!("Template.{PART_TEMPLATE_EXT}"))
+                .save_file()
+        }) {
             match self.doc.save(&path) {
                 Ok(()) => self.status = format!("Template saved to {}", path.display()),
                 Err(e) => self.message = Some(("Save failed".into(), e.to_string())),
@@ -469,13 +507,15 @@ impl AnvilApp {
             self.message = Some(("Export".into(), "There is no solid body to export yet.".into()));
             return;
         }
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("STEP AP214", &["step", "stp"])
-            .add_filter("STL", &["stl"])
-            .add_filter("Wavefront OBJ", &["obj"])
-            .set_file_name(format!("{}.step", self.part_name()))
-            .save_file()
-        {
+        let name = format!("{}.step", self.part_name());
+        if let Some(path) = self.file_dialog("Export", || {
+            rfd::FileDialog::new()
+                .add_filter("STEP AP214", &["step", "stp"])
+                .add_filter("STL", &["stl"])
+                .add_filter("Wavefront OBJ", &["obj"])
+                .set_file_name(name)
+                .save_file()
+        }) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             // Exact geometry when the whole part was built exactly, facets otherwise.
             let exact = (ext == "step" || ext == "stp")
@@ -2596,6 +2636,168 @@ impl AnvilApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint();
+    }
+}
+
+// ----- headless harness API --------------------------------------------------------------
+
+impl AnvilApp {
+    /// Answers file dialogs from [`AnvilApp::queue_file_dialog`] instead of opening native
+    /// dialogs. Used by the headless harness so a run never opens a window.
+    pub fn script_file_dialogs(&mut self) {
+        self.scripted_dialogs.get_or_insert_with(VecDeque::new);
+    }
+
+    /// Queues the answer to the next file dialog: a path, or `None` to cancel it.
+    pub fn queue_file_dialog(&mut self, answer: Option<PathBuf>) {
+        self.scripted_dialogs.get_or_insert_with(VecDeque::new).push_back(answer);
+    }
+
+    /// The file dialogs asked for since the last call.
+    pub fn take_dialog_requests(&mut self) -> Vec<DialogRequest> {
+        std::mem::take(&mut self.dialog_log)
+    }
+
+    /// Opens a part, template or STEP file, as File > Open would (asking nothing).
+    pub fn open_file(&mut self, p: &Path) {
+        self.open_path(p);
+    }
+
+    /// Replaces the document with the sample part.
+    pub fn open_sample(&mut self) {
+        self.load_document(crate::sample::sample_part(), None);
+    }
+
+    /// Replaces the document with an empty part.
+    pub fn new_document(&mut self) {
+        self.load_document(Document::new(), None);
+    }
+
+    /// The part being edited.
+    pub fn document(&self) -> &Document {
+        &self.doc
+    }
+
+    /// The viewport's rectangle in points, once a frame has been drawn.
+    pub fn viewport_rect(&self) -> egui::Rect {
+        self.view_rect
+    }
+
+    /// Screen position (in points) of a model point.
+    pub fn project(&self, p: Vec3) -> egui::Pos2 {
+        self.camera.project(p, self.view_rect)
+    }
+
+    /// Screen position (in points) of a point in the sketch being edited.
+    pub fn project_sketch(&self, x: f64, y: f64) -> Option<egui::Pos2> {
+        let s = self.sketch.as_ref()?;
+        Some(self.camera.project(s.frame.to_world(Vec2 { x, y }), self.view_rect))
+    }
+
+    /// A summary of what the user would see, as JSON: the feature tree, rebuild errors,
+    /// the body's mass properties, the open sketch, editor, windows and dialogs.
+    pub fn snapshot(&self) -> serde_json::Value {
+        use serde_json::json;
+        let features: Vec<_> = self
+            .doc
+            .features
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                json!({
+                    "id": f.id,
+                    "name": f.name,
+                    "kind": kind_name(&f.kind),
+                    "suppressed": f.suppressed,
+                    "rolled_back": self.doc.rollback.is_some_and(|r| i >= r),
+                    "error": self.state.errors.get(&f.id),
+                    "sketch_status": self.state.sketch_status.get(&f.id).map(|s| s.status_text()),
+                })
+            })
+            .collect();
+        let body = &self.state.body;
+        let body = if body.is_empty() {
+            json!({ "empty": true })
+        } else {
+            let m = body.mass_properties();
+            let b = body.bounds();
+            json!({
+                "empty": false,
+                "volume": m.volume,
+                "surface_area": m.surface_area,
+                "centroid": [m.centroid.x, m.centroid.y, m.centroid.z],
+                "bounds": { "min": [b.min.x, b.min.y, b.min.z], "max": [b.max.x, b.max.y, b.max.z] },
+                "open_edges": body.open_edges(),
+                "exact": self.state.exact.is_some(),
+                "triangles": self.mesh.indices.len(),
+            })
+        };
+        let sketch = self.sketch.as_ref().map(|s| {
+            let sk = self.doc.sketch(s.feature).map(|f| &f.sketch);
+            json!({
+                "feature": s.feature,
+                "tool": s.tool.label(),
+                "status": s.status.status_text(),
+                "dof": s.status.dof,
+                "points": sk.map(|k| k.points.len()),
+                "entities": sk.map(|k| k.entities.len()),
+                "constraints": sk.map(|k| k.constraints.len()),
+                "selected": s.selection.len(),
+                "editing_dimension": s.dim_edit.as_ref().map(|(i, text)| json!({ "constraint": i, "text": text })),
+            })
+        });
+        let editor = match &self.editor {
+            None => serde_json::Value::Null,
+            Some(Editor::PickPlane(p)) => json!({ "picking_plane_for": format!("{p:?}") }),
+            Some(Editor::Feature { id, is_new, .. }) => json!({
+                "feature": id,
+                "kind": self.doc.feature(*id).map(|f| kind_name(&f.kind)),
+                "new": is_new,
+            }),
+        };
+        let w = &self.windows;
+        let r = self.view_rect;
+        json!({
+            "title": self.title(),
+            "path": self.path.as_ref().map(|p| p.display().to_string()),
+            "dirty": self.is_dirty(),
+            "status": self.status,
+            "tab": format!("{:?}", self.tab),
+            "selection": format!("{:?}", self.selection),
+            "features": features,
+            "errors": self.state.errors.len(),
+            "body": body,
+            "material": self.doc.material.as_ref().map(|m| m.name.clone()),
+            "variables": self.state.variables,
+            "sketch": sketch,
+            "editor": editor,
+            "windows": {
+                "properties": w.properties, "equations": w.equations, "mass": w.mass,
+                "dfm": w.dfm, "about": w.about,
+            },
+            "message": self.message.as_ref().map(|(t, m)| json!({ "title": t, "text": m })),
+            "confirm": self.confirm.map(|a| format!("{a:?}")),
+            "undo": self.undo.len(),
+            "redo": self.redo.len(),
+            "viewport": [r.min.x, r.min.y, r.max.x, r.max.y],
+        })
+    }
+}
+
+fn kind_name(k: &FeatureKind) -> &'static str {
+    match k {
+        FeatureKind::Sketch(_) => "Sketch",
+        FeatureKind::Extrude(e) if e.op == BodyOp::Cut => "ExtrudedCut",
+        FeatureKind::Extrude(_) => "Extrude",
+        FeatureKind::Revolve(r) if r.op == BodyOp::Cut => "RevolvedCut",
+        FeatureKind::Revolve(_) => "Revolve",
+        FeatureKind::Plane(_) => "Plane",
+        FeatureKind::LinearPattern(_) => "LinearPattern",
+        FeatureKind::CircularPattern(_) => "CircularPattern",
+        FeatureKind::ImportedBody(_) => "ImportedBody",
+        FeatureKind::Fillet(_) => "Fillet",
+        FeatureKind::Chamfer(_) => "Chamfer",
+        FeatureKind::Shell(_) => "Shell",
     }
 }
 

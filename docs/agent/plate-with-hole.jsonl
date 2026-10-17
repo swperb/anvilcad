@@ -1,0 +1,19 @@
+# Sketch a 40 x 20 plate with a hole on the Front plane, extrude it, and check the result.
+# Run: cargo run -p anvil-app --bin anvilcad-agent -- --script docs/agent/plate-with-hole.jsonl
+{"cmd":"click","label":"Front Plane"}
+{"cmd":"click","label":"Sketch"}
+{"cmd":"click","label":"Sketch","index":1}
+{"cmd":"click","label":"Rectangle"}
+{"cmd":"click","sketch":[-20,-10]}
+{"cmd":"click","sketch":[20,10]}
+{"cmd":"click","label":"Circle"}
+{"cmd":"click","sketch":[0,0]}
+{"cmd":"click","sketch":[5,0]}
+{"cmd":"key","key":"Escape"}
+{"cmd":"click","label":"Exit Sketch"}
+{"cmd":"click","label":"Features"}
+{"cmd":"click","label":"Extruded Boss/Base"}
+{"cmd":"click","label":"OK","role":"Button"}
+{"cmd":"key","key":"7","modifiers":["cmd"]}
+{"cmd":"state","id":"result"}
+{"cmd":"screenshot","path":"target/agent/plate-with-hole.png"}

@@ -68,6 +68,15 @@ to recover more, as long as nothing is gated behind it.
 - If a feature seems impossible without SOLIDWORKS, say so and propose a native design
   before writing code.
 
+## Seeing and testing the app: use the headless harness
+
+- To see or test the app, use `anvilcad-agent`, never the windowed app:
+  `cargo run -p anvil-app --bin anvilcad-agent -- ...` (see
+  [docs/AGENT_HARNESS.md](docs/AGENT_HARNESS.md)). It opens no window, so it never takes
+  focus from the user or uses their mouse and keyboard. Running `anvilcad` itself
+  (`cargo run -p anvil-app`) opens a real window; don't.
+- Save harness screenshots under `target/` and look at them before you describe them.
+
 ## Engineering standards
 
 - Stability and performance come first. Library code never panics on bad input; it returns
