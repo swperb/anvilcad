@@ -68,6 +68,77 @@ impl TriMesh {
     }
 }
 
+/// Where two edges leave a vertex in (nearly) the same direction (curves touching there,
+/// a pin's circle against a rim, say), adds samples near the vertex on each of them at
+/// distances growing geometrically from a tiny one, the same for every such edge. Each
+/// first chord then leaves at an angle set by its own curve's bend, so the polylines keep
+/// the curves' order; with chords of one fixed angle step they would cross.
+fn grade_touching_ends(solid: &Solid, edges: &mut [Vec<DVec3>]) {
+    let Some(first) = solid.vertices.first().map(|v| v.point) else { return };
+    let (lo, hi) = solid.vertices.iter().fold((first, first), |(a, b), v| (a.min(v.point), b.max(v.point)));
+    let base = 1e-6 * (hi - lo).length().max(1e-3);
+    // (edge, at its start) for each vertex, with the direction leaving it.
+    let mut ends: Vec<Vec<(usize, bool, DVec3)>> = vec![Vec::new(); solid.vertices.len()];
+    for (i, (e, pts)) in solid.edges.iter().zip(edges.iter()).enumerate() {
+        let n = pts.len();
+        if n < 2 {
+            continue;
+        }
+        if let Some(d) = (pts[1] - pts[0]).try_normalize() {
+            ends[e.start.index()].push((i, true, d));
+        }
+        if let Some(d) = (pts[n - 2] - pts[n - 1]).try_normalize() {
+            ends[e.end.index()].push((i, false, d));
+        }
+    }
+    let mut grade: Vec<(usize, bool)> = Vec::new();
+    for list in &ends {
+        for (k, a) in list.iter().enumerate() {
+            if list.iter().skip(k + 1).any(|b| (a.0, a.1) != (b.0, b.1) && a.2.dot(b.2) > 0.995) {
+                grade.push((a.0, a.1));
+                grade.extend(list.iter().filter(|b| a.2.dot(b.2) > 0.995).map(|b| (b.0, b.1)));
+            }
+        }
+    }
+    grade.sort_unstable();
+    grade.dedup();
+    for (i, at_start) in grade {
+        let e = &solid.edges[i];
+        let pts = &mut edges[i];
+        let n = pts.len();
+        let (end, next) = if at_start { (pts[0], pts[1]) } else { (pts[n - 1], pts[n - 2]) };
+        let (t_end, t_next) = if at_start {
+            (e.t0, e.curve.param_in_range(next, e.t0, e.t1))
+        } else {
+            (e.t1, e.curve.param_in_range(next, e.t0, e.t1))
+        };
+        let reach = (next - end).length();
+        let mut extra = Vec::new();
+        let mut d = base;
+        while d < 0.6 * reach {
+            // The point on the curve `d` from the end, by bisection between the end and
+            // the next sample.
+            let (mut a, mut b) = (0.0, 1.0);
+            for _ in 0..60 {
+                let m = 0.5 * (a + b);
+                if (e.curve.eval(t_end + (t_next - t_end) * m) - end).length() < d {
+                    a = m;
+                } else {
+                    b = m;
+                }
+            }
+            extra.push(e.curve.eval(t_end + (t_next - t_end) * 0.5 * (a + b)));
+            d *= 1.5;
+        }
+        if at_start {
+            pts.splice(1..1, extra);
+        } else {
+            extra.reverse();
+            pts.splice(n - 1..n - 1, extra);
+        }
+    }
+}
+
 pub fn tessellate(solid: &Solid, params: &TessParams) -> Result<TriMesh> {
     let mut edges = Vec::with_capacity(solid.edges.len());
     for e in &solid.edges {
@@ -82,8 +153,23 @@ pub fn tessellate(solid: &Solid, params: &TessParams) -> Result<TriMesh> {
         if let Some(last) = pts.last_mut() {
             *last = b.point;
         }
+        // A sample within tolerance of a pinned end (a knot just beside a healed vertex)
+        // only makes a sliver there, which faces on either side can lay out differently.
+        let n = pts.len();
+        if n > 2 {
+            let near =
+                |p: DVec3, q: DVec3| (p - q).length() <= crate::tol::LINEAR * (1.0 + q.length() * 1e-6);
+            let mut kept = Vec::with_capacity(n);
+            for (i, p) in pts.iter().enumerate() {
+                if i == 0 || i == n - 1 || !(near(*p, a.point) || near(*p, b.point)) {
+                    kept.push(*p);
+                }
+            }
+            pts = kept;
+        }
         edges.push(pts);
     }
+    grade_touching_ends(solid, &mut edges);
     let mut mesh = TriMesh { edges, ..TriMesh::default() };
     for (fi, face) in solid.faces.iter().enumerate() {
         tessellate_face(face, fi as u32, &mut mesh, params)
@@ -405,7 +491,7 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
                         None => sp.closest(*p),
                     };
                     seed = Some(st);
-                    let mut q = sp.to_uv(st);
+                    let mut q = sp.to_uv(sp.beyond(*p, st));
                     // On a wrapping patch, stay on the previous point's turn.
                     if let (Some(per), Some(pr)) = (period, prev) {
                         q.x += per * ((pr - q.x) / per).round();

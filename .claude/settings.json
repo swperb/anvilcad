@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"$CLAUDE_CODE_REMOTE\" = \"true\" ] && [ ! -e \"$CLAUDE_PROJECT_DIR/third_party/rea/package.json\" ]; then git -C \"$CLAUDE_PROJECT_DIR\" submodule update --init --depth 1 third_party/rea >&2 || true; fi",
+            "timeout": 300
+          }
+        ]
+      }
+    ]
+  }
+}

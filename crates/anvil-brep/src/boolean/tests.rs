@@ -570,6 +570,58 @@ fn pointed_cone_cut_at_an_angle() {
     assert!(d[0].edges.iter().any(|e| matches!(e.curve, Curve::Spline(_))));
 }
 
+#[test]
+fn cut_through_a_drill_point() {
+    // A pointed cone (apex at the origin, radius 5 at height 10) and a 3 mm cylinder
+    // across it along y whose wall runs through the apex: the cut's edge on the cone
+    // passes through the tip, so the cone face is split there.
+    let c = pointed_cone(5.0, 10.0);
+    let bar = cylinder(DVec3::new(3.0, 0.0, 0.0), DVec3::Y, 3.0, -20.0, 20.0);
+    // What the bar takes: at height z the cone's disc (radius z / 2) within the strip
+    // |x - 3| <= sqrt(9 - z^2), integrated over 0 <= z <= 3 by Simpson's rule.
+    let disc_left_of = |x: f64, r: f64| {
+        let u = (x / r).clamp(-1.0, 1.0);
+        r * r * (u.asin() + u * (1.0 - u * u).sqrt() + PI / 2.0)
+    };
+    let slice = |z: f64| {
+        let (r, w) = (z / 2.0, (9.0 - z * z).max(0.0).sqrt());
+        if r <= 0.0 { 0.0 } else { disc_left_of(3.0 + w, r) - disc_left_of(3.0 - w, r) }
+    };
+    let n = 20_000;
+    let h = 3.0 / n as f64;
+    let taken = (0..=n)
+        .map(|i| {
+            let k = if i == 0 || i == n {
+                1.0
+            } else if i % 2 == 1 {
+                4.0
+            } else {
+                2.0
+            };
+            k * slice(i as f64 * h)
+        })
+        .sum::<f64>()
+        * h
+        / 3.0;
+    let fine = |s: &[Solid]| -> f64 {
+        s.iter()
+            .map(|x| {
+                check::validate(x).expect("valid");
+                let m = tess::tessellate(x, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+                assert!(m.is_watertight(), "not watertight");
+                mass::properties(&m).volume
+            })
+            .sum()
+    };
+    let i = boolean(&c, &bar, BoolOp::Intersect).expect("intersect");
+    assert!(close(fine(&i), taken, 1e-4), "{} vs {taken}", fine(&i));
+    let d = boolean(&c, &bar, BoolOp::Subtract).expect("subtract");
+    let whole = PI * 25.0 * 10.0 / 3.0;
+    assert!(close(fine(&d), whole - taken, 1e-4), "{} vs {}", fine(&d), whole - taken);
+    // The cut's edges on the cone end at its apex.
+    assert!(d.iter().flat_map(|s| &s.vertices).any(|v| v.point.length() < 1e-9));
+}
+
 /// A 30 x 20 block 5 deep whose top is a freeform bump (a bicubic patch over the same
 /// rectangle, flat along its edges), and its volume by integrating the patch's height.
 fn bumped_block() -> (Solid, f64) {
@@ -622,9 +674,87 @@ fn freeform_block_cut_below_its_patch() {
     assert_eq!(d.len(), 1);
     let removed = PI * 9.0 * 3.0;
     assert!(close(volume(&d), whole - removed, 2e-3), "{} vs {}", volume(&d), whole - removed);
-    // Cutting into the patch itself needs freeform intersections: refused, not guessed.
-    let deep = cylinder(DVec3::new(15.0, 10.0, -10.0), DVec3::Z, 3.0, 0.0, 30.0);
-    assert!(boolean(&b, &deep, BoolOp::Subtract).is_err());
+}
+
+/// The bump's height above (x, y), from a ray down onto the patch.
+fn bump_height(x: f64, y: f64) -> f64 {
+    let patch = crate::patch::tests::bump();
+    let hits = patch.line_hits(DVec3::new(x, y, 100.0), DVec3::NEG_Z, 0.0, 200.0);
+    hits.first().map_or(0.0, |t| 100.0 - t)
+}
+
+/// Integral over the disc of radius `r` at (cx, cy) of `f(x, y)`, by the midpoint rule.
+fn over_disc(cx: f64, cy: f64, r: f64, f: impl Fn(f64, f64) -> f64) -> f64 {
+    let n = 160;
+    let h = 2.0 * r / n as f64;
+    let mut sum = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = (cx - r + h * (i as f64 + 0.5), cy - r + h * (j as f64 + 0.5));
+            if (x - cx).powi(2) + (y - cy).powi(2) <= r * r {
+                sum += f(x, y) * h * h;
+            }
+        }
+    }
+    sum
+}
+
+#[test]
+fn hole_through_a_freeform_top() {
+    let (b, _) = bumped_block();
+    let whole = volume(std::slice::from_ref(&b));
+    let hole = cylinder(DVec3::new(15.0, 10.0, -10.0), DVec3::Z, 3.0, 0.0, 30.0);
+    let d = boolean(&b, &hole, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&b, &hole, BoolOp::Intersect).expect("intersect");
+    assert_eq!(d.len(), 1);
+    // The cut edges on the patch are traced curves.
+    assert!(d[0].edges.iter().any(|e| matches!(e.curve, Curve::Spline(_))));
+    assert!(close(volume(&d) + volume(&i), whole, 2e-3), "{} + {} vs {whole}", volume(&d), volume(&i));
+    let plug = over_disc(15.0, 10.0, 3.0, |x, y| 5.0 + bump_height(x, y));
+    assert!(close(volume(&i), plug, 3e-3), "{} vs {plug}", volume(&i));
+}
+
+#[test]
+fn plane_cut_across_a_freeform_bump() {
+    let (b, _) = bumped_block();
+    let whole = volume(std::slice::from_ref(&b));
+    let top = cuboid(DVec3::new(-10.0, -10.0, 3.0), DVec3::new(40.0, 30.0, 20.0));
+    let d = boolean(&b, &top, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&b, &top, BoolOp::Intersect).expect("intersect");
+    assert!(close(volume(&d) + volume(&i), whole, 2e-3));
+    // The crown above z = 3, integrated under the patch.
+    let n = 300;
+    let (hx, hy) = (30.0 / n as f64, 20.0 / n as f64);
+    let mut crown = 0.0;
+    for a in 0..n {
+        for c in 0..n {
+            let z = bump_height(hx * (a as f64 + 0.5), hy * (c as f64 + 0.5));
+            crown += (z - 3.0).max(0.0) * hx * hy;
+        }
+    }
+    let fine: f64 = i
+        .iter()
+        .map(|s| {
+            let m = tess::tessellate(s, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+            assert!(m.is_watertight());
+            mass::properties(&m).volume
+        })
+        .sum();
+    // The crown is a thin dome, so check it finely tessellated (the default 5 degree
+    // steps lose about 1% of so thin a shape).
+    assert!(close(fine, crown, 3e-4), "{fine} vs {crown}");
+}
+
+#[test]
+fn two_freeform_blocks_combine() {
+    let (a, _) = bumped_block();
+    let m = Frame { origin: DVec3::new(25.0, -5.0, 1.0), x: DVec3::Y, y: DVec3::NEG_X, z: DVec3::Z };
+    let b = a.transformed(&m);
+    let both = volume(std::slice::from_ref(&a)) + volume(std::slice::from_ref(&b));
+    let u = boolean(&a, &b, BoolOp::Union).expect("union");
+    let i = boolean(&a, &b, BoolOp::Intersect).expect("intersect");
+    assert_eq!(u.len(), 1);
+    assert!(close(volume(&u) + volume(&i), both, 3e-3), "{} + {} vs {both}", volume(&u), volume(&i));
 }
 
 /// The seam test's cylinder band (radius 2, height 3, no seam) with its cylinder given as
@@ -669,4 +799,88 @@ fn wrapping_patch_band_gets_a_seam() {
     let v = mass::properties(&m).volume;
     let want = PI * 4.0 * 3.0;
     assert!(close(v, want, 1e-4), "{v} vs {want}");
+}
+
+/// Volume of solids tessellated finely, each checked valid and watertight first.
+fn fine_volume(solids: &[Solid]) -> f64 {
+    solids
+        .iter()
+        .map(|x| {
+            check::validate(x).expect("valid");
+            let m = tess::tessellate(x, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+            assert!(m.is_watertight(), "not watertight");
+            mass::properties(&m).volume
+        })
+        .sum()
+}
+
+#[test]
+fn bodies_touching_along_a_line_stay_separate() {
+    // A boss flush against a block's side, and two bosses side by side: the solids
+    // touch along a line, which divides no face, so each keeps its own body.
+    let block = cuboid(DVec3::ZERO, DVec3::new(10.0, 10.0, 5.0));
+    let boss = cylinder(DVec3::new(15.0, 5.0, 0.0), DVec3::Z, 5.0, 0.0, 5.0);
+    let u = boolean(&block, &boss, BoolOp::Union).expect("union");
+    assert_eq!(u.len(), 2);
+    let mut v: Vec<f64> = u.iter().map(|s| fine_volume(std::slice::from_ref(s))).collect();
+    v.sort_by(f64::total_cmp);
+    assert!(close(v[0], 125.0 * PI, 1e-4) && close(v[1], 500.0, 1e-9), "{v:?}");
+    let i = boolean(&block, &boss, BoolOp::Intersect).expect("intersect");
+    assert!(i.is_empty());
+    let a = cylinder(DVec3::ZERO, DVec3::Z, 3.0, 0.0, 4.0);
+    let b = cylinder(DVec3::new(5.0, 0.0, 0.0), DVec3::Z, 2.0, 0.0, 4.0);
+    let u = boolean(&a, &b, BoolOp::Union).expect("union");
+    assert_eq!(u.len(), 2);
+    assert!(close(fine_volume(&u), 52.0 * PI, 1e-4), "{}", fine_volume(&u));
+}
+
+#[test]
+fn pin_touching_inside_a_shaft() {
+    // A pin inside a shaft, touching its wall along a line (on both seams, which lie
+    // on the +x side of each): the pin and the shaft are what the intersection and
+    // union leave, and the cut would leave a wall of no thickness, so it is refused.
+    let shaft = cylinder(DVec3::ZERO, DVec3::Z, 5.0, 0.0, 4.0);
+    let pin = cylinder(DVec3::new(3.0, 0.0, 0.0), DVec3::Z, 2.0, -1.0, 5.0);
+    let i = boolean(&shaft, &pin, BoolOp::Intersect).expect("intersect");
+    assert!(close(fine_volume(&i), 16.0 * PI, 1e-4), "{}", fine_volume(&i));
+    let u = boolean(&shaft, &pin, BoolOp::Union).expect("union");
+    assert_eq!(u.len(), 1);
+    assert!(close(fine_volume(&u), 108.0 * PI, 1e-4), "{}", fine_volume(&u));
+    let d = boolean(&shaft, &pin, BoolOp::Subtract);
+    assert!(matches!(&d, Err(KernelError::Unsupported(m)) if m.contains("zero-thickness")), "{d:?}");
+}
+
+#[test]
+fn cuts_grazing_a_face_are_refused() {
+    // Each tool touches a face of the block along a line from inside, so the block would
+    // be left with no thickness there: a slot end grazing a side, a hole touching all
+    // four sides, a cross bore just under the top.
+    let block = cuboid(DVec3::ZERO, DVec3::new(10.0, 10.0, 5.0));
+    let tools = [
+        cylinder(DVec3::new(3.0, 5.0, 0.0), DVec3::Z, 3.0, -1.0, 6.0),
+        cylinder(DVec3::new(5.0, 5.0, 0.0), DVec3::Z, 5.0, -1.0, 6.0),
+        cylinder(DVec3::new(0.0, 5.0, 2.0), DVec3::X, 3.0, -5.0, 15.0),
+    ];
+    for tool in &tools {
+        let d = boolean(&block, tool, BoolOp::Subtract);
+        assert!(matches!(&d, Err(KernelError::Unsupported(m)) if m.contains("zero-thickness")), "{d:?}");
+    }
+    // What the hole touching all four sides takes is still well defined.
+    let i = boolean(&block, &tools[1], BoolOp::Intersect).expect("intersect");
+    assert!(close(fine_volume(&i), 125.0 * PI, 1e-4), "{}", fine_volume(&i));
+}
+
+#[test]
+fn touching_curves_order_by_bend() {
+    // The shaft's top face minus the pin's circle touching its rim: both circles leave
+    // the touch point the same way, the pin's bending harder. The face splits round it
+    // and tessellates watertight however coarse the sampling.
+    let shaft = cylinder(DVec3::ZERO, DVec3::Z, 5.0, 0.0, 4.0);
+    let pin = cylinder(DVec3::new(3.0, 0.0, 0.0), DVec3::Z, 2.0, 1.0, 5.0);
+    let u = boolean(&shaft, &pin, BoolOp::Union).expect("union");
+    for params in [TessParams::default(), TessParams { chord: 0.5, max_angle: 0.5 }] {
+        let m = tess::tessellate(&u[0], &params).expect("tess");
+        assert!(m.is_watertight());
+    }
+    assert!(close(fine_volume(&u), 100.0 * PI + 4.0 * PI, 1e-4), "{}", fine_volume(&u));
 }

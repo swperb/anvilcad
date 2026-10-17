@@ -335,9 +335,13 @@ impl Spline {
 /// The knot span holding `t` and the `degree + 1` basis functions not zero there, for
 /// a B-spline with `n` control points (Cox-de Boor). `t` is clamped to the domain.
 pub(crate) fn basis(degree: usize, knots: &[f64], n: usize, t: f64) -> (usize, [f64; MAX_DEGREE + 1]) {
+    basis_free(degree, knots, n, t.clamp(knots[degree], knots[n]))
+}
+
+/// Like [`basis`], but past the domain's ends the end spans' polynomials carry on (the
+/// spline extrapolated smoothly).
+pub(crate) fn basis_free(degree: usize, knots: &[f64], n: usize, t: f64) -> (usize, [f64; MAX_DEGREE + 1]) {
     let p = degree;
-    let (lo, hi) = (knots[p], knots[n]);
-    let t = t.clamp(lo, hi);
     // Span: the last i in [p, n - 1] with knots[i] <= t < knots[i + 1].
     let mut span = match knots[p..n].partition_point(|k| *k <= t) {
         0 => p,

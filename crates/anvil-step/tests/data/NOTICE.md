@@ -1,7 +1,8 @@
 # Test data
 
-`nist_ctc_03_asme1_rc.stp`, `nist_ftc_06_asme1_rd.stp`, `nist_ftc_08_asme1_rc.stp`,
-`nist_ftc_09_asme1_rd.stp` and `nist_ftc_11_asme1_rb.stp` are from the NIST MBE PMI
+`nist_ctc_03_asme1_rc.stp`, `nist_ctc_05_asme1_rd.stp`, `nist_ftc_06_asme1_rd.stp`,
+`nist_ftc_07_asme1_rd.stp`, `nist_ftc_08_asme1_rc.stp`, `nist_ftc_09_asme1_rd.stp` and
+`nist_ftc_11_asme1_rb.stp` are from the NIST MBE PMI
 Validation and Conformance Testing Project, "NIST CAD Models and STEP Files with PMI"
 (Robert Lipman, National Institute of Standards and Technology, 2015), downloaded from
 https://www.nist.gov/el/systems-integration-division-73400/mbe-pmi-validation-and-conformance-testing/download-free-cad

@@ -2,16 +2,16 @@
 
 AnvilCAD is building toward a complete, free and open-source engineering stack: CAD, CAM,
 PDM and PLM that work together, that anyone can run, study and extend, and that interoperate
-with commercial systems through open standards and published APIs (see
+with commercial systems without needing them installed (see
 [INTEROPERABILITY.md](INTEROPERABILITY.md)). Items move to the README's "What works today"
 when they are in the code and tested.
 
 ## CAD
 
-1. Kernel: intersections with freeform (B-spline) faces, surfaces of revolution, torus
-   intersections off its axis, so revolves, shells and curved-edge fillets build exactly;
-   fillets on curved-to-curved edges, spherical corner blends, variable-radius fillets,
-   draft.
+1. Kernel: surfaces of revolution, so revolves, shells and curved-edge fillets build
+   exactly; fillets on curved-to-curved edges, spherical corner blends, variable-radius
+   fillets, draft; freeform faces that touch other surfaces without crossing them, and
+   results that would touch themselves at a single point.
 2. Features: a hole feature with standard sizes (ISO and ANSI clearance, tapped,
    counterbored and countersunk holes), mirror, sweep, loft, multi-body parts, sheet metal
    (base and edge flanges, bends, unfold to a flat pattern).

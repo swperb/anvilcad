@@ -69,21 +69,20 @@ fn generator(s: &Surface, theta: f64) -> (DVec3, DVec3) {
     }
 }
 
-/// True when height `v` on the generator lies on the swept surface's own nappe.
-fn on_sweep_nappe(s: &Surface, v: f64) -> bool {
+/// How far height `v` on the generator lies on the swept surface's own nappe: the cone's
+/// radius there (negative on the other nappe, zero at the apex). Infinite for a cylinder.
+fn sweep_nappe_margin(s: &Surface, v: f64) -> f64 {
     match *s {
-        Surface::Cone { radius, half_angle, .. } => radius + v * half_angle.tan() > 0.0,
-        _ => true,
+        Surface::Cone { radius, half_angle, .. } => radius + v * half_angle.tan(),
+        _ => f64::INFINITY,
     }
 }
 
-/// True when `p` lies on the nappe of `s` its faces use.
-fn on_nappe(s: &Surface, p: DVec3) -> bool {
+/// Like [`sweep_nappe_margin`], for a point `p` on any surface.
+fn nappe_margin(s: &Surface, p: DVec3) -> f64 {
     match *s {
-        Surface::Cone { frame, radius, half_angle, .. } => {
-            radius + frame.to_local(p).z * half_angle.tan() > -1e-9
-        }
-        _ => true,
+        Surface::Cone { frame, radius, half_angle, .. } => radius + frame.to_local(p).z * half_angle.tan(),
+        _ => f64::INFINITY,
     }
 }
 
@@ -161,6 +160,131 @@ impl Trace<'_> {
         self.sweep.distance(p).max(self.other.distance(p))
     }
 
+    /// How far a point lies on both surfaces' own nappes (see [`nappe_margin`]).
+    fn margin_at(&self, p: DVec3, v: f64) -> f64 {
+        sweep_nappe_margin(self.sweep, v).min(nappe_margin(self.other, p))
+    }
+
+    fn margin(&self, sigma: f64) -> f64 {
+        let (p, v) = self.point(sigma);
+        self.margin_at(p, v)
+    }
+
+    /// The traced curve's pieces on the cones' own nappes. Where the curve reaches a
+    /// cone's apex it has a corner (and may go on to the other nappe, which is no part
+    /// of the cone's faces), so it is split at every apex it passes through, and the
+    /// pieces on both surfaces' own nappes are kept, each ending at an apex.
+    fn curves(&self) -> Result<Vec<Curve>> {
+        const N: usize = 720;
+        let sig = |i: usize| self.span * i as f64 / N as f64;
+        let apexes: Vec<DVec3> = [self.sweep, self.other]
+            .into_iter()
+            .filter_map(|s| match *s {
+                Surface::Cone { frame, radius, half_angle, .. } => {
+                    Some(crate::geom::cone_apex(&frame, radius, half_angle))
+                }
+                _ => None,
+            })
+            .collect();
+        let pts: Vec<DVec3> = (0..N).map(|i| self.point(sig(i)).0).collect();
+        // Lengths along the swept generators set the precision: where a generator only
+        // touches the other surface at an apex, the turning point there (and so the
+        // traced point) is known to about the square root of rounding error.
+        let origin = self.sweep.frame().origin;
+        let size = pts.iter().map(|p| p.length() + (*p - origin).length()).fold(1.0, f64::max);
+        let mut cuts: Vec<f64> = Vec::new();
+        for apex in &apexes {
+            let d = |sigma: f64| (self.point(sigma).0 - *apex).length();
+            let ds: Vec<f64> = pts.iter().map(|p| (*p - *apex).length()).collect();
+            for i in 0..N {
+                let (prev, next) = (ds[(i + N - 1) % N], ds[(i + 1) % N]);
+                if ds[i] > prev || ds[i] > next {
+                    continue;
+                }
+                // A local minimum of the distance: narrow it down (golden section).
+                let (mut lo, mut hi) = (sig(i) - self.span / N as f64, sig(i) + self.span / N as f64);
+                let g = 0.5 * (5f64.sqrt() - 1.0);
+                for _ in 0..120 {
+                    let (x1, x2) = (hi - g * (hi - lo), lo + g * (hi - lo));
+                    if d(x1) < d(x2) {
+                        hi = x2;
+                    } else {
+                        lo = x1;
+                    }
+                }
+                let at = if d(sig(i)) <= d(0.5 * (lo + hi)) { sig(i) } else { 0.5 * (lo + hi) };
+                if d(at) < 1e-7 * size {
+                    cuts.push(at.rem_euclid(self.span));
+                }
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-9 * self.span);
+        let keep = |a: f64, b: f64| self.margin(0.5 * (a + b)) > 0.0;
+        if cuts.is_empty() {
+            let m: Vec<f64> = (0..N).map(|i| self.margin(sig(i))).collect();
+            if m.iter().all(|x| *x > 0.0) {
+                return Ok(vec![self.spline()?]);
+            }
+            if m.iter().all(|x| *x <= 0.0) {
+                return Ok(Vec::new());
+            }
+            return Err(KernelError::Unsupported("intersection curve leaves a cone's nappe".into()));
+        }
+        let mut out = Vec::new();
+        for k in 0..cuts.len() {
+            let a = cuts[k];
+            let b = if k + 1 < cuts.len() { cuts[k + 1] } else { cuts[0] + self.span };
+            if b - a > 1e-9 * self.span && keep(a, b) {
+                out.push(self.open_spline(a, b)?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// The traced curve from `a` to `b` (each at an apex) as an open spline.
+    fn open_spline(&self, a: f64, b: f64) -> Result<Curve> {
+        let n = 96;
+        let mut sigmas: Vec<f64> = (0..=n).map(|i| a + (b - a) * i as f64 / n as f64).collect();
+        // Keep the ends a hair inside, where the cone's normal is defined; the end points
+        // are put back on the apex below.
+        let h = 1e-9 * (b - a);
+        sigmas[0] = a + h;
+        sigmas[n] = b - h;
+        let mut out: Vec<(DVec3, DVec3)> = Vec::new();
+        for w in sigmas.windows(2) {
+            self.refine(w[0], w[1], 0, &mut out)?;
+        }
+        let end = self.point(b - h).0;
+        out.push((end, self.tangent(end, b - h)));
+        if out.len() > 50_000 {
+            return Err(KernelError::Unsupported("intersection curve needs too many points".into()));
+        }
+        for (k, s) in [(0, a), (out.len() - 1, b)] {
+            out[k].0 = self.apex_near(self.point(s).0);
+        }
+        let (pts, tans): (Vec<DVec3>, Vec<DVec3>) = out.into_iter().unzip();
+        Ok(Curve::Spline(Arc::new(Spline::hermite(&pts, &tans, false)?)))
+    }
+
+    /// The apex of whichever cone `p` lies at (or `p` itself).
+    fn apex_near(&self, p: DVec3) -> DVec3 {
+        [self.sweep, self.other]
+            .into_iter()
+            .filter_map(|s| match *s {
+                Surface::Cone { frame, radius, half_angle, .. } => {
+                    Some(crate::geom::cone_apex(&frame, radius, half_angle))
+                }
+                _ => None,
+            })
+            .min_by(|x, y| (*x - p).length().total_cmp(&(*y - p).length()))
+            .filter(|x| {
+                (*x - p).length()
+                    < 1e-6 * (1.0 + x.length() + p.length() + (p - self.sweep.frame().origin).length())
+            })
+            .unwrap_or(p)
+    }
+
     /// The traced curve as a closed spline.
     fn spline(&self) -> Result<Curve> {
         let n = if self.linear { 64 } else { 96 };
@@ -182,8 +306,9 @@ impl Trace<'_> {
     fn refine(&self, s0: f64, s1: f64, depth: u32, out: &mut Vec<(DVec3, DVec3)>) -> Result<()> {
         let (p0, v0) = self.point(s0);
         let (p1, _) = self.point(s1);
-        if !on_sweep_nappe(self.sweep, v0) || !on_nappe(self.other, p0) {
-            return Err(KernelError::Unsupported("intersection curve passes through a cone's apex".into()));
+        let _ = v0;
+        if self.margin_at(p0, v0) < -1e-9 * (1.0 + p0.length()) {
+            return Err(KernelError::Unsupported("intersection curve leaves a cone's nappe".into()));
         }
         let (t0, t1) = (self.tangent(p0, s0), self.tangent(p1, s1));
         let h = (p1 - p0).length();
@@ -227,7 +352,7 @@ fn sweep(s: &Surface, other: &Surface) -> Result<Vec<Curve>> {
             return unbounded();
         }
         let trace = Trace { sweep: s, other, at: Box::new(|sig| (TAU * sig, 1.0)), span: 1.0, linear: true };
-        return Ok(vec![trace.spline()?]);
+        return trace.curves();
     }
     let sign_a = coeffs[0].0.signum();
     if coeffs.iter().any(|c| small(c.0) || c.0.signum() != sign_a) {
@@ -251,7 +376,7 @@ fn sweep(s: &Surface, other: &Surface) -> Result<Vec<Curve>> {
                 span: 1.0,
                 linear: false,
             };
-            curves.push(trace.spline()?);
+            curves.extend(trace.curves()?);
         }
         return Ok(curves);
     }
@@ -288,12 +413,15 @@ fn sweep(s: &Surface, other: &Surface) -> Result<Vec<Curve>> {
         }
         // sigma in [0, 2): down one root and back along the other. The cosine
         // spacing makes points crowd where the roots meet and the curve turns.
+        // At the range's ends the roots meet: the double root there needs no square root
+        // of a discriminant rounded to near zero (which loses half the digits).
         let at = move |sig: f64| {
             let (s, sign) = if sig < 1.0 { (sig, -1.0) } else { (2.0 - sig, 1.0) };
+            let sign = if s <= 0.0 || s >= 1.0 { 0.0 } else { sign };
             (a + (b - a) * 0.5 * (1.0 - (PI * s).cos()), sign)
         };
         let trace = Trace { sweep: s, other, at: Box::new(at), span: 2.0, linear: false };
-        curves.push(trace.spline()?);
+        curves.extend(trace.curves()?);
     }
     Ok(curves)
 }
@@ -364,5 +492,46 @@ mod tests {
         for c in &cs {
             on_both(c, &cone, &pin);
         }
+    }
+
+    #[test]
+    fn cylinder_through_a_cone_apex() {
+        // A pointed cone (apex at the origin, opening upwards) and a cylinder across it
+        // whose wall runs through the apex: on the cone's nappe the curve is one loop
+        // with a corner at the apex, as an open spline from the apex back to it. The
+        // double cone's lower nappe, no part of the face, holds the rest and is dropped.
+        let top = Frame { origin: DVec3::new(0.0, 0.0, 10.0), ..Frame::world() };
+        let cone = Surface::Cone { frame: top, radius: 5.0, half_angle: 0.5f64.atan(), apex: true };
+        let wall = cyl(DVec3::new(3.0, 0.0, 0.0), DVec3::Y, 3.0);
+        for (a, b) in [(&cone, &wall), (&wall, &cone)] {
+            let cs = intersect(a, b).expect("curves");
+            assert_eq!(cs.len(), 1);
+            on_both(&cs[0], &cone, &wall);
+            let Curve::Spline(sp) = &cs[0] else { panic!("not a spline") };
+            let (lo, hi) = sp.domain();
+            for t in [lo, hi] {
+                assert!(sp.eval(t).length() < 1e-9, "{:?}", sp.eval(t));
+            }
+            // It climbs the nappe: up to z = 2.4 where the cylinder's top meets the cone.
+            let top = (0..=200).map(|i| sp.eval(lo + (hi - lo) * i as f64 / 200.0).z).fold(0.0, f64::max);
+            assert!(top > 2.0 && top < 3.0, "{top}");
+        }
+    }
+
+    #[test]
+    fn hole_beside_a_countersink() {
+        // A wide countersink cone and a cylinder passing beside its axis, off the apex:
+        // the double cone meets the cylinder in two loops, one on each nappe, and only
+        // the face's own nappe keeps its loop.
+        let sink = Surface::Cone { frame: Frame::world(), radius: 5.0, half_angle: 1.03, apex: false };
+        let hole = cyl(DVec3::new(0.0, 12.0, 0.0), DVec3::Z, 9.0);
+        let cs = intersect(&sink, &hole).expect("curves");
+        assert_eq!(cs.len(), 1);
+        on_both(&cs[0], &sink, &hole);
+        let Curve::Spline(sp) = &cs[0] else { panic!("not a spline") };
+        let (lo, hi) = sp.domain();
+        let low = (0..=200).map(|i| sp.eval(lo + (hi - lo) * i as f64 / 200.0).z).fold(f64::MAX, f64::min);
+        let apex_z = -5.0 / 1.03f64.tan();
+        assert!(low > apex_z, "{low} vs apex {apex_z}");
     }
 }
