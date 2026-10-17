@@ -98,59 +98,98 @@ impl Section {
     }
 }
 
-struct Roller<'a> {
-    solid: &'a Solid,
+/// One edge of the run the ball rolls along: its faces on the run's two sides, and its
+/// parameter range and direction of travel.
+struct Leg<'a> {
+    id: EdgeId,
     edge: &'a Edge,
     fa: usize,
     fb: usize,
+    lo: f64,
+    hi: f64,
+    dir: f64,
+}
+
+/// Rates of change of a section's rows along the run.
+type Rates = [(DVec3, f64); 6];
+
+struct Roller<'a> {
+    solid: &'a Solid,
+    /// The run's edges in order of travel. The run's parameter `t` goes from 0 to the
+    /// number of legs, leg `k` taking `k..k + 1`.
+    legs: Vec<Leg<'a>>,
     radius: f64,
     /// The centre's signed distance from both faces: inside at a convex edge.
     target: f64,
     /// How far the sides are pushed off the faces.
     push: f64,
-    /// The edge's parameter range and its direction of travel.
-    lo: f64,
-    hi: f64,
-    dir: f64,
-    /// The edge closes on itself (round a hole's rim): its curve wraps instead of
-    /// carrying on past its ends.
+    /// The run closes on itself (round a hole's rim, a slot's outline): its parameter
+    /// wraps instead of carrying on past its ends.
     closed: bool,
     size: f64,
 }
 
 impl Roller<'_> {
-    /// A point of the edge at parameter `t` (in the direction of travel), carried on in a
-    /// straight line past its ends.
-    fn point(&self, t: f64) -> (DVec3, DVec3) {
-        let c = &self.edge.curve;
-        if self.closed {
-            let span = self.hi - self.lo;
-            let wrap = |u: f64| self.lo + (u - self.lo).rem_euclid(span);
-            let h = span * 1e-6;
-            let d = (c.eval(self.at(wrap(t + h))) - c.eval(self.at(wrap(t - h)))) / (2.0 * h);
-            return (c.eval(self.at(wrap(t))), d.normalize_or_zero());
+    fn span(&self) -> f64 {
+        self.legs.len() as f64
+    }
+
+    /// The leg at `t` within the run, and the point and direction of travel (per unit of
+    /// `t`) at the fraction `u` along it.
+    fn on_leg(&self, k: usize, u: f64) -> (DVec3, DVec3) {
+        let leg = &self.legs[k];
+        let param = |u: f64| {
+            let t = leg.lo + (leg.hi - leg.lo) * u;
+            if leg.dir > 0.0 { t } else { leg.lo + leg.hi - t }
+        };
+        let h = 1e-6;
+        let (u0, u1) = ((u - h).max(0.0), (u + h).min(1.0));
+        let d = (leg.edge.curve.eval(param(u1)) - leg.edge.curve.eval(param(u0))) / (u1 - u0);
+        (leg.edge.curve.eval(param(u)), d)
+    }
+
+    /// Which leg holds `t`, and how far along it. An end of a leg belongs to the leg it
+    /// starts, except the run's last end.
+    fn leg_of(&self, t: f64) -> (usize, f64) {
+        let n = self.legs.len();
+        let k = (t.floor().max(0.0) as usize).min(n - 1);
+        (k, t - k as f64)
+    }
+
+    /// The point of the run at `t`: wrapping round a closed run, carried on in a straight
+    /// line past an open run's ends.
+    fn position(&self, t: f64) -> DVec3 {
+        let n = self.span();
+        let t = if self.closed { t.rem_euclid(n) } else { t };
+        if !self.closed && t < 0.0 {
+            let (p, d) = self.on_leg(0, 0.0);
+            return p + d * t;
         }
-        let clamp = t.clamp(self.lo, self.hi);
-        let h = (self.hi - self.lo) * 1e-6;
-        let (u0, u1) = ((clamp - h).max(self.lo), (clamp + h).min(self.hi));
-        let tangent = ((c.eval(self.at(u1)) - c.eval(self.at(u0))) / (u1 - u0)).normalize_or_zero();
-        let speed = ((c.eval(self.at(u1)) - c.eval(self.at(u0))) / (u1 - u0)).length();
-        (c.eval(self.at(clamp)) + tangent * (speed * (t - clamp)), tangent)
+        if !self.closed && t > n {
+            let (p, d) = self.on_leg(self.legs.len() - 1, 1.0);
+            return p + d * (t - n);
+        }
+        let (k, u) = self.leg_of(t);
+        self.on_leg(k, u).0
     }
 
-    /// The edge's own parameter for travel parameter `t` (which runs from `lo` to `hi`
-    /// along the direction of travel).
-    fn at(&self, t: f64) -> f64 {
-        if self.dir > 0.0 { t } else { self.lo + self.hi - t }
+    /// A point of the run at `t` and its unit direction of travel, from points either side
+    /// (across a join between legs, or round a closed run's start).
+    fn point(&self, t: f64) -> (DVec3, DVec3) {
+        let h = 1e-6;
+        (self.position(t), (self.position(t + h) - self.position(t - h)).normalize_or_zero())
     }
 
-    /// The exact section in the plane square to the edge at `t`, its centre found from
-    /// `guess`.
+    /// The exact section in the plane square to the run at `t`, its centre found from
+    /// `guess`, between the faces of the leg there.
     fn section(&self, t: f64, guess: DVec3) -> Option<Section> {
         let (e, tangent) = self.point(t);
+        let n = self.span();
+        let tt = if self.closed { t.rem_euclid(n) } else { t.clamp(0.0, n) };
+        let leg = &self.legs[self.leg_of(tt).0];
         let u1 = tangent.any_orthonormal_vector();
         let u2 = tangent.cross(u1);
-        let (fa, fb) = (&self.solid.faces[self.fa], &self.solid.faces[self.fb]);
+        let (fa, fb) = (&self.solid.faces[leg.fa], &self.solid.faces[leg.fb]);
         let mut x = glam::DVec2::new((guess - e).dot(u1), (guess - e).dot(u2));
         let tol = 1e-13 * self.size;
         let mut ok = false;
@@ -201,32 +240,25 @@ impl Roller<'_> {
 /// pairs that touch along the round's contact curves. Tool faces are tagged as the other
 /// blends' are (`tag_base`, `tag_base + 2` for the round, `tag_base + 4`).
 pub fn rolling_tool(solid: &Solid, edge: EdgeId, radius: f64, tag_base: u32) -> Result<Tool> {
+    rolling_run_tool(solid, &[edge], radius, tag_base)
+}
+
+/// Like [`rolling_tool`], for edges that run smoothly one into the next (in any order):
+/// one ball rolls along the whole run, touching the faces of each edge in turn, so the
+/// round is one face from end to end.
+pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: u32) -> Result<Tool> {
     if !(radius.is_finite() && radius > 0.0) {
         return Err(KernelError::InvalidInput("the size must be a positive number".into()));
     }
-    let e = solid.edge(edge).ok_or_else(|| KernelError::InvalidInput("the edge does not exist".into()))?;
-    // A closed edge (a hole's rim) is rounded all the way round, with no ends.
-    let closed = e.start == e.end;
     let size = solid.bounds().map_or(1.0, |(lo, hi)| (hi - lo).length().max(1.0));
-    let mut roller = Roller {
-        solid,
-        edge: e,
-        fa: 0,
-        fb: 0,
-        radius,
-        target: 0.0,
-        push: 0.5 * radius,
-        lo: e.t0.min(e.t1),
-        hi: e.t0.max(e.t1),
-        dir: (e.t1 - e.t0).signum(),
-        closed: e.start == e.end,
-        size,
-    };
-    // The faces at the edge's middle, which way the edge bends, and a first centre.
-    let mid = 0.5 * (roller.lo + roller.hi);
-    let (pm, tm) = roller.point(mid);
-    let sides = crate::blend::edge_sides(solid, edge, pm, tm);
-    let [(fa, _, wa), (fb, nb, wb)] = sides[..] else {
+    let (legs, closed) = run_in_order(solid, edges)?;
+    let mut roller = Roller { solid, legs, radius, target: 0.0, push: 0.5 * radius, closed, size };
+    // The faces at the first leg's middle, which way the run bends, and a first centre.
+    let (pm, dm) = roller.on_leg(0, 0.5);
+    let first_leg = roller.legs[0].id;
+    let sides =
+        crate::blend::edge_sides(solid, first_leg, pm, dm.normalize_or_zero() * roller.legs[0].dir_sign());
+    let [(_, _, wa), (_, nb, wb)] = sides[..] else {
         return Err(KernelError::InvalidInput("the edge is not shared by exactly two faces".into()));
     };
     let bend = wa.dot(nb);
@@ -236,43 +268,51 @@ pub fn rolling_tool(solid: &Solid, edge: EdgeId, radius: f64, tag_base: u32) -> 
         ));
     }
     let convex = bend < 0.0;
-    roller.fa = fa;
-    roller.fb = fb;
     roller.target = if convex { -radius } else { radius };
+    // The same side of the run on every leg, and the same bend.
+    assign_sides(solid, &mut roller.legs, convex)?;
+    let (wa, wb) = {
+        let s = crate::blend::edge_sides(
+            solid,
+            first_leg,
+            pm,
+            dm.normalize_or_zero() * roller.legs[0].dir_sign(),
+        );
+        let w = |f: usize| s.iter().find(|x| x.0 == f).map(|x| x.2);
+        (w(roller.legs[0].fa).unwrap_or(wa), w(roller.legs[0].fb).unwrap_or(wb))
+    };
     let phi = wa.dot(wb).clamp(-1.0, 1.0).acos();
     let first = pm + (wa + wb).normalize() * (radius / (0.5 * phi).sin());
 
-    // Carry the round past an end only where nothing lies beyond it (as the other blends
-    // do), never where the edge runs smoothly on into another.
+    // Carry the round past an open run's ends only where nothing lies beyond them (as the
+    // other blends do), never where the run carries on smoothly into an edge not in it.
     let margin = 2.0 * radius;
-    let speed = |t: f64| {
-        let h = (roller.hi - roller.lo) * 1e-6;
-        (e.curve.eval(roller.at((t + h).min(roller.hi))) - e.curve.eval(roller.at((t - h).max(roller.lo))))
-            .length()
-            / (2.0 * h)
-    };
-    let extend = |t: f64, sign: f64| -> Result<f64> {
-        let (end, tangent) = roller.point(t);
-        let out = tangent * sign;
-        if crate::blend::runs_on(solid, edge, end, out) {
+    let n = roller.span();
+    let extend = |sign: f64| -> Result<f64> {
+        let (k, u) = if sign < 0.0 { (0, 0.0) } else { (roller.legs.len() - 1, 1.0) };
+        let (end, d) = roller.on_leg(k, u);
+        let out = d.normalize_or_zero() * sign;
+        if crate::blend::runs_on(solid, roller.legs[k].id, end, out) {
             return Ok(0.0);
         }
         let probe = end + out * (0.5 * margin) + (wa + wb) * (0.25 * radius);
         let inside = boolean::contains_point(solid, probe)?;
-        Ok(if inside != convex { margin / speed(t).max(1e-300) } else { 0.0 })
+        Ok(if inside != convex { margin / d.length().max(1e-300) } else { 0.0 })
     };
-    let (s0, s1) = if closed {
-        (roller.lo, roller.hi)
-    } else {
-        (roller.lo - extend(roller.lo, -1.0)?, roller.hi + extend(roller.hi, 1.0)?)
-    };
+    // A closed run starts half way along its first edge, so the tool's seam (where its
+    // sections start and end) is clear of the part's edges at the joins.
+    let (s0, s1) = if closed { (0.5, n + 0.5) } else { (-extend(-1.0)?, n + extend(1.0)?) };
 
-    // Sections, refined until the cubic between them follows the exact ones.
+    // Sections, refined until the cubic between them follows the exact ones. Every join
+    // between legs is a section, where the run's speed may change.
     let mut ts: Vec<f64> = (0..=8).map(|k| s0 + (s1 - s0) * k as f64 / 8.0).collect();
+    ts.extend((0..=roller.legs.len()).map(|k| k as f64).filter(|t| *t > s0 && *t < s1));
+    ts.sort_by(f64::total_cmp);
+    ts.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    let mid = 0.5;
     let solve = |ts: &[f64]| -> Result<Vec<Section>> {
-        let mut out: Vec<Section> = Vec::with_capacity(ts.len());
         let mut guess = first;
-        // From the middle outwards, so each guess is a neighbour's centre.
+        // From the first leg's middle outwards, so each guess is a neighbour's centre.
         let m = ts.iter().position(|t| *t >= mid).unwrap_or(0);
         let mut by_index: Vec<Option<Section>> = vec![None; ts.len()];
         for k in (m..ts.len()).chain((0..m).rev()) {
@@ -287,33 +327,64 @@ pub fn rolling_tool(solid: &Solid, edge: EdgeId, radius: f64, tag_base: u32) -> 
             guess = s.centre;
             by_index[k] = Some(s);
         }
+        let mut out: Vec<Section> = Vec::with_capacity(ts.len());
         for s in by_index {
             out.push(s.ok_or_else(|| KernelError::Unsupported("a section is missing".into()))?);
         }
-        // Round a closed edge the last section is the first, exactly.
+        // Round a closed run the last section is the first, exactly.
         if closed && let (Some(first), Some(last)) = (out.first().copied(), out.last_mut()) {
             *last = first;
         }
         Ok(out)
     };
-    let h = (s1 - s0) * 1e-5;
-    let rows_at =
-        |t: f64, near: DVec3| -> Option<[(DVec3, f64); 6]> { roller.section(t, near).map(|s| s.rows()) };
+    let h = 1e-5;
+    let rows_at = |t: f64, near: DVec3| -> Option<Rates> { roller.section(t, near).map(|s| s.rows()) };
+    let is_join = |t: f64| (t - t.round()).abs() < 1e-9 && t > s0 && t < s1;
     let mut sections = solve(&ts)?;
     loop {
         if ts.len() > MAX_SECTIONS {
             return refuse("a rolling-ball fillet needs too many sections");
         }
-        // Rates of change of each row, by central differences of exact sections.
-        let mut derivs = Vec::with_capacity(ts.len());
+        // Rates of change of each row on either side of each section: central
+        // differences, but one-sided at a join (a leg's speed may differ from the next).
+        let mut rates: Vec<(Rates, Rates)> = Vec::with_capacity(ts.len());
+        let diff = |a: &Rates, b: &Rates, w: f64| -> Rates {
+            std::array::from_fn(|j| ((b[j].0 - a[j].0) / w, (b[j].1 - a[j].1) / w))
+        };
         for (t, s) in ts.iter().zip(&sections) {
-            let (a, b) = (rows_at(t - h, s.centre), rows_at(t + h, s.centre));
-            let (Some(a), Some(b)) = (a, b) else { return refuse("the ball cannot roll along this edge") };
-            derivs.push(std::array::from_fn::<(DVec3, f64), 6, _>(|j| {
-                ((b[j].0 - a[j].0) / (2.0 * h), (b[j].1 - a[j].1) / (2.0 * h))
-            }));
+            let here = s.rows();
+            if is_join(*t) || (closed && (*t == s0 || *t == s1) && roller.legs.len() > 1) {
+                let (Some(a2), Some(a1), Some(b1), Some(b2)) = (
+                    rows_at(t - 2.0 * h, s.centre),
+                    rows_at(t - h, s.centre),
+                    rows_at(t + h, s.centre),
+                    rows_at(t + 2.0 * h, s.centre),
+                ) else {
+                    return refuse("the ball cannot roll along this edge");
+                };
+                // Second-order one-sided differences.
+                let left: Rates = std::array::from_fn(|j| {
+                    (
+                        (here[j].0 * 3.0 - a1[j].0 * 4.0 + a2[j].0) / (2.0 * h),
+                        (here[j].1 * 3.0 - a1[j].1 * 4.0 + a2[j].1) / (2.0 * h),
+                    )
+                });
+                let right: Rates = std::array::from_fn(|j| {
+                    (
+                        (b1[j].0 * 4.0 - here[j].0 * 3.0 - b2[j].0) / (2.0 * h),
+                        (b1[j].1 * 4.0 - here[j].1 * 3.0 - b2[j].1) / (2.0 * h),
+                    )
+                });
+                rates.push((left, right));
+            } else {
+                let (Some(a), Some(b)) = (rows_at(t - h, s.centre), rows_at(t + h, s.centre)) else {
+                    return refuse("the ball cannot roll along this edge");
+                };
+                let d = diff(&a, &b, 2.0 * h);
+                rates.push((d, d));
+            }
         }
-        if closed && let (Some(first), Some(last)) = (derivs.first().copied(), derivs.last_mut()) {
+        if closed && let (Some(first), Some(last)) = (rates.first().copied(), rates.last_mut()) {
             *last = first;
         }
         // Check each interval's middle against the exact section.
@@ -329,8 +400,8 @@ pub fn rolling_tool(solid: &Solid, edge: EdgeId, radius: f64, tag_base: u32) -> 
             let hermite = |j: usize| {
                 let (p0, w0) = r0[j];
                 let (p1, w1) = r1[j];
-                let (d0, dw0) = derivs[k][j];
-                let (d1, dw1) = derivs[k + 1][j];
+                let (d0, dw0) = rates[k].1[j];
+                let (d1, dw1) = rates[k + 1].0[j];
                 // Cubic Hermite at the middle.
                 let p = (p0 + p1) * 0.5 + (d0 - d1) * (dt / 8.0);
                 let w = (w0 + w1) * 0.5 + (dw0 - dw1) * (dt / 8.0);
@@ -353,12 +424,134 @@ pub fn rolling_tool(solid: &Solid, edge: EdgeId, radius: f64, tag_base: u32) -> 
             }
         }
         if split.is_empty() {
-            return build(&roller, &ts, &sections, &derivs, convex, closed, tag_base);
+            let mut contacts: Vec<usize> = roller.legs.iter().flat_map(|l| [l.fa, l.fb]).collect();
+            contacts.sort_unstable();
+            contacts.dedup();
+            return build(&roller, &ts, &sections, &rates, convex, closed, tag_base, &contacts);
         }
         ts.extend(split);
         ts.sort_by(f64::total_cmp);
         sections = solve(&ts)?;
     }
+}
+
+impl Leg<'_> {
+    /// +1 where the run goes the way the edge's parameter does.
+    fn dir_sign(&self) -> f64 {
+        self.dir
+    }
+}
+
+/// The run's edges as legs in order of travel, and whether the run closes on itself.
+/// Consecutive edges share an end where one runs smoothly on into the next.
+fn run_in_order<'a>(solid: &'a Solid, edges: &[EdgeId]) -> Result<(Vec<Leg<'a>>, bool)> {
+    let get = |id: EdgeId| {
+        solid.edge(id).ok_or_else(|| KernelError::InvalidInput("the edge does not exist".into()))
+    };
+    let mut left: Vec<EdgeId> = edges.to_vec();
+    left.dedup();
+    let ends = |id: EdgeId| -> Result<(crate::VertexId, crate::VertexId)> {
+        let e = get(id)?;
+        Ok((e.start, e.end))
+    };
+    // Start from an edge with a free end (an open run), or anywhere (a closed one).
+    let touches = |id: EdgeId, v: crate::VertexId, others: &[EdgeId]| -> Result<bool> {
+        for &o in others {
+            if o != id {
+                let (a, b) = ends(o)?;
+                if a == v || b == v {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    };
+    let mut start = (left[0], ends(left[0])?.0);
+    for &id in &left {
+        let (a, b) = ends(id)?;
+        if !touches(id, a, &left)? {
+            start = (id, a);
+            break;
+        }
+        if !touches(id, b, &left)? {
+            start = (id, b);
+            break;
+        }
+    }
+    let mut legs = Vec::new();
+    let (mut id, mut entry) = start;
+    loop {
+        let e = get(id)?;
+        let forward = e.start == entry;
+        let exit = if forward { e.end } else { e.start };
+        legs.push(Leg {
+            id,
+            edge: e,
+            fa: 0,
+            fb: 0,
+            lo: e.t0.min(e.t1),
+            hi: e.t0.max(e.t1),
+            dir: if forward { (e.t1 - e.t0).signum() } else { -(e.t1 - e.t0).signum() },
+        });
+        left.retain(|x| *x != id);
+        let next =
+            left.iter().copied().find(|o| ends(*o).map(|(a, b)| a == exit || b == exit).unwrap_or(false));
+        match next {
+            Some(o) => {
+                id = o;
+                entry = exit;
+            }
+            None => {
+                if !left.is_empty() {
+                    return refuse("the edges do not make one run");
+                }
+                let closed = exit == start.1 && (legs.len() > 1 || e.start == e.end);
+                return Ok((legs, closed));
+            }
+        }
+    }
+}
+
+/// Gives each leg its faces on the run's two sides: the first leg's as found, then each
+/// next leg's face that is the previous side's face, or meets it smoothly at the join.
+fn assign_sides(solid: &Solid, legs: &mut [Leg], convex: bool) -> Result<()> {
+    for k in 0..legs.len() {
+        let leg = &legs[k];
+        let mid = 0.5 * (leg.lo + leg.hi);
+        let p = leg.edge.curve.eval(mid);
+        let h = (leg.hi - leg.lo) * 1e-6;
+        let along = (leg.edge.curve.eval(mid + h) - leg.edge.curve.eval(mid - h)).normalize_or_zero();
+        let sides = crate::blend::edge_sides(solid, leg.id, p, along);
+        let [(f1, _, w1), (f2, n2, _)] = sides[..] else {
+            return Err(KernelError::InvalidInput("an edge is not shared by exactly two faces".into()));
+        };
+        if (w1.dot(n2) < 0.0) != convex {
+            return refuse("blending a smooth run of edges that are convex in part and concave in part");
+        }
+        if k == 0 {
+            legs[0].fa = f1;
+            legs[0].fb = f2;
+            continue;
+        }
+        // The join with the previous leg, and its side A face's normal there.
+        let prev = &legs[k - 1];
+        let join = {
+            let t = if prev.dir > 0.0 { prev.hi } else { prev.lo };
+            prev.edge.curve.eval(t)
+        };
+        let na = solid.faces[prev.fa].normal_at(join);
+        let same = |f: usize| f == prev.fa || solid.faces[f].normal_at(join).dot(na) > 1.0 - 1e-6;
+        let (fa, fb) = if same(f1) && f2 != prev.fa {
+            (f1, f2)
+        } else if same(f2) {
+            (f2, f1)
+        } else {
+            return refuse("the edges do not run smoothly one into the next");
+        };
+        legs[k].fa = fa;
+        legs[k].fb = fb;
+    }
+    Ok(())
 }
 
 /// Assembles the tool from its sections (see [`rolling_tool`]).
@@ -367,10 +560,11 @@ fn build(
     roller: &Roller,
     ts: &[f64],
     sections: &[Section],
-    derivs: &[[(DVec3, f64); 6]],
+    rates: &[(Rates, Rates)],
     convex: bool,
     closed: bool,
     tag_base: u32,
+    contacts: &[usize],
 ) -> Result<Tool> {
     let n = ts.len() - 1;
     // Knots and control points of each row as a piecewise cubic (Hermite to Bezier).
@@ -385,8 +579,8 @@ fn build(
             let dt = ts[k + 1] - ts[k];
             let (p0, w0) = sections[k].rows()[j];
             let (p1, w1) = sections[k + 1].rows()[j];
-            let (d0, dw0) = derivs[k][j];
-            let (d1, dw1) = derivs[k + 1][j];
+            let (d0, dw0) = rates[k].1[j];
+            let (d1, dw1) = rates[k + 1].0[j];
             out.push((p0 + d0 * (dt / 3.0), w0 + dw0 * (dt / 3.0)));
             out.push((p1 - d1 * (dt / 3.0), w1 - dw1 * (dt / 3.0)));
             out.push((p1, w1));
@@ -572,7 +766,7 @@ fn build(
         });
     }
     check::validate(&tool)?;
-    Ok((tool, convex, vec![(roller.fa, round_face), (roller.fb, round_face)]))
+    Ok((tool, convex, contacts.iter().map(|&f| (f, round_face)).collect()))
 }
 
 #[cfg(test)]

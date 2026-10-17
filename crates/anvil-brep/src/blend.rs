@@ -57,31 +57,44 @@ pub fn blend_edge(
 /// blended, its neighbour no longer runs on into anything. Each edge comes with its
 /// tag base (see [`blend_edge`]).
 pub fn blend_chain(solid: &Solid, edges: &[(EdgeId, u32)], blend: Blend, owner: u32) -> Result<Vec<Solid>> {
-    let mut tool: Option<(Solid, bool)> = None;
-    let mut contacts = Vec::new();
-    for &(edge, tag_base) in edges {
-        let (t, convex, touch) = edge_tool(solid, edge, blend, tag_base)?;
-        if !touch.is_empty() && edges.len() > 1 {
-            return Err(KernelError::Unsupported("rolling-ball fillets along a smooth run of edges".into()));
-        }
-        contacts = touch;
-        tool = Some(match tool {
-            None => (t, convex),
-            Some((acc, c)) => {
-                if c != convex {
-                    return Err(KernelError::Unsupported(
-                        "blending a smooth run of edges that are convex in part and concave in part".into(),
-                    ));
-                }
-                let mut joined = boolean::boolean(&acc, &t, BoolOp::Union)?;
-                if joined.len() != 1 {
-                    return invalid("the blends along these edges do not join up");
-                }
-                (joined.remove(0), c)
+    // Closed-form tools where every edge has one; otherwise (a fillet with an edge between
+    // faces not round about a common axis) one rolling-ball round along the whole run.
+    let tools: Result<Vec<(Solid, bool)>> =
+        edges.iter().map(|&(edge, tag_base)| analytic_tool(solid, edge, blend, tag_base)).collect();
+    let (mut tool, convex, contacts) = match tools {
+        Ok(tools) => {
+            let mut acc: Option<(Solid, bool)> = None;
+            for (t, convex) in tools {
+                acc = Some(match acc {
+                    None => (t, convex),
+                    Some((a, c)) => {
+                        if c != convex {
+                            return Err(KernelError::Unsupported(
+                                "blending a smooth run of edges that are convex in part and concave in part"
+                                    .into(),
+                            ));
+                        }
+                        let mut joined = boolean::boolean(&a, &t, BoolOp::Union)?;
+                        if joined.len() != 1 {
+                            return invalid("the blends along these edges do not join up");
+                        }
+                        (joined.remove(0), c)
+                    }
+                });
             }
-        });
-    }
-    let (mut tool, convex) = tool.ok_or_else(|| KernelError::InvalidInput("no edge to blend".into()))?;
+            let (t, c) = acc.ok_or_else(|| KernelError::InvalidInput("no edge to blend".into()))?;
+            (t, c, Vec::new())
+        }
+        Err(KernelError::Unsupported(why)) => match blend {
+            Blend::Fillet(r) => {
+                let ids: Vec<EdgeId> = edges.iter().map(|e| e.0).collect();
+                let tag_base = edges.first().map_or(0, |e| e.1);
+                crate::rolling::rolling_run_tool(solid, &ids, r, tag_base)?
+            }
+            Blend::Chamfer(_) => return Err(KernelError::Unsupported(why)),
+        },
+        Err(e) => return Err(e),
+    };
     tool.set_owner(owner);
     let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
     boolean::boolean_with_contacts(solid, &tool, op, &contacts)
@@ -112,21 +125,6 @@ fn joined_smoothly(solid: &Solid, a: EdgeId, b: EdgeId) -> bool {
     };
     let ends = |e: &crate::topo::Edge| [(e.start, leaving(e, e.t0, e.t1)), (e.end, leaving(e, e.t1, e.t0))];
     ends(ea).iter().any(|(va, da)| ends(eb).iter().any(|(vb, db)| va == vb && da.dot(*db) < -1.0 + 1e-6))
-}
-
-/// The tool that blends one edge, whether the edge is convex (the tool is cut away)
-/// rather than concave (the tool is added), and the (solid face, tool face) pairs the
-/// tool touches by construction. A fillet the closed-form tools do not cover (an edge
-/// between faces not round about a common axis) is a rolling-ball one.
-fn edge_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result<crate::rolling::Tool> {
-    match analytic_tool(solid, edge, blend, tag_base) {
-        Ok((tool, convex)) => Ok((tool, convex, Vec::new())),
-        Err(KernelError::Unsupported(why)) => match blend {
-            Blend::Fillet(r) => crate::rolling::rolling_tool(solid, edge, r, tag_base),
-            Blend::Chamfer(_) => Err(KernelError::Unsupported(why)),
-        },
-        Err(e) => Err(e),
-    }
 }
 
 /// The tool for a blend in closed form: a prism along a straight edge, the corner

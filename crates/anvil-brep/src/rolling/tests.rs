@@ -217,3 +217,119 @@ fn cross_hole_rim_on_a_boss() {
     assert!(taken > rough && taken < 1.2 * rough, "{taken} vs about {rough}");
     round_is_a_rolling_ball(&out[0], 1, 1.0);
 }
+
+/// A stadium: two half circles of radius `r` about (0, 0) and (`len`, 0), joined by
+/// straight sides.
+fn stadium(r: f64, len: f64) -> Loop2 {
+    Loop2::new(vec![
+        Segment::Line { a: DVec2::new(0.0, -r), b: DVec2::new(len, -r) },
+        Segment::Arc { center: DVec2::new(len, 0.0), radius: r, start: -0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(len, r), b: DVec2::new(0.0, r) },
+        Segment::Arc { center: DVec2::ZERO, radius: r, start: 0.5 * PI, sweep: PI },
+    ])
+}
+
+#[test]
+fn run_matches_the_closed_form_round_a_slot() {
+    // A slot's top outline (lines and half circles running smoothly into each other):
+    // one ball rolled all the way round gives what the cylinders and tori give.
+    let slot = prism(&[stadium(4.0, 10.0)], &Frame::world(), 0.0, 5.0);
+    let edges: Vec<EdgeId> = [
+        DVec3::new(5.0, -4.0, 5.0),
+        DVec3::new(14.0, 0.0, 5.0),
+        DVec3::new(5.0, 4.0, 5.0),
+        DVec3::new(-4.0, 0.0, 5.0),
+    ]
+    .map(|p| edge_near(&slot, p, 1e-6).expect("edge"))
+    .to_vec();
+    let tagged: Vec<(EdgeId, u32)> = edges.iter().map(|e| (*e, 0)).collect();
+    let closed =
+        volume(&crate::blend::blend_chain(&slot, &tagged, Blend::Fillet(1.0), 1).expect("closed form"));
+    let (tool, convex, contacts) = rolling_run_tool(&slot, &edges, 1.0, 0).expect("tool");
+    assert!(convex);
+    assert_eq!(tool.faces.iter().filter(|f| matches!(f.surface, Surface::BSpline(_))).count(), 5);
+    let rolled = volume(&boolean_with_contacts(&slot, &tool, BoolOp::Subtract, &contacts).expect("boolean"));
+    // The rounds agree to the fit (1e-7 mm, a few millionths of a cubic millimetre here);
+    // the volumes, tessellated from a B-spline on one side and cylinders and tori on the
+    // other, to about 1e-6.
+    assert!((rolled - closed).abs() / closed < 1e-5, "{rolled} vs {closed}");
+}
+
+#[test]
+fn slot_boss_root_on_a_shaft() {
+    // A slot-shaped boss standing across a shaft of radius 10: its root runs along the
+    // shaft beside the straight sides and round it in saddles at the ends, concave and
+    // smooth all the way round. One ball rolls along all four edges.
+    let shaft = prism(
+        &[Loop2::new(vec![Segment::circle(DVec2::ZERO, 10.0)])],
+        &Frame::new(DVec3::new(-20.0, 0.0, 0.0), DVec3::X, DVec3::Y).expect("frame"),
+        0.0,
+        50.0,
+    );
+    let boss = prism(&[stadium(3.0, 8.0)], &Frame::world(), 0.0, 16.0);
+    let part = crate::boolean::boolean(&shaft, &boss, BoolOp::Union).expect("union").remove(0);
+    // The root's edges: on the shaft, shared with the boss's sides.
+    let shaft_face = |f: &crate::topo::Face| matches!(f.surface, Surface::Cylinder { radius, .. } if (radius - 10.0).abs() < 1e-9);
+    let root: Vec<EdgeId> = (0..part.edges.len())
+        .map(|i| EdgeId(i as u32))
+        .filter(|&id| {
+            let faces = part.edge_faces(id);
+            // Up where the boss stands, not round the shaft's end faces.
+            let high = part.edge(id).is_some_and(|e| e.curve.eval(0.5 * (e.t0 + e.t1)).z > 5.0);
+            faces.len() == 2
+                && high
+                && faces.iter().any(|f| part.face(*f).is_some_and(shaft_face))
+                && faces.iter().any(|f| part.face(*f).is_some_and(|x| !shaft_face(x)))
+        })
+        .collect();
+    assert_eq!(root.len(), 4);
+    let before = rough_volume(std::slice::from_ref(&part));
+    let run = crate::blend::smooth_run(&part, root[0], &root);
+    assert_eq!(run.len(), 4);
+    let tagged: Vec<(EdgeId, u32)> = run.iter().map(|e| (*e, 0)).collect();
+    let out = crate::blend::blend_chain(&part, &tagged, Blend::Fillet(1.0), 1).expect("fillet");
+    let added = rough_volume(&out) - before;
+    // Along the straight sides the faces meet at about 90 degrees (the shaft's top is
+    // nearly flat there), round the ends less sharply: between the corner a flat-on-flat
+    // round fills at 120 degrees and at 90, along a root about 2 * 8 + 2 pi 3 long.
+    let length = 16.0 + 2.0 * PI * 3.0;
+    let (least, most) = ((1.0 / (PI / 3.0).tan() - PI / 6.0) * length, (1.0 - PI / 4.0) * length * 1.2);
+    assert!(added > least && added < most, "{added} not in {least}..{most}");
+    assert_eq!(
+        out[0].faces.iter().filter(|f| f.owner == 1 && matches!(f.surface, Surface::BSpline(_))).count(),
+        1
+    );
+    round_is_a_rolling_ball(&out[0], 1, 1.0);
+}
+
+#[test]
+fn slot_boss_root_at_larger_radii() {
+    // Larger rounds on the same root (its run starts half way along an edge, so the
+    // round's seam is clear of the joins between the boss's faces).
+    let shaft = prism(
+        &[Loop2::new(vec![Segment::circle(DVec2::ZERO, 10.0)])],
+        &Frame::new(DVec3::new(-20.0, 0.0, 0.0), DVec3::X, DVec3::Y).expect("frame"),
+        0.0,
+        50.0,
+    );
+    let boss = prism(&[stadium(3.0, 8.0)], &Frame::world(), 0.0, 16.0);
+    let part = crate::boolean::boolean(&shaft, &boss, BoolOp::Union).expect("union").remove(0);
+    let shaft_face = |f: &crate::topo::Face| matches!(f.surface, Surface::Cylinder { radius, .. } if (radius - 10.0).abs() < 1e-9);
+    let root: Vec<EdgeId> = (0..part.edges.len())
+        .map(|i| EdgeId(i as u32))
+        .filter(|&id| {
+            let faces = part.edge_faces(id);
+            let high = part.edge(id).is_some_and(|e| e.curve.eval(0.5 * (e.t0 + e.t1)).z > 5.0);
+            faces.len() == 2
+                && high
+                && faces.iter().any(|f| part.face(*f).is_some_and(shaft_face))
+                && faces.iter().any(|f| part.face(*f).is_some_and(|x| !shaft_face(x)))
+        })
+        .collect();
+    let tagged: Vec<(EdgeId, u32)> = root.iter().map(|e| (*e, 0)).collect();
+    for r in [1.5, 2.0] {
+        let out = crate::blend::blend_chain(&part, &tagged, Blend::Fillet(r), 1).expect("fillet");
+        assert!(rough_volume(&out) > rough_volume(std::slice::from_ref(&part)));
+        round_is_a_rolling_ball(&out[0], 1, r);
+    }
+}
