@@ -3,9 +3,8 @@
 Free and open source parametric 3D CAD, written in Rust, with its own geometry kernels.
 If you know SOLIDWORKS, the workflow will feel familiar: a feature tree, sketches on planes
 or faces, fully defined sketches, extrudes and revolves, equations, custom properties and
-templates. AnvilCAD is an independent project, not affiliated with Dassault Systèmes; it
-interoperates through open standards and published APIs only (see
-[INTEROPERABILITY.md](INTEROPERABILITY.md)).
+templates. AnvilCAD is an independent project, not affiliated with Dassault Systèmes, and
+it works without SOLIDWORKS installed (see [INTEROPERABILITY.md](INTEROPERABILITY.md)).
 
 The goal is a complete, free engineering stack: CAD now, then CAM, PDM and PLM (see
 [ROADMAP.md](ROADMAP.md)).
@@ -250,8 +249,9 @@ The full roadmap is in [ROADMAP.md](ROADMAP.md). In short:
    open API
 4. PLM: bills of materials, change management, requirements and quality records
 
-Interoperability with SOLIDWORKS and other commercial systems stays on open standards (STEP)
-and their published APIs; AnvilCAD does not reverse-engineer proprietary formats.
+Interoperability with SOLIDWORKS and other commercial systems is built natively, from open
+standards (STEP) and from documented reverse-engineering work, so no feature needs
+commercial software installed.
 
 ## History
 
@@ -261,7 +261,7 @@ ferrocad, and were merged into AnvilCAD in October 2026.
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) (commits carry a
-Developer Certificate of Origin sign-off) and the clean-room rules in
+Developer Certificate of Origin sign-off) and the interoperability rules in
 [INTEROPERABILITY.md](INTEROPERABILITY.md).
 
 ## License

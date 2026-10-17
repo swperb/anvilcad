@@ -2,7 +2,7 @@
 
 AnvilCAD is building toward a complete, free and open-source engineering stack: CAD, CAM,
 PDM and PLM that work together, that anyone can run, study and extend, and that interoperate
-with commercial systems through open standards and published APIs (see
+with commercial systems without needing them installed (see
 [INTEROPERABILITY.md](INTEROPERABILITY.md)). Items move to the README's "What works today"
 when they are in the code and tested.
 
