@@ -184,7 +184,7 @@ fn show(a: &Args, opts: &ReadOptions) -> bool {
         }
     }
     if a.json {
-        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        println!("{}", serde_json::to_string_pretty(&json).unwrap_or_default());
     }
     ok
 }
@@ -351,10 +351,9 @@ fn convert(a: &Args, opts: &ReadOptions) -> bool {
                 c.properties.iter().for_each(|p| push(&c.name, p));
             }
         }
-        let message = if message.is_empty() && fp.as_ref().is_some_and(|p| !p.notes.is_empty()) {
-            fp.unwrap().notes.join(" ")
-        } else {
-            message
+        let message = match &fp {
+            Some(p) if message.is_empty() && !p.notes.is_empty() => p.notes.join(" "),
+            _ => message,
         };
         rows.push(FileRow {
             file,
@@ -426,7 +425,10 @@ fn write_reports(dir: &Path, rows: &[FileRow], index: &[[String; 6]]) -> std::io
         index.iter().map(|r| r.to_vec()),
     )?;
     let json = serde_json::json!({ "files": rows });
-    std::fs::write(dir.join("conversion-report.json"), serde_json::to_string_pretty(&json).unwrap())
+    std::fs::write(
+        dir.join("conversion-report.json"),
+        serde_json::to_string_pretty(&json).unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]

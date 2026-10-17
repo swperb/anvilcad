@@ -289,7 +289,7 @@ fn parse_entry(b: &[u8]) -> Entry {
         right: u32_at(b, 72),
         child: u32_at(b, 76),
         start: u32_at(b, 116),
-        size: u64::from_le_bytes(b[120..128].try_into().unwrap()),
+        size: u32_at(b, 120) as u64 | (u32_at(b, 124) as u64) << 32,
     }
 }
 

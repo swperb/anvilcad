@@ -242,8 +242,9 @@ pub fn convert(
         Err(e) => return Outcome::Failed(format!("{}: {e}", path.display())),
     };
     if !force && side.is_current(target) {
-        let properties = side.imported.take().map(|i| i.properties).expect("current snapshot");
-        return Outcome::UpToDate { sidecar: path, properties };
+        if let Some(i) = side.imported.take() {
+            return Outcome::UpToDate { sidecar: path, properties: i.properties };
+        }
     }
     let stamp = match Stamp::of(target) {
         Ok(s) => s,

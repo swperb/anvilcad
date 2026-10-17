@@ -1,0 +1,30 @@
+[package]
+name = "anvil-bulk"
+description = "AnvilCAD bulk migration: inventories, deduplicates and converts an organisation's SOLIDWORKS files, resumably and across many machines"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "anvil-bulk"
+path = "src/main.rs"
+
+[dependencies]
+anvil-io.workspace = true
+anvil-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+anvil-io = { workspace = true, features = ["fixtures"] }
+anvil-sketch.workspace = true
+anvil-kernel.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

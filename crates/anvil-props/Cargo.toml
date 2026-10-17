@@ -17,3 +17,11 @@ serde_json.workspace = true
 
 [dev-dependencies]
 anvil-io = { workspace = true, features = ["fixtures"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

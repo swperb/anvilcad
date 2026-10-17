@@ -130,6 +130,53 @@ only, and edits to features above an imported body do not flow through that body
 Native files (`.sldprt` etc.) are also recognised directly by the AnvilCAD app, which
 shows their custom properties (next section) and explains how to migrate them.
 
+## Migrating a whole organisation: anvil-bulk
+
+`anvil-bulk` moves an organisation's archive of SOLIDWORKS files, years of it across many
+shares, to AnvilCAD without SOLIDWORKS. The original files are only read. Every step takes
+time proportional to the number of files (and their size, for hashing), and the
+conversion runs on as many machines as you give it.
+
+```bash
+anvil-bulk scan   --project \\server\migration --step-root \\server\step-exports \\server\eng \\server\archive
+anvil-bulk run    --project \\server\migration        # on each worker machine
+anvil-bulk status --project \\server\migration --workers 20
+anvil-bulk export --project \\server\migration --out \\server\anvilcad
+```
+
+1. **scan** finds every SOLIDWORKS file in the given folders, network shares or synced
+   cloud folders, hashes its contents, and pairs each part with a STEP export of it:
+   `<name>.step` or `.stp` beside it, or at the same relative path under `--step-root`.
+   Copies of the same file (common in a 20-year archive) become one job. Re-running a scan
+   re-reads only files that changed.
+2. **run** converts jobs. Point any number of machines at the same project folder: each job
+   is claimed with an atomic file creation, so it is done exactly once. A run can be
+   stopped at any time and started again; finished jobs are never redone, and jobs held by
+   a worker that died are taken over after `--claim-timeout`. A damaged file fails alone.
+3. **export** writes the migrated tree: one `.anvprt` per original part at the same relative
+   path, carrying the file's custom properties and any AnvilCAD properties added with
+   `anvil-props`. Parts already in the output are kept, so edits are never overwritten.
+4. **report** (also run by `run` and `export`) writes `files.csv` (every file: status,
+   duplicate of, bodies, volume, properties, migrated part), `properties.csv` (every
+   property of every file), and `summary.csv` / `summary.json` (counts by status, by year
+   last modified and by top-level folder).
+
+| Status | Meaning |
+|---|---|
+| exact | Geometry from the STEP export, every body exact |
+| faceted | Geometry from the STEP export, some bodies as meshes |
+| parametric / hybrid | Feature tree recovered by the optional anvil-migrate plug-in |
+| properties only | Assemblies and drawings: properties recorded, contents not migrated yet |
+| no geometry source | A part with no STEP export: export one and run again |
+| failed | The reason is in `files.csv` |
+
+Geometry comes from STEP, so the organisation exports STEP from its own SOLIDWORKS
+before its licences end (SOLIDWORKS can batch-export a folder). Two optional plug-ins
+recover more while licences last: `--with-anvil-migrate` converts parts with
+`anvil-migrate`, keeping feature trees, on a machine with SOLIDWORKS; a Document Manager
+key (`ANVIL_SWDM_KEY`) reads properties of files saved by SOLIDWORKS 2015 or later.
+Neither is needed for anything else.
+
 ## SOLIDWORKS custom properties, without SOLIDWORKS
 
 Open `wheel.sldprt` in AnvilCAD and its File Properties window shows the properties your
@@ -200,6 +247,8 @@ crates/
                  SOLIDWORKS through late-bound COM automation)
   anvil-props    anvil-props: shows and bulk-converts custom properties of SOLIDWORKS
                  files without SOLIDWORKS
+  anvil-bulk     anvil-bulk: organisation-wide migration (inventory, deduplication,
+                 resumable multi-machine conversion from STEP, migrated tree, reports)
 ```
 
 Kernel design notes:

@@ -1,5 +1,7 @@
 //! End-to-end: convert a folder tree the way a company would, then read it back.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use anvil_io::props::cfb::writer as cfb;
 use anvil_io::props::oleps::{self, writer as ps};
 use std::path::{Path, PathBuf};

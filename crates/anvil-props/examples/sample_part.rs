@@ -4,6 +4,8 @@
 //!
 //!   cargo run -p anvil-props --example sample_part -- wheel.sldprt
 
+#![allow(clippy::expect_used)]
+
 use anvil_io::props::cfb::writer as cfb;
 use anvil_io::props::oleps::{self, writer as ps};
 
