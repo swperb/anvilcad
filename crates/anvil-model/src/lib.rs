@@ -241,6 +241,17 @@ mod tests {
         let v = st.body.mass_properties().volume;
         let expected = PI * (225.0 - 25.0) * 20.0;
         assert!((v - expected).abs() / expected < 5e-3, "{v} vs {expected}");
+        // Built by the exact kernel: cylinders and flat rings, true to the profile.
+        assert_eq!(st.faceted_from, None);
+        let exact = st.exact.as_ref().expect("exact bodies");
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        let v: f64 = exact
+            .iter()
+            .map(|b| {
+                anvil_brep::mass::properties(&anvil_brep::tess::tessellate(b, &fine).expect("tess")).volume
+            })
+            .sum();
+        assert!((v - expected).abs() / expected < 1e-5, "{v} vs {expected}");
     }
 }
 
@@ -365,6 +376,8 @@ mod revolve_open_profile {
         let v = st.body.mass_properties().volume;
         let expected = std::f64::consts::PI * 25.0 * 10.0;
         assert!((v - expected).abs() / expected < 5e-3, "{v}");
+        assert_eq!(st.faceted_from, None);
+        assert_eq!(st.exact.as_ref().map(|b| b.len()), Some(1));
     }
 }
 

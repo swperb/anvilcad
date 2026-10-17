@@ -179,7 +179,10 @@ Kernel design notes:
   reach) are cut tolerantly: a traced cut is bent onto the point where it crosses such
   an edge. `anvil-kernel` is a faceted kernel that covers everything else.
 - The rebuild runs on the exact kernel while every feature so far is one it supports
-  (extrudes, cuts, patterns, fillets and chamfers on straight edges between flat faces).
+  (extrudes, revolves, cuts, patterns, fillets and chamfers on straight edges between
+  flat faces). A revolved profile of lines and arcs sweeps planes, cylinders, cones,
+  spheres and tori exactly, with pointed cones and sphere poles where it meets the
+  axis.
   After each exact feature the faceted body is regenerated from the exact result, so
   display, picking, mass properties, export and later features work unchanged. The first
   feature the exact kernel cannot build, or declines, hands the part over to the faceted

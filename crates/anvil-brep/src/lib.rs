@@ -21,6 +21,7 @@ pub mod intersect;
 pub mod mass;
 pub mod patch;
 pub mod profile;
+pub mod revolve;
 pub mod seam;
 pub mod spline;
 pub mod ssi;
