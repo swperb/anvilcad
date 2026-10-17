@@ -1,63 +1,56 @@
-# Interoperability and clean-room policy
+# Interoperability policy
 
 AnvilCAD is free and open-source software (MIT OR Apache-2.0). It aims to work well
-alongside commercial CAD, PDM and PLM systems, including those from Dassault Systèmes,
-without taking anything that is not ours to take. This page sets out how the project does
-that, so contributors and users can rely on it.
+alongside commercial CAD, PDM and PLM systems, including those from Dassault Systèmes, and
+to work fully on its own, without any of them installed. This page sets out how the project
+does that, so contributors and users can rely on it.
 
-This is the project's engineering policy, not legal advice. Before a 1.0 release, and
-before anyone sells or markets a feature that touches these areas, the policy should be
-reviewed by a lawyer in the relevant jurisdictions.
+This is the project's engineering policy, not legal advice. Reverse engineering commercial
+software carries legal risk: licence agreements, Dassault's included, restrict it, and the
+statutory exceptions for interoperability (for example in the EU Software Directive) are
+narrow and conditional. This policy must be reviewed by a lawyer in the relevant
+jurisdictions before a 1.0 release, and before anyone sells or markets a feature built from
+reverse-engineering work.
 
-## What AnvilCAD does not do
+## Reverse engineering for interoperability
 
-- It does not decompile, disassemble, debug, trace or otherwise inspect Dassault Systèmes
-  software (SOLIDWORKS, CATIA, 3DEXPERIENCE, SOLIDWORKS PDM, or any other), its libraries
-  or its installers.
-- It does not reverse-engineer proprietary file formats such as `.sldprt`, `.sldasm`,
-  `.slddrw` or `.CATPart`. AnvilCAD recognises such files by their extension and the
-  generic, publicly documented Microsoft compound-file signature, so it can tell the user
-  what the file is and how to convert it. Where such a file is a Microsoft compound file
-  ([MS-CFB]) holding the standard summary and custom property set streams that Microsoft
-  documents in [MS-OLEPS] (the ones Windows Explorer shows), AnvilCAD reads those streams,
-  and only those, using Microsoft's published specifications. It reads nothing else in the
-  file and never writes to it.
-- It does not use leaked material, documentation or SDKs obtained under a non-disclosure
-  or restricted licence, or anything a contributor learned in confidence.
-- It does not circumvent licence checks, copy protection, encryption or any other
-  technical protection measure.
-- It does not copy code, documentation, help text, icons, user-interface artwork or
-  product names from commercial products.
+AnvilCAD studies how SOLIDWORKS and other commercial systems behave, and how their files are
+structured, so that it can match their workflows and read and write their data natively.
+Features that adapt to SOLIDWORKS are developed with REA (Reverse Engineer Anything,
+<https://github.com/morluto/rea>), which may include analysing SOLIDWORKS binaries and
+proprietary formats such as `.sldprt`, `.sldasm` and `.slddrw`.
 
-Why: commercial licence agreements, Dassault's included, restrict reverse engineering, and
-in some places a contract can override statutory exceptions for interoperability. Laws
-against circumventing protection measures and protecting trade secrets apply as well. The
-statutory exceptions that do exist (for example the decompilation exception for
-interoperability in the EU Software Directive) are narrow and conditional. Open standards
-and published interfaces give AnvilCAD all the interoperability it needs, so the project
-stays well clear of that ground.
+The work follows these rules:
 
-## How AnvilCAD interoperates
+1. **Study, then write from scratch.** Findings are written up as a specification in
+   `docs/re/`, saying what was studied, with which version, and how. AnvilCAD's code is
+   written from that specification. No code, libraries, type libraries, help text, icons or
+   user-interface artwork from commercial products is copied into the repository.
+2. **No circumvention.** AnvilCAD does not circumvent licence checks, copy protection,
+   encryption or any other technical protection measure, and does not help anyone else do
+   so.
+3. **No leaked or confidential material.** AnvilCAD does not use leaked material,
+   documentation or SDKs obtained under a non-disclosure or restricted licence, or anything a
+   contributor learned in confidence.
 
-1. **Open standards first.** STEP (ISO 10303, AP203/AP214/AP242) is the main path for exact
-   geometry in and out, and later for product structure and PMI. STL and OBJ cover meshes.
-   Future work follows open standards too: AP242 for assemblies and PMI, ISO 10303-239
-   (PLCS) for product life-cycle data, and OASIS OSLC for linking PLM records.
-2. **The vendor's published API, on the user's own licensed copy.** `anvil-migrate` reads
-   SOLIDWORKS parts by asking an installed, licensed copy of SOLIDWORKS to open them,
-   through the automation interface Dassault publishes for third-party programs. SOLIDWORKS
-   reads the file; AnvilCAD only receives what the public API returns. AnvilCAD ships no
-   Dassault code, libraries or type libraries; it binds late, at run time, to what the
-   user's installation provides. Use is governed by the user's own SOLIDWORKS licence.
-   Likewise, `anvil-props` and the AnvilCAD app read custom properties of SOLIDWORKS files
-   through the SOLIDWORKS Document Manager API, which Dassault publishes for reading file
-   data without SOLIDWORKS. It uses the customer's own Document Manager licence key, opens
-   files read-only, and never stores the key. AnvilCAD keeps its own properties for such
-   files in a separate `.anvilprops.json` file and never writes into the vendor's file.
-3. **Published PDM and PLM interfaces.** Integration with SOLIDWORKS PDM and the
-   3DEXPERIENCE platform will use only their documented APIs and web services, with the
-   customer's own licences and credentials, and respecting those services' terms. No
-   undocumented endpoints, no scraping, and credentials are never stored in plain text.
+## No dependence on commercial software
+
+Every AnvilCAD feature works on a machine that has never had SOLIDWORKS or any other
+commercial CAD system installed. Behaviour is implemented natively in AnvilCAD's own
+kernels; SOLIDWORKS files are read and written by native code wherever possible.
+
+STEP (ISO 10303, AP203/AP214/AP242) remains a supported path for exact geometry in and out,
+and later for product structure and PMI; STL and OBJ cover meshes. Future work follows open
+standards too: AP242 for assemblies and PMI, ISO 10303-239 (PLCS) for product life-cycle
+data, and OASIS OSLC for linking PLM records.
+
+`anvil-migrate`, which converts parts by driving an installed, licensed copy of SOLIDWORKS
+through its published automation interface, is an optional convenience. AnvilCAD ships no
+Dassault code for it and binds late, at run time, to what the user's installation provides.
+No other feature depends on it.
+
+Integration with SOLIDWORKS PDM and the 3DEXPERIENCE platform uses the customer's own
+licences and credentials, and credentials are never stored in plain text.
 
 ## Trademarks
 
@@ -85,7 +78,8 @@ for their contributions.
 ## For contributors
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). In short: every commit carries a Developer
-Certificate of Origin sign-off, contributions must be your own work, and anything learned
-from proprietary code, decompilation or confidential information stays out. If you work for
-a CAD vendor or have access to its source code or confidential documentation, check your
-obligations before contributing in related areas, and say so in your pull request.
+Certificate of Origin sign-off, contributions must be your own work, reverse-engineering
+findings go into a specification in `docs/re/` before code is written, and confidential
+information stays out. If you work for a CAD vendor or have access to its source code or
+confidential documentation, check your obligations before contributing in related areas,
+and say so in your pull request.

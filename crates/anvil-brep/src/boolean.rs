@@ -37,6 +37,9 @@ const ON: f64 = 1e-5;
 /// Sampling used to build parameter-space polylines.
 const CHORD: f64 = 0.02;
 const MAX_ANGLE: f64 = TAU / 96.0;
+/// Most an edge may stray from a freeform face it bounds and still be met there by a
+/// section curve (the importer heals no further).
+const MAX_SLACK: f64 = 0.1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoolOp {
@@ -63,6 +66,25 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp) -> Result<Vec<Solid>> {
         });
     }
     Engine::new([a, b])?.run(op)
+}
+
+/// The piece of spline `c` from `t0` to `t1` with its ends moved to `a` and `b`, as a
+/// curve of its own and its parameter range.
+fn bent(c: &Curve, t0: f64, t1: f64, a: DVec3, b: DVec3) -> Option<(Curve, f64, f64)> {
+    let Curve::Spline(sp) = c else { return None };
+    let (lo, hi) = sp.domain();
+    let (t0, t1) = if sp.closed { (t0, t1) } else { (t0.clamp(lo, hi), t1.clamp(lo, hi)) };
+    let piece = sp.piece(t0.min(t1), t0.max(t1)).ok()?;
+    let mut points = piece.points.clone();
+    let n = points.len();
+    let (first, last) = if t0 <= t1 { (a, b) } else { (b, a) };
+    points[0] = first;
+    points[n - 1] = last;
+    let s =
+        crate::spline::Spline::new(piece.degree, piece.knots.clone(), points, piece.weights.clone()).ok()?;
+    let (p0, p1) = s.domain();
+    let (t0, t1) = if t0 <= t1 { (p0, p1) } else { (p1, p0) };
+    Some((Curve::Spline(std::sync::Arc::new(s)), t0, t1))
 }
 
 fn boxes_overlap(a: (DVec3, DVec3), b: (DVec3, DVec3), pad: f64) -> bool {
@@ -129,6 +151,10 @@ struct Engine<'a> {
     solids: [&'a Solid; 2],
     infos: [Vec<FaceInfo>; 2],
     pts: Vec<DVec3>,
+    /// Per pooled point: how far the edge it was found on strays from that edge's own
+    /// faces there (an imported file's conic on a freeform face, say). A section curve
+    /// may end that far from the point, and is then bent to meet it.
+    slack: Vec<f64>,
     vmap: [Vec<usize>; 2],
     edges: Vec<PEdge>,
     /// Per solid edge: the pooled pieces in the edge's direction.
@@ -212,6 +238,7 @@ impl<'a> Engine<'a> {
             solids,
             infos,
             pts: Vec::new(),
+            slack: Vec::new(),
             vmap: [Vec::new(), Vec::new()],
             edges: Vec::new(),
             pieces: [Vec::new(), Vec::new()],
@@ -221,17 +248,19 @@ impl<'a> Engine<'a> {
             ],
         };
         for (s, solid) in solids.iter().enumerate() {
-            let ids = solid.vertices.iter().map(|v| eng.add_point(v.point)).collect();
+            let ids = solid.vertices.iter().map(|v| eng.add_point(v.point, 0.0)).collect();
             eng.vmap[s] = ids;
         }
         Ok(eng)
     }
 
-    fn add_point(&mut self, p: DVec3) -> usize {
+    fn add_point(&mut self, p: DVec3, slack: f64) -> usize {
         if let Some(i) = self.pts.iter().position(|q| (*q - p).length() < TOL) {
+            self.slack[i] = self.slack[i].max(slack);
             return i;
         }
         self.pts.push(p);
+        self.slack.push(slack);
         self.pts.len() - 1
     }
 
@@ -266,6 +295,25 @@ impl<'a> Engine<'a> {
         locate_in(self.solids[s], f, &self.infos[s][f], p)
     }
 
+    /// Like [`Self::locate`] for pooled point `i`, but a point with slack that lies on one
+    /// of the face's edges is on its boundary even where that edge strays off the surface.
+    fn locate_point(&self, s: usize, f: usize, i: usize) -> Loc {
+        let p = self.pts[i];
+        let slack = self.slack[i];
+        let solid = self.solids[s];
+        let face = &solid.faces[f];
+        if slack > 0.0
+            && face.surface.distance(p) <= ON + slack
+            && face
+                .loops()
+                .flat_map(|l| &l.coedges)
+                .any(|c| solid.edge(c.edge).is_some_and(|e| e.curve.distance_to(p, e.t0, e.t1) < ON))
+        {
+            return Loc::Boundary;
+        }
+        self.locate(s, f, p)
+    }
+
     fn run(mut self, op: BoolOp) -> Result<Vec<Solid>> {
         self.intersect_edges_with_faces();
         self.split_edges();
@@ -281,7 +329,14 @@ impl<'a> Engine<'a> {
         let mut found = Vec::new();
         for s in 0..2 {
             let o = 1 - s;
-            for e in &self.solids[s].edges {
+            let solid = self.solids[s];
+            let mut faces_of: Vec<Vec<usize>> = vec![Vec::new(); solid.edges.len()];
+            for (fi, f) in solid.faces.iter().enumerate() {
+                for c in f.loops().flat_map(|l| &l.coedges) {
+                    faces_of[c.edge.index()].push(fi);
+                }
+            }
+            for (ei, e) in solid.edges.iter().enumerate() {
                 for (g, face) in self.solids[o].faces.iter().enumerate() {
                     let (lo, hi) = self.infos[o][g].bbox;
                     let ebox = edge_box(e);
@@ -294,15 +349,23 @@ impl<'a> Engine<'a> {
                         for t in ts {
                             let p = e.curve.eval(t);
                             if self.locate(o, g, p) != Loc::Outside {
-                                found.push(p);
+                                // Only freeform faces are trusted to stray (within an
+                                // import's healing reach); analytic edges lie on theirs.
+                                let slack = faces_of[ei]
+                                    .iter()
+                                    .map(|&f| &solid.faces[f].surface)
+                                    .filter(|f| matches!(f, Surface::BSpline(_)))
+                                    .map(|f| f.distance(p))
+                                    .fold(0.0, f64::max);
+                                found.push((p, if slack <= MAX_SLACK { slack } else { 0.0 }));
                             }
                         }
                     }
                 }
             }
         }
-        for p in found {
-            self.add_point(p);
+        for (p, slack) in found {
+            self.add_point(p, slack);
         }
     }
 
@@ -403,10 +466,10 @@ impl<'a> Engine<'a> {
             .pts
             .iter()
             .enumerate()
-            .filter(|(_, p)| {
-                curve.distance_to_curve(**p) < ON
-                    && self.locate(0, fa, **p) != Loc::Outside
-                    && self.locate(1, fb, **p) != Loc::Outside
+            .filter(|(i, p)| {
+                curve.distance_to_curve(**p) < ON + 4.0 * self.slack[*i]
+                    && self.locate_point(0, fa, *i) != Loc::Outside
+                    && self.locate_point(1, fb, *i) != Loc::Outside
             })
             .map(|(i, p)| (curve.param_of(*p), i))
             .collect();
@@ -419,7 +482,7 @@ impl<'a> Engine<'a> {
                 // A closed curve that touches no edge: give it a vertex.
                 let p = curve.eval(0.0);
                 if self.locate(0, fa, p) == Loc::Inside && self.locate(1, fb, p) == Loc::Inside {
-                    let v = self.add_point(p);
+                    let v = self.add_point(p, 0.0);
                     let t = curve.param_of(p);
                     spans.push((t, t + period, v, v));
                 }
@@ -451,7 +514,18 @@ impl<'a> Engine<'a> {
             if la == Loc::Boundary && lb == Loc::Boundary {
                 continue;
             }
-            let (e, _) = self.add_edge(curve.clone(), t0, t1, v0, v1);
+            // A span ending off its curve (at a point with slack) is bent to meet it.
+            let (pa, pb) = (self.pts[v0], self.pts[v1]);
+            let (piece, t0, t1) =
+                if (curve.eval(t0) - pa).length() < ON && (curve.eval(t1) - pb).length() < ON {
+                    (curve.clone(), t0, t1)
+                } else {
+                    match bent(&curve, t0, t1, pa, pb) {
+                        Some(b) => b,
+                        None => continue,
+                    }
+                };
+            let (e, _) = self.add_edge(piece, t0, t1, v0, v1);
             if la == Loc::Inside {
                 self.cuts[0][fa].insert(e);
             }
@@ -625,15 +699,22 @@ impl<'a> Engine<'a> {
             halves.retain(|h| !dangling.contains(&h.edge));
         }
 
-        let dir_angle = |uv: &[DVec2]| -> (f64, f64) {
-            let d = uv[1.min(uv.len() - 1)] - uv[0];
-            let turn = if uv.len() > 2 { (uv[1] - uv[0]).perp_dot(uv[2] - uv[1]).signum() } else { 0.0 };
+        // The direction a polyline leaves its first point in. From a point with slack, the
+        // first stretch of a bent cut can lie off the surface and project onto its edge,
+        // so the direction is taken from beyond that stretch.
+        let dir_angle = |uv: &[DVec2], v: usize| -> (f64, f64) {
+            let reach = 8.0 * self.slack[v];
+            let k = (1..uv.len()).find(|&k| (uv[k] - uv[0]).length() > reach).unwrap_or(uv.len() - 1).max(1);
+            let k = k.min(uv.len() - 1);
+            let d = uv[k] - uv[0];
+            let turn =
+                if uv.len() > k + 1 { (uv[k] - uv[0]).perp_dot(uv[k + 1] - uv[k]).signum() } else { 0.0 };
             (d.y.atan2(d.x), turn)
         };
         // Per node: (half-edge, leaving angle, turn direction).
         let mut outgoing: HashMap<Node, Vec<(usize, f64, f64)>> = HashMap::new();
         for (i, h) in halves.iter().enumerate() {
-            let (a, t) = dir_angle(&h.uv);
+            let (a, t) = dir_angle(&h.uv, h.from.0);
             outgoing.entry(h.from).or_default().push((i, a, t));
         }
 
@@ -656,7 +737,7 @@ impl<'a> Engine<'a> {
                 cycle.push(h);
                 let half = &halves[h];
                 let back: Vec<DVec2> = half.uv.iter().rev().copied().collect();
-                let (twin_angle, twin_turn) = dir_angle(&back);
+                let (twin_angle, twin_turn) = dir_angle(&back, half.to.0);
                 let Some(cands) = outgoing.get(&half.to) else {
                     return fail("face split reached a dead end");
                 };

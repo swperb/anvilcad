@@ -24,8 +24,9 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
         return Ok(Ssi::Coincident);
     }
     match (a, b) {
-        (Surface::BSpline(_), _) | (_, Surface::BSpline(_)) => {
-            Err(KernelError::Unsupported("intersections with freeform (B-spline) surfaces".into()))
+        (Surface::BSpline(p), other) | (other, Surface::BSpline(p)) => {
+            let curves = crate::freeform::intersect(p, other)?;
+            Ok(if curves.is_empty() { Ssi::None } else { Ssi::Curves(curves) })
         }
         (Surface::Plane { frame: fa }, Surface::Plane { frame: fb }) => Ok(plane_plane(fa, fb)),
         (Surface::Plane { frame: fp }, Surface::Cylinder { frame, radius })
@@ -174,7 +175,12 @@ fn sphere_with(centre: DVec3, radius: f64, other: &Surface, tol: f64) -> Result<
         Surface::Cylinder { .. } | Surface::Cone { .. } => {
             Ok(Ssi::Curves(crate::ssi::intersect(&sphere, other)?))
         }
-        _ => Err(KernelError::Unsupported("intersection of a sphere with a torus off its axis".into())),
+        Surface::Torus { frame, major, minor, .. } => {
+            let patch = crate::freeform::torus_patch(frame, *major, *minor)?;
+            let curves = crate::freeform::intersect(&patch, &sphere)?;
+            Ok(if curves.is_empty() { Ssi::None } else { Ssi::Curves(curves) })
+        }
+        _ => Err(KernelError::Unsupported("intersection of a sphere with this surface".into())),
     }
 }
 
@@ -206,7 +212,10 @@ fn torus_with(t: &Frame, major: f64, minor: f64, other: &Surface, tol: f64) -> R
             .collect();
         return Ok(Ssi::Curves(circles));
     }
-    Err(KernelError::Unsupported("intersection of a torus with a surface not on its axis".into()))
+    // Off the axis: trace it on the torus written as an exact patch.
+    let patch = crate::freeform::torus_patch(t, major, minor)?;
+    let curves = crate::freeform::intersect(&patch, other)?;
+    Ok(if curves.is_empty() { Ssi::None } else { Ssi::Curves(curves) })
 }
 
 fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) -> Result<Ssi> {
@@ -754,9 +763,14 @@ mod tests {
         let t = Surface::Torus { frame: Frame::world(), major: 6.0, minor: 1.5, v_mid: 0.0 };
         let on_torus = |cs: &[Curve], other: &Surface| {
             for c in cs {
+                // Traced curves are fitted to 1e-7, closed forms are exact.
+                let ((a, b), tol) = match c {
+                    Curve::Spline(sp) => (sp.domain(), 1e-7),
+                    _ => ((0.0, 5.5), 1e-9),
+                };
                 for i in 0..12 {
-                    let p = c.eval(i as f64 * 0.5);
-                    assert!(t.distance(p) < 1e-9 && other.distance(p) < 1e-9, "{p:?}");
+                    let p = c.eval(a + (b - a) * i as f64 / 11.0);
+                    assert!(t.distance(p) < tol && other.distance(p) < tol, "{p:?}");
                 }
             }
         };
@@ -780,9 +794,17 @@ mod tests {
         let Ok(Ssi::Curves(cs)) = surfaces(&t, &k, 1e-6) else { panic!() };
         assert_eq!(cs.len(), 2);
         on_torus(&cs, &k);
-        // Off-axis surfaces are not supported yet.
-        assert!(surfaces(&t, &cyl(DVec3::new(6.0, 0.0, 0.0), DVec3::X, 0.5), 1e-6).is_err());
-        assert!(surfaces(&t, &plane(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0)), 1e-6).is_err());
+        // Off its axis, traced on the torus as an exact patch: a pin through the tube
+        // along x crosses the tube at both ends (four loops), a tilted plane through the
+        // centre cuts it too.
+        let pin = cyl(DVec3::new(6.0, 0.0, 0.0), DVec3::X, 0.5);
+        let Ok(Ssi::Curves(cs)) = surfaces(&t, &pin, 1e-6) else { panic!() };
+        assert_eq!(cs.len(), 4);
+        on_torus(&cs, &pin);
+        let tilt = plane(DVec3::ZERO, DVec3::new(1.0, 0.0, 1.0));
+        let Ok(Ssi::Curves(cs)) = surfaces(&t, &tilt, 1e-6) else { panic!() };
+        assert!(!cs.is_empty());
+        on_torus(&cs, &tilt);
     }
 
     #[test]

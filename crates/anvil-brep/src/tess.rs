@@ -405,7 +405,7 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
                         None => sp.closest(*p),
                     };
                     seed = Some(st);
-                    let mut q = sp.to_uv(st);
+                    let mut q = sp.to_uv(sp.beyond(*p, st));
                     // On a wrapping patch, stay on the previous point's turn.
                     if let (Some(per), Some(pr)) = (period, prev) {
                         q.x += per * ((pr - q.x) / per).round();
