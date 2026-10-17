@@ -370,7 +370,11 @@ mod tests {
         let text = fanuc_text();
         let h = content_hash(text);
         assert_eq!(h.len(), 64);
-        assert_eq!(h, content_hash(&text.replace('\n', "\r\n")));
+        // The same hash whatever line endings the checkout gave the file (git may turn
+        // them into CRLF on Windows).
+        let lf = text.replace("\r\n", "\n");
+        assert_eq!(h, content_hash(&lf));
+        assert_eq!(h, content_hash(&lf.replace('\n', "\r\n")));
         let pin = Pin { name: "Generic Fanuc-style mill".into(), version: "1.0.0".into(), sha256: h };
         assert!(load_pinned(text, &pin).is_ok());
         let tampered = text.replace("max_feed = 10000.0", "max_feed = 90000.0");
