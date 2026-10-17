@@ -552,7 +552,7 @@ impl AnvilApp {
         let Some(sk) = self.target_sketch() else {
             self.message = Some((
                 "Select a sketch".into(),
-                "Select a sketch in the FeatureManager tree (or open one), then run the command.".into(),
+                "Select a sketch in the feature tree (or open one), then run the command.".into(),
             ));
             return;
         };
@@ -1434,7 +1434,7 @@ impl AnvilApp {
         }
     }
 
-    /// Closes the feature PropertyManager: OK keeps the edit, Cancel restores the model.
+    /// Closes the feature's property panel: OK keeps the edit, Cancel restores the model.
     fn finish_editor(&mut self, ok: bool) {
         if let Some(Editor::Feature { before, is_new, .. }) = self.editor.take() {
             if !ok {
@@ -2246,7 +2246,7 @@ impl AnvilApp {
         egui::Window::new("About AnvilCAD").open(&mut open).show(ctx, |ui| {
             ui.heading(format!("AnvilCAD {}", env!("CARGO_PKG_VERSION")));
             ui.label("Free and open source parametric 3D CAD, written in Rust.");
-            ui.label("Licensed under the MIT license.");
+            ui.label("Licensed under MIT OR Apache-2.0.");
         });
         self.windows.about = open;
 

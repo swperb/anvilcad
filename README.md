@@ -1,9 +1,14 @@
 # AnvilCAD
 
 Free and open source parametric 3D CAD, written in Rust, with its own geometry kernels.
-The workflow follows SOLIDWORKS conventions: a FeatureManager tree, sketches on planes or
-faces, fully defined sketches, extrudes and revolves, equations, custom properties and
-templates.
+If you know SOLIDWORKS, the workflow will feel familiar: a feature tree, sketches on planes
+or faces, fully defined sketches, extrudes and revolves, equations, custom properties and
+templates. AnvilCAD is an independent project, not affiliated with Dassault Systèmes; it
+interoperates through open standards and published APIs only (see
+[INTEROPERABILITY.md](INTEROPERABILITY.md)).
+
+The goal is a complete, free engineering stack: CAD now, then CAM, PDM and PLM (see
+[ROADMAP.md](ROADMAP.md)).
 
 ![AnvilCAD showing the sample part](docs/screenshot.png)
 
@@ -233,24 +238,41 @@ Part loads a model that uses most features.
 
 ## Roadmap
 
-1. Kernel: intersections with freeform (B-spline) faces, surfaces of revolution, torus
-   intersections off its axis, so revolves, shells and curved-edge fillets build exactly; fillets on curved-to-curved edges, spherical corner blends,
-   variable-radius fillets, draft; later NURBS
-2. More features: holes (Hole Wizard style), mirror, sweep, loft, multi-body parts
-3. Assemblies with mates; drawings with views, dimensions and title blocks fed by
-   custom properties
-4. STEP: assembly placement, colours and names;
-   then SOLIDWORKS format research for the five-year compatibility window
-5. A scripting and plugin API
-6. CAM (tracked as a feature request in the issues)
+The full roadmap is in [ROADMAP.md](ROADMAP.md). In short:
+
+1. CAD: freeform intersections and surfaces of revolution in the exact kernel, a hole
+   feature with standard sizes, mirror, sweep, loft, multi-body parts, sheet metal,
+   assemblies with mates, drawings, AP242 assemblies and PMI, a scripting and plugin API
+2. CAM: 2.5D adaptive clearing and finishing, feature recognition, a tool and
+   feeds-and-speeds library, simulation with gouge and collision checks, and community post
+   processors with a verifier; then 3-axis surfacing, 4- and 5-axis, and turning
+3. PDM: a versioned vault with check-in and check-out, metadata, life-cycle states and an
+   open API
+4. PLM: bills of materials, change management, requirements and quality records
+
+Interoperability with SOLIDWORKS and other commercial systems stays on open standards (STEP)
+and their published APIs; AnvilCAD does not reverse-engineer proprietary formats.
 
 ## History
 
 The exact kernel (`anvil-brep`) and the wgpu renderer began as a separate project,
 ferrocad, and were merged into AnvilCAD in October 2026.
 
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) (commits carry a
+Developer Certificate of Origin sign-off) and the clean-room rules in
+[INTEROPERABILITY.md](INTEROPERABILITY.md).
+
 ## License
 
 Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
 option. Unless you state otherwise, any contribution intentionally submitted for inclusion
 in AnvilCAD shall be dual licensed as above, without any additional terms or conditions.
+
+## Trademarks
+
+SOLIDWORKS, CATIA, 3DEXPERIENCE and Dassault Systèmes are trademarks or registered
+trademarks of Dassault Systèmes or its subsidiaries. CAMWorks, SolidCAM and other product
+names are trademarks of their owners. They are used here only to describe compatibility;
+AnvilCAD is not affiliated with or endorsed by any of these companies.

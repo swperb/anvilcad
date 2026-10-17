@@ -39,7 +39,7 @@
         <div class="hero-copy">
           <p class="label"><span class="status-dot" aria-hidden="true"></span>Status: early (0.1)</p>
           <h1 id="hero-title">AnvilCAD</h1>
-          <p class="pitch">Free, open-source parametric 3D CAD written in Rust, with its own geometry kernel. If you know SOLIDWORKS, you already know the workflow: a FeatureManager tree, sketches on planes or faces, and fully defined sketches.</p>
+          <p class="pitch">Free, open-source parametric 3D CAD written in Rust, with its own geometry kernel. If you know SOLIDWORKS, the workflow will feel familiar: a feature tree, sketches on planes or faces, and fully defined sketches.</p>
           <div class="cta-row">
             <a class="btn btn-primary" href="https://github.com/swperb/anvilcad">View on GitHub</a>
             <a class="btn btn-secondary" href="#roadmap">Roadmap</a>
@@ -174,8 +174,8 @@
           <p class="lede">An unedited capture of AnvilCAD with the bundled sample part open.</p>
         </header>
         <figure class="shot shot-main">
-          <img src="assets/screens/sample-part.jpg" width="1400" height="880" loading="lazy" alt="AnvilCAD window with the sample part: a rectangular aluminium plate with rounded corners, four mounting holes, a row of slots cut along one side, and a filleted round boss with a bore in the middle. The FeatureManager tree on the left lists the 6061 Alloy material, the Front, Top and Right planes, and the features from Sketch1 and Boss-Extrude1 through Cut-Extrude3, LPattern1 and Fillet1 to Fillet3. The toolbar shows Extruded Boss/Base, Revolved Boss/Base, Extruded Cut, Revolved Cut, Linear Pattern, Circular Pattern, Fillet, Chamfer, Shell and Reference Plane. The status bar reads Rebuild OK.">
-          <figcaption><span class="mono">fig. 1</span> The bundled sample part: extrudes, cuts, a linear pattern and fillets, with the FeatureManager tree on the left.</figcaption>
+          <img src="assets/screens/sample-part.jpg" width="1400" height="880" loading="lazy" alt="AnvilCAD window with the sample part: a rectangular aluminium plate with rounded corners, four mounting holes, a row of slots cut along one side, and a filleted round boss with a bore in the middle. The feature tree on the left lists the 6061 Alloy material, the Front, Top and Right planes, and the features from Sketch1 and Boss-Extrude1 through Cut-Extrude3, LPattern1 and Fillet1 to Fillet3. The toolbar shows Extruded Boss/Base, Revolved Boss/Base, Extruded Cut, Revolved Cut, Linear Pattern, Circular Pattern, Fillet, Chamfer, Shell and Reference Plane. The status bar reads Rebuild OK.">
+          <figcaption><span class="mono">fig. 1</span> The bundled sample part: extrudes, cuts, a linear pattern and fillets, with the feature tree on the left.</figcaption>
         </figure>
       </div>
     </section>
@@ -287,12 +287,12 @@
           <p class="lede">Roughly in order. Nothing here has a date attached.</p>
         </header>
         <ol class="roadmap">
-          <li><span class="mono step">next</span><div><h3>A wider exact kernel</h3><p>Exact analytic coverage for more surfaces (cones, tori, spheres), and blends on curved edges and vertices.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>More part features</h3><p>Holes, mirror, sweep, loft and multi-body parts.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>Assemblies and drawings</h3><p>Parts positioned together, and 2D drawings made from them.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>More STEP</h3><p>Assembly placement, colours and names, and exact import of cones, spheres and tori.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>Scripting API</h3><p>Drive AnvilCAD from code.</p></div></li>
-          <li class="future"><span class="mono step">later</span><div><h3>CAM</h3><p>Toolpath generation, tracked as a separate feature request rather than a planned milestone.</p></div></li>
+          <li><span class="mono step">next</span><div><h3>Freeform modelling in the kernel</h3><p>Booleans and blends on B-spline faces, surfaces of revolution, and curved-edge fillets built exactly. Planes, cylinders, cones, tori, spheres and B-spline faces already import from STEP as exact geometry.</p></div></li>
+          <li><span class="mono step">now</span><div><h3>CAM</h3><p>2.5D adaptive clearing built from published research, facing, profiling and drilling; feature recognition; a tool and feeds library; simulation with gouge and collision checks; and community post processors checked by a verifier.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>More part features</h3><p>A hole feature with standard sizes, mirror, sweep, loft, multi-body parts and sheet metal.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>Assemblies and drawings</h3><p>Parts positioned together with mates, and 2D drawings made from them.</p></div></li>
+          <li><span class="mono step">then</span><div><h3>PDM</h3><p>A versioned vault with check-in and check-out, metadata, life-cycle states and an open API.</p></div></li>
+          <li class="future"><span class="mono step">later</span><div><h3>PLM</h3><p>Bills of materials, change management, requirements and quality records, exchanging data through open standards.</p></div></li>
         </ol>
       </div>
     </section>
@@ -305,6 +305,7 @@
         <span>AnvilCAD</span>
       </p>
       <p>Licensed under MIT OR Apache-2.0.</p>
+      <p class="fine">SOLIDWORKS is a trademark of Dassault Systèmes. AnvilCAD is an independent project, not affiliated with or endorsed by Dassault Systèmes, and interoperates through open standards and published APIs only.</p>
       <p><a href="https://github.com/swperb/anvilcad">github.com/swperb/anvilcad</a></p>
     </div>
   </footer>
