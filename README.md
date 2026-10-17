@@ -227,6 +227,10 @@ there). To check a folder of your own STEP files:
 
 Command line: `anvilcad [FILE.anvprt | --sample] [--screenshot OUT.png] [--edit-sketch ID]`
 
+To drive the app from a script or a coding agent without opening a window (it never takes
+focus or touches your mouse and keyboard), use `anvilcad-agent`; see
+[docs/AGENT_HARNESS.md](docs/AGENT_HARNESS.md).
+
 ## Using it
 
 | Action | Input |

@@ -3,15 +3,12 @@
 //! Usage:
 //!   anvilcad [FILE.anvprt | --sample] [--screenshot OUT.png] [--edit-sketch FEATURE_ID]
 //!            [--window properties|mass|dfm] [--material NAME]
+//!
+//! To drive the app from scripts or agents without opening a window, use `anvilcad-agent`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod camera;
-mod render;
-mod sample;
-mod sketcher;
-
+use anvil_app::{app, render};
 use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {

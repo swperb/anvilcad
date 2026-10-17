@@ -4,17 +4,32 @@ description = "AnvilCAD desktop application"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+default-run = "anvilcad"
+
+[lib]
+name = "anvil_app"
+path = "src/lib.rs"
 
 [[bin]]
 name = "anvilcad"
 path = "src/main.rs"
+
+# Drives the app without a window, for agents and automated tests (see docs/AGENT_HARNESS.md).
+[[bin]]
+name = "anvilcad-agent"
+path = "src/bin/anvilcad-agent.rs"
 
 [dependencies]
 anvil-kernel.workspace = true
 anvil-sketch.workspace = true
 anvil-model.workspace = true
 anvil-io.workspace = true
-eframe = { version = "=0.31.1", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+eframe = { version = "=0.31.1", default-features = false, features = ["accesskit", "wgpu", "default_fonts", "wayland", "x11"] }
+# The accessibility tree (also used by screen readers) lets the headless harness find
+# widgets by their labels.
+egui = { version = "=0.31.1", default-features = false, features = ["accesskit"] }
 bytemuck = "1"
 rfd = "0.15"
 png = "0.17"
+pollster = "0.4"
+serde_json.workspace = true
