@@ -3,6 +3,7 @@
 use crate::camera::{Camera, StdView};
 use crate::render::{Renderer, SceneData};
 use crate::sketcher::{self, SkSel, SketchSession, Tool};
+use crate::theme::{self, Icon, Palette, RowLook};
 use anvil_kernel::{EdgeRef, FaceId, Mesh, ModelEdge, Vec2, Vec3};
 use anvil_model::*;
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Sense, Stroke};
@@ -105,6 +106,8 @@ pub struct AnvilApp {
     file_props: Option<FilePropsWindow>,
     confirm: Option<PendingAction>,
     show_edges: bool,
+    /// The dark theme is on.
+    dark: bool,
     rename: Option<(u32, String)>,
     status: String,
     last_title: String,
@@ -150,10 +153,7 @@ impl AnvilApp {
         screenshot: Option<PathBuf>,
         edit_sketch: Option<u32>,
     ) -> AnvilApp {
-        let mut style = (*ctx.style()).clone();
-        style.visuals = egui::Visuals::light();
-        style.spacing.item_spacing = egui::vec2(6.0, 5.0);
-        ctx.set_style(style);
+        theme::apply(ctx, false);
 
         let doc = Document::new();
         let mut app = AnvilApp {
@@ -187,6 +187,7 @@ impl AnvilApp {
             file_props: None,
             confirm: None,
             show_edges: true,
+            dark: false,
             rename: None,
             status: "Ready".into(),
             last_title: String::new(),
@@ -852,8 +853,13 @@ impl AnvilApp {
 
     // ----- UI: top bars ---------------------------------------------------------------
 
+    /// The header: AnvilCAD's mark, the menus, the part's name, and undo, redo and rebuild.
     fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let pal = Palette::of(ui);
         egui::menu::bar(ui, |ui| {
+            let (mark, _) = ui.allocate_exact_size(egui::vec2(30.0, 26.0), Sense::hover());
+            theme::paint_mark(ui.painter(), mark.shrink2(egui::vec2(3.0, 5.0)), pal.text, pal.accent);
+            ui.add_space(4.0);
             ui.menu_button("File", |ui| {
                 if ui.button("New            Ctrl+N").clicked() {
                     ui.close_menu();
@@ -919,6 +925,10 @@ impl AnvilApp {
                     self.fit_pending = true;
                 }
                 ui.checkbox(&mut self.show_edges, "Shaded with edges");
+                ui.separator();
+                if ui.checkbox(&mut self.dark, "Dark theme").changed() {
+                    theme::apply(ui.ctx(), self.dark);
+                }
             });
             ui.menu_button("Tools", |ui| {
                 if ui.button("Equations...").clicked() {
@@ -944,96 +954,156 @@ impl AnvilApp {
                     self.windows.about = true;
                 }
             });
+
+            // The part's name, centred in the header and painted (not a widget) so it does
+            // not clash with the tree's top row in the harness.
+            let bar = ui.max_rect();
+            let dirty = self.is_dirty();
+            let name = self.part_name();
+            let galley = ui.painter().layout_no_wrap(name, egui::FontId::proportional(13.0), pal.text);
+            let pos =
+                egui::pos2(bar.center().x - galley.size().x / 2.0, bar.center().y - galley.size().y / 2.0);
+            let end = pos.x + galley.size().x;
+            if pos.x > ui.cursor().left() + 20.0 {
+                ui.painter().galley(pos, galley, pal.text);
+                if dirty {
+                    ui.painter().circle_filled(egui::pos2(end + 8.0, bar.center().y), 3.0, pal.accent);
+                }
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if theme::icon_button(ui, Icon::Rebuild, "Rebuild", "Rebuild (Ctrl+B)", None).clicked() {
+                    self.rebuild();
+                }
+                let r = ui.add_enabled_ui(!self.redo.is_empty(), |ui| {
+                    theme::icon_button(ui, Icon::Redo, "Redo", "Redo (Ctrl+Y)", None)
+                });
+                if r.inner.clicked() {
+                    self.redo();
+                }
+                let r = ui.add_enabled_ui(!self.undo.is_empty(), |ui| {
+                    theme::icon_button(ui, Icon::Undo, "Undo", "Undo (Ctrl+Z)", None)
+                });
+                if r.inner.clicked() {
+                    self.undo();
+                }
+            });
         });
     }
 
+    /// The command bar: tabs, then the open tab's commands in captioned groups.
     fn command_manager(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
             for (t, label) in
                 [(Tab::Features, "Features"), (Tab::Sketch, "Sketch"), (Tab::Evaluate, "Evaluate")]
             {
-                if ui.selectable_label(self.tab == t, RichText::new(label).strong()).clicked() {
+                if theme::tab(ui, label, self.tab == t).on_hover_text("Ctrl+Page Up / Page Down").clicked() {
                     self.tab = t;
                 }
             }
         });
-        ui.separator();
-        ui.horizontal_wrapped(|ui| match self.tab {
-            Tab::Features => {
-                if ui.button("Extruded Boss/Base").clicked() {
-                    self.cmd_extrude(BodyOp::Boss);
+        let pal = Palette::of(ui);
+        let y = ui.cursor().top();
+        ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, pal.border));
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.set_min_height(62.0);
+            match self.tab {
+                Tab::Features => {
+                    theme::command_group(ui, "Body", |ui| {
+                        if theme::command_button(ui, Icon::Extrude, "Extruded Boss/Base", None).clicked() {
+                            self.cmd_extrude(BodyOp::Boss);
+                        }
+                        if theme::command_button(ui, Icon::Revolve, "Revolved Boss/Base", None).clicked() {
+                            self.cmd_revolve(BodyOp::Boss);
+                        }
+                        if theme::command_button(ui, Icon::ExtrudeCut, "Extruded Cut", None).clicked() {
+                            self.cmd_extrude(BodyOp::Cut);
+                        }
+                        if theme::command_button(ui, Icon::RevolveCut, "Revolved Cut", None).clicked() {
+                            self.cmd_revolve(BodyOp::Cut);
+                        }
+                    });
+                    theme::group_rule(ui);
+                    theme::command_group(ui, "Pattern", |ui| {
+                        if theme::command_button(ui, Icon::LinearPattern, "Linear Pattern", None).clicked() {
+                            self.cmd_pattern(false);
+                        }
+                        if theme::command_button(ui, Icon::CircularPattern, "Circular Pattern", None)
+                            .clicked()
+                        {
+                            self.cmd_pattern(true);
+                        }
+                    });
+                    theme::group_rule(ui);
+                    theme::command_group(ui, "Modify", |ui| {
+                        if theme::command_button(ui, Icon::Fillet, "Fillet", None).clicked() {
+                            self.cmd_edge_treatment(false);
+                        }
+                        if theme::command_button(ui, Icon::Chamfer, "Chamfer", None).clicked() {
+                            self.cmd_edge_treatment(true);
+                        }
+                        if theme::command_button(ui, Icon::Shell, "Shell", None).clicked() {
+                            self.cmd_shell();
+                        }
+                    });
+                    theme::group_rule(ui);
+                    theme::command_group(ui, "Reference", |ui| {
+                        if theme::command_button(ui, Icon::Plane, "Reference Plane", None).clicked() {
+                            self.cmd_plane();
+                        }
+                    });
                 }
-                if ui.button("Revolved Boss/Base").clicked() {
-                    self.cmd_revolve(BodyOp::Boss);
-                }
-                if ui.button("Extruded Cut").clicked() {
-                    self.cmd_extrude(BodyOp::Cut);
-                }
-                if ui.button("Revolved Cut").clicked() {
-                    self.cmd_revolve(BodyOp::Cut);
-                }
-                ui.separator();
-                if ui.button("Linear Pattern").clicked() {
-                    self.cmd_pattern(false);
-                }
-                if ui.button("Circular Pattern").clicked() {
-                    self.cmd_pattern(true);
-                }
-                ui.separator();
-                if ui.button("Fillet").clicked() {
-                    self.cmd_edge_treatment(false);
-                }
-                if ui.button("Chamfer").clicked() {
-                    self.cmd_edge_treatment(true);
-                }
-                if ui.button("Shell").clicked() {
-                    self.cmd_shell();
-                }
-                ui.separator();
-                if ui.button("Reference Plane").clicked() {
-                    self.cmd_plane();
-                }
-            }
-            Tab::Sketch => {
-                if self.sketch.is_none() {
-                    if ui.button("Sketch").clicked() {
-                        self.cmd_sketch();
-                    }
-                    ui.label("Select a plane or planar face, then click Sketch.");
-                } else {
-                    let tools = [
-                        Tool::Select,
-                        Tool::Line,
-                        Tool::Centerline,
-                        Tool::Rectangle,
-                        Tool::Circle,
-                        Tool::Arc,
-                        Tool::Dimension,
-                    ];
-                    let s = self.sketch.as_mut().unwrap();
-                    for t in tools {
-                        if ui.selectable_label(s.tool == t, t.label()).clicked() {
-                            s.set_tool(t);
+                Tab::Sketch => {
+                    if self.sketch.is_none() {
+                        theme::command_group(ui, "Start", |ui| {
+                            if theme::command_button(ui, Icon::Sketch, "Sketch", None).clicked() {
+                                self.cmd_sketch();
+                            }
+                        });
+                        ui.add_space(8.0);
+                        ui.weak("Select a plane or planar face, then click Sketch.");
+                    } else {
+                        let s = self.sketch.as_mut().unwrap();
+                        theme::command_group(ui, "Draw", |ui| {
+                            for t in SKETCH_TOOLS {
+                                if theme::command_button(ui, tool_icon(t), t.label(), Some(s.tool == t))
+                                    .clicked()
+                                {
+                                    s.set_tool(t);
+                                }
+                            }
+                        });
+                        theme::group_rule(ui);
+                        let mut exit = false;
+                        theme::command_group(ui, "Finish", |ui| {
+                            exit = theme::command_button(ui, Icon::ExitSketch, "Exit Sketch", None).clicked();
+                        });
+                        if exit {
+                            self.exit_sketch();
                         }
                     }
-                    ui.separator();
-                    if ui.button("Exit Sketch").clicked() {
-                        self.exit_sketch();
-                    }
                 }
-            }
-            Tab::Evaluate => {
-                if ui.button("Mass Properties").clicked() {
-                    self.windows.mass = true;
-                }
-                if ui.button("Check Design (DFM)").clicked() {
-                    self.open_dfm();
-                }
-                if ui.button("Equations").clicked() {
-                    self.windows.equations = true;
-                }
-                if ui.button("Custom Properties").clicked() {
-                    self.windows.properties = true;
+                Tab::Evaluate => {
+                    theme::command_group(ui, "Analyze", |ui| {
+                        if theme::command_button(ui, Icon::Mass, "Mass Properties", None).clicked() {
+                            self.windows.mass = true;
+                        }
+                        if theme::command_button(ui, Icon::Check, "Check Design (DFM)", None).clicked() {
+                            self.open_dfm();
+                        }
+                    });
+                    theme::group_rule(ui);
+                    theme::command_group(ui, "Data", |ui| {
+                        if theme::command_button(ui, Icon::Equations, "Equations", None).clicked() {
+                            self.windows.equations = true;
+                        }
+                        if theme::command_button(ui, Icon::Properties, "Custom Properties", None).clicked() {
+                            self.windows.properties = true;
+                        }
+                    });
                 }
             }
         });
@@ -1042,19 +1112,30 @@ impl AnvilApp {
     // ----- UI: left panel ---------------------------------------------------------------
 
     fn feature_tree(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.part_name());
+        ui.spacing_mut().item_spacing.y = 1.0;
+        ui.horizontal(|ui| {
+            let pal = Palette::of(ui);
+            let (r, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), Sense::hover());
+            theme::paint_icon(ui.painter(), r, Icon::Part, pal.text, pal.accent);
+            ui.label(RichText::new(self.part_name()).size(15.0).strong());
+        });
+        ui.add_space(6.0);
         let mat = self
             .doc
             .material
             .as_ref()
             .map(|m| m.name.clone())
             .unwrap_or_else(|| "Material <not specified>".into());
-        if ui.selectable_label(false, format!("  {mat}")).clicked() {
+        if theme::tree_row(ui, Icon::Material, &mat, RowLook::default())
+            .on_hover_text("Material: click to change")
+            .clicked()
+        {
             self.windows.properties = true;
         }
         for p in [PlaneRef::Front, PlaneRef::Top, PlaneRef::Right] {
             let sel = self.selection == Selection::Plane(p);
-            let r = ui.selectable_label(sel, format!("  {}", p.label()));
+            let r =
+                theme::tree_row(ui, Icon::Plane, &p.label(), RowLook { selected: sel, ..Default::default() });
             if r.clicked() {
                 self.selection = Selection::Plane(p);
                 if matches!(self.editor, Some(Editor::PickPlane(_))) {
@@ -1074,17 +1155,18 @@ impl AnvilApp {
                 }
             });
         }
-        ui.label("  Origin");
-        ui.separator();
+        theme::tree_row(ui, Icon::Origin, "Origin", RowLook::default());
+        ui.add_space(4.0);
+        theme::section_label(ui, "History");
 
         let rollback = self.doc.rollback.unwrap_or(usize::MAX);
         let mut action: Option<(u32, &'static str)> = None;
-        let features: Vec<(usize, u32, String, bool, String)> = self
+        let features: Vec<(usize, u32, String, bool, Icon)> = self
             .doc
             .features
             .iter()
             .enumerate()
-            .map(|(i, f)| (i, f.id, f.name.clone(), f.suppressed, icon(&f.kind).to_string()))
+            .map(|(i, f)| (i, f.id, f.name.clone(), f.suppressed, icon(&f.kind)))
             .collect();
         for (i, id, name, suppressed, ic) in features {
             if i == rollback {
@@ -1108,15 +1190,13 @@ impl AnvilApp {
                     continue;
                 }
             }
-            let mut text = RichText::new(format!("{ic} {name}"));
-            if suppressed || rolled {
-                text = text.color(Color32::GRAY).italics();
-            }
-            if err.is_some() {
-                text = RichText::new(format!("{ic} {name}  (!)")).color(Color32::from_rgb(200, 30, 30));
-            }
-            let sel = self.selection == Selection::Feature(id);
-            let r = ui.selectable_label(sel, text);
+            let look = RowLook {
+                selected: self.selection == Selection::Feature(id),
+                dimmed: suppressed || rolled,
+                error: err.is_some(),
+                indent: 0,
+            };
+            let r = theme::tree_row(ui, ic, &name, look);
             let r = match &err {
                 Some(e) => r.on_hover_text(e),
                 None => r,
@@ -1166,6 +1246,7 @@ impl AnvilApp {
             if rollback == self.doc.features.len() {
                 rollback_bar(ui);
             }
+            ui.add_space(4.0);
             if ui.button("Roll to End").clicked() {
                 self.doc.rollback = None;
                 self.rebuild();
@@ -1243,15 +1324,22 @@ impl AnvilApp {
         let Some(editor) = &mut self.editor else { return };
         match editor {
             Editor::PickPlane(purpose) => {
-                ui.heading(if *purpose == PlanePurpose::Sketch { "Sketch" } else { "Plane" });
+                let sketch = *purpose == PlanePurpose::Sketch;
+                panel_title(
+                    ui,
+                    if sketch { Icon::Sketch } else { Icon::Plane },
+                    if sketch { "Sketch" } else { "Plane" },
+                );
                 ui.label("Select a plane in the tree or a planar face in the graphics area.");
+                ui.add_space(4.0);
                 let mut picked = None;
                 for p in [PlaneRef::Front, PlaneRef::Top, PlaneRef::Right] {
                     if ui.button(p.label()).clicked() {
                         picked = Some(p);
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                ui.add_space(4.0);
+                if theme::secondary_button(ui, "Cancel").clicked() {
                     self.editor = None;
                 }
                 if let Some(p) = picked {
@@ -1293,7 +1381,7 @@ impl AnvilApp {
                     self.editor = None;
                     return;
                 };
-                ui.heading(&f.name);
+                panel_title(ui, icon(&f.kind), &f.name);
                 let mut changed = false;
                 match &mut f.kind {
                     FeatureKind::Extrude(e) => {
@@ -1476,15 +1564,17 @@ impl AnvilApp {
                     FeatureKind::Sketch(_) => {}
                 }
                 if let Some(e) = self.state.errors.get(&id) {
-                    ui.colored_label(Color32::from_rgb(200, 30, 30), e);
+                    ui.colored_label(Palette::of(ui).error, e);
                 }
+                ui.add_space(6.0);
                 ui.separator();
+                ui.add_space(2.0);
                 let mut close: Option<bool> = None;
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("  OK  ").strong()).clicked() {
+                    if theme::primary_button(ui, "OK").clicked() {
                         close = Some(true);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if theme::secondary_button(ui, "Cancel").clicked() {
                         close = Some(false);
                     }
                 });
@@ -1513,31 +1603,31 @@ impl AnvilApp {
 
     fn sketch_manager(&mut self, ui: &mut egui::Ui) {
         let Some(s) = &mut self.sketch else { return };
+        let name = self.doc.feature(s.feature).map(|f| f.name.clone()).unwrap_or_default();
         let Some(sf) = self.doc.sketch_mut(s.feature) else {
             self.sketch = None;
             return;
         };
-        ui.heading("Sketch");
+        let pal = Palette::of(ui);
+        panel_title(ui, Icon::Sketch, &name);
         let color = if !s.status.converged {
-            Color32::from_rgb(200, 30, 30)
+            pal.error
         } else if s.status.dof == 0 {
-            Color32::BLACK
+            pal.text
         } else {
-            Color32::from_rgb(20, 60, 230)
+            pal.select
         };
-        ui.colored_label(color, s.status.status_text());
-        ui.label(format!("Tool: {}", s.tool.label()));
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 16.0), Sense::hover());
+            ui.painter().circle_filled(r.center(), 4.0, color);
+            ui.colored_label(color, s.status.status_text());
+        });
+        ui.add_space(4.0);
+        theme::section_label(ui, &format!("Tool: {}", s.tool.label()));
         ui.horizontal_wrapped(|ui| {
-            for t in [
-                Tool::Select,
-                Tool::Line,
-                Tool::Centerline,
-                Tool::Rectangle,
-                Tool::Circle,
-                Tool::Arc,
-                Tool::Dimension,
-            ] {
-                if ui.selectable_label(s.tool == t, t.label()).clicked() {
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+            for t in SKETCH_TOOLS {
+                if theme::icon_button(ui, tool_icon(t), t.label(), t.label(), Some(s.tool == t)).clicked() {
                     s.set_tool(t);
                 }
             }
@@ -1624,7 +1714,7 @@ impl AnvilApp {
                             None => c.label().to_string(),
                         });
                         if bad {
-                            t = t.color(Color32::from_rgb(200, 30, 30));
+                            t = t.color(pal.error);
                         }
                         if ui.selectable_label(s.selection.contains(&SkSel::Constraint(ci)), t).clicked() {
                             s.selection = vec![SkSel::Constraint(ci)];
@@ -1649,7 +1739,7 @@ impl AnvilApp {
         ui.separator();
         let mut exit = false;
         ui.horizontal(|ui| {
-            if ui.button(RichText::new("Exit Sketch").strong()).clicked() {
+            if theme::primary_button(ui, "Exit Sketch").clicked() {
                 exit = true;
             }
         });
@@ -1669,7 +1759,8 @@ impl AnvilApp {
 
         // Background gradient.
         let mut mesh = egui::Mesh::default();
-        let (top, bottom) = (Color32::from_rgb(200, 214, 232), Color32::from_rgb(250, 251, 253));
+        let pal = Palette::of(ui);
+        let (top, bottom) = (pal.view_top, pal.view_bottom);
         mesh.colored_vertex(rect.left_top(), top);
         mesh.colored_vertex(rect.right_top(), top);
         mesh.colored_vertex(rect.right_bottom(), bottom);
@@ -1847,23 +1938,35 @@ impl AnvilApp {
             self.dragging = false;
         }
 
-        // View cube-ish triad.
-        let o = rect.left_bottom() + egui::vec2(40.0, -40.0);
-        for (axis, color, name) in [
-            (Vec3::X, Color32::from_rgb(210, 40, 40), "X"),
-            (Vec3::Y, Color32::from_rgb(40, 160, 40), "Y"),
-            (Vec3::Z, Color32::from_rgb(40, 70, 220), "Z"),
-        ] {
-            let d = egui::vec2(axis.dot(self.camera.right) as f32, -axis.dot(self.camera.up) as f32) * 28.0;
-            painter.line_segment([o, o + d], Stroke::new(2.0_f32, color));
+        // Axis triad, drawn back to front so the axis nearest the viewer is on top.
+        let o = rect.left_bottom() + egui::vec2(46.0, -46.0);
+        painter.circle(o, 34.0, pal.float_fill.gamma_multiply(0.7), Stroke::new(1.0, pal.border));
+        let (r, g, b) = if pal.dark {
+            (
+                Color32::from_rgb(240, 100, 100),
+                Color32::from_rgb(110, 200, 120),
+                Color32::from_rgb(110, 150, 240),
+            )
+        } else {
+            (Color32::from_rgb(200, 50, 50), Color32::from_rgb(40, 140, 60), Color32::from_rgb(50, 90, 210))
+        };
+        let mut axes = [(Vec3::X, r, "X"), (Vec3::Y, g, "Y"), (Vec3::Z, b, "Z")];
+        axes.sort_by(|a, b| a.0.dot(self.camera.back).total_cmp(&b.0.dot(self.camera.back)));
+        for (axis, color, name) in axes {
+            let d = egui::vec2(axis.dot(self.camera.right) as f32, -axis.dot(self.camera.up) as f32) * 22.0;
+            painter.line_segment([o, o + d], Stroke::new(2.2_f32, color));
+            painter.circle_filled(o + d, 6.5, color);
             painter.text(
-                o + d * 1.2,
+                o + d,
                 egui::Align2::CENTER_CENTER,
                 name,
-                egui::FontId::proportional(11.0),
-                color,
+                egui::FontId::proportional(9.5),
+                Color32::WHITE,
             );
         }
+        painter.circle_filled(o, 2.5, pal.text_weak);
+
+        self.view_toolbar(ui, rect);
         if let Some(e) = &self.renderer.lock().unwrap().error {
             painter.text(
                 rect.center(),
@@ -1872,6 +1975,63 @@ impl AnvilApp {
                 egui::FontId::proportional(14.0),
                 Color32::RED,
             );
+        }
+    }
+
+    /// The floating view toolbar at the top of the viewport: standard views, zoom to fit and
+    /// the edges toggle.
+    fn view_toolbar(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let pal = Palette::of(ui);
+        let size = egui::vec2(6.0 * 30.0 + 9.0 + 16.0, 36.0);
+        let bar =
+            egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 12.0 + size.y / 2.0), size);
+        if !rect.contains_rect(bar) {
+            return;
+        }
+        let painter = ui.painter_at(rect);
+        painter.rect(
+            bar.translate(egui::vec2(0.0, 2.0)),
+            10.0,
+            Color32::from_black_alpha(if pal.dark { 60 } else { 18 }),
+            Stroke::NONE,
+            egui::StrokeKind::Outside,
+        );
+        painter.rect(bar, 10.0, pal.float_fill, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bar.shrink2(egui::vec2(8.0, 4.0)))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        let ui = &mut child;
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (view, ic, key) in [
+            (StdView::Front, Icon::ViewFront, 1),
+            (StdView::Top, Icon::ViewTop, 5),
+            (StdView::Right, Icon::ViewRight, 4),
+            (StdView::Isometric, Icon::ViewIso, 7),
+        ] {
+            let label = format!("{} view", view.label());
+            let tip = format!("{} (Ctrl+{key})", view.label());
+            if theme::icon_button(ui, ic, &label, &tip, None).clicked() {
+                self.camera.set_view(view);
+                self.fit_pending = true;
+            }
+        }
+        if theme::icon_button(ui, Icon::Fit, "Zoom to Fit", "Zoom to Fit (F)", None).clicked() {
+            self.fit_pending = true;
+        }
+        let (r, _) = ui.allocate_exact_size(egui::vec2(7.0, 20.0), Sense::hover());
+        ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0, pal.border));
+        if theme::icon_button(
+            ui,
+            Icon::Edges,
+            "Shaded with edges",
+            "Shaded with edges",
+            Some(self.show_edges),
+        )
+        .clicked()
+        {
+            self.show_edges = !self.show_edges;
         }
     }
 
@@ -2565,6 +2725,14 @@ impl AnvilApp {
         if ctrl(Key::B) {
             self.rebuild();
         }
+        let tabs = [Tab::Features, Tab::Sketch, Tab::Evaluate];
+        let at = tabs.iter().position(|t| *t == self.tab).unwrap_or(0);
+        if ctrl(Key::PageDown) {
+            self.tab = tabs[(at + 1) % tabs.len()];
+        }
+        if ctrl(Key::PageUp) {
+            self.tab = tabs[(at + tabs.len() - 1) % tabs.len()];
+        }
         let keys = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7];
         for (k, v) in keys.iter().zip(StdView::ALL) {
             if ctrl(*k) {
@@ -2801,25 +2969,58 @@ fn kind_name(k: &FeatureKind) -> &'static str {
     }
 }
 
-fn icon(k: &FeatureKind) -> &'static str {
+fn icon(k: &FeatureKind) -> Icon {
     match k {
-        FeatureKind::Sketch(_) => "[S]",
-        FeatureKind::Extrude(e) if e.op == BodyOp::Cut => "[C]",
-        FeatureKind::Extrude(_) => "[E]",
-        FeatureKind::Revolve(_) => "[R]",
-        FeatureKind::Plane(_) => "[P]",
-        FeatureKind::LinearPattern(_) => "[L]",
-        FeatureKind::CircularPattern(_) => "[O]",
-        FeatureKind::ImportedBody(_) => "[I]",
-        FeatureKind::Fillet(_) => "[F]",
-        FeatureKind::Chamfer(_) => "[Ch]",
-        FeatureKind::Shell(_) => "[Sh]",
+        FeatureKind::Sketch(_) => Icon::Sketch,
+        FeatureKind::Extrude(e) if e.op == BodyOp::Cut => Icon::ExtrudeCut,
+        FeatureKind::Extrude(_) => Icon::Extrude,
+        FeatureKind::Revolve(r) if r.op == BodyOp::Cut => Icon::RevolveCut,
+        FeatureKind::Revolve(_) => Icon::Revolve,
+        FeatureKind::Plane(_) => Icon::Plane,
+        FeatureKind::LinearPattern(_) => Icon::LinearPattern,
+        FeatureKind::CircularPattern(_) => Icon::CircularPattern,
+        FeatureKind::ImportedBody(_) => Icon::Imported,
+        FeatureKind::Fillet(_) => Icon::Fillet,
+        FeatureKind::Chamfer(_) => Icon::Chamfer,
+        FeatureKind::Shell(_) => Icon::Shell,
     }
 }
 
+/// The sketch tools, in command-bar order.
+const SKETCH_TOOLS: [Tool; 7] =
+    [Tool::Select, Tool::Line, Tool::Centerline, Tool::Rectangle, Tool::Circle, Tool::Arc, Tool::Dimension];
+
+fn tool_icon(t: Tool) -> Icon {
+    match t {
+        Tool::Select => Icon::Select,
+        Tool::Line => Icon::Line,
+        Tool::Centerline => Icon::Centerline,
+        Tool::Rectangle => Icon::Rectangle,
+        Tool::Circle => Icon::Circle,
+        Tool::Arc => Icon::Arc,
+        Tool::Dimension => Icon::Dimension,
+    }
+}
+
+/// The title of a panel in the left pane: an icon and a name, over a rule.
+fn panel_title(ui: &mut egui::Ui, ic: Icon, title: &str) {
+    let pal = Palette::of(ui);
+    ui.horizontal(|ui| {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::hover());
+        theme::paint_icon(ui.painter(), r, ic, pal.text, pal.accent);
+        ui.label(RichText::new(title).size(16.0).strong());
+    });
+    ui.add_space(2.0);
+    ui.separator();
+}
+
+/// The rollback bar: features below it are not built.
 fn rollback_bar(ui: &mut egui::Ui) {
-    let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 6.0), Sense::hover());
-    ui.painter().rect_filled(r.shrink2(egui::vec2(0.0, 1.5)), 1.0, Color32::from_rgb(40, 80, 200));
+    let pal = Palette::of(ui);
+    let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 8.0), Sense::hover());
+    let bar = r.shrink2(egui::vec2(4.0, 2.5));
+    ui.painter().rect_filled(bar, 2.0, pal.accent);
+    ui.painter().circle_filled(bar.left_center(), 4.0, pal.accent);
 }
 
 impl AnvilApp {
@@ -2841,36 +3042,65 @@ impl AnvilApp {
 
         self.shortcuts(ctx);
 
-        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
-            self.menu_bar(ui);
-        });
-        egui::TopBottomPanel::top("commands").show(ctx, |ui| {
-            self.command_manager(ui);
-        });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(&self.status);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label("MMGS");
-                    if let Some(s) = &self.sketch {
-                        ui.separator();
-                        ui.label(s.status.status_text());
-                        ui.label("Editing sketch");
+        let pal = Palette::for_dark(self.dark);
+        let chrome = |m: egui::Margin| egui::Frame::NONE.fill(pal.chrome).inner_margin(m);
+        egui::TopBottomPanel::top("menu")
+            .frame(chrome(egui::Margin::symmetric(8, 3)))
+            .show_separator_line(false)
+            .show(ctx, |ui| {
+                self.menu_bar(ui);
+            });
+        egui::TopBottomPanel::top("commands")
+            .frame(chrome(egui::Margin { left: 8, right: 8, top: 0, bottom: 2 }))
+            .show(ctx, |ui| {
+                self.command_manager(ui);
+            });
+        egui::TopBottomPanel::bottom("status").frame(chrome(egui::Margin::symmetric(10, 4))).show(
+            ctx,
+            |ui| {
+                ui.horizontal(|ui| {
+                    let bad = !self.state.errors.is_empty() || !self.state.variable_errors.is_empty();
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 14.0), Sense::hover());
+                    ui.painter().circle_filled(r.center(), 3.5, if bad { pal.error } else { pal.ok });
+                    ui.label(RichText::new(&self.status).size(12.5));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        egui::Frame::NONE
+                            .stroke(Stroke::new(1.0, pal.border))
+                            .corner_radius(4)
+                            .inner_margin(egui::Margin::symmetric(6, 1))
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("MMGS").size(11.5).color(pal.text_weak))
+                                    .on_hover_text("Units: millimetre, gram, second");
+                            });
+                        if let Some(s) = &self.sketch {
+                            ui.separator();
+                            ui.label(RichText::new(s.status.status_text()).size(12.5));
+                            ui.label(RichText::new("Editing sketch").size(12.5).color(pal.accent));
+                        }
+                    });
+                });
+            },
+        );
+        egui::SidePanel::left("tree")
+            .resizable(true)
+            .default_width(270.0)
+            .frame(egui::Frame::NONE.fill(pal.panel).inner_margin(egui::Margin {
+                left: 10,
+                right: 8,
+                top: 12,
+                bottom: 8,
+            }))
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if self.sketch.is_some() {
+                        self.sketch_manager(ui);
+                    } else if self.editor.is_some() {
+                        self.property_manager(ui);
+                    } else {
+                        self.feature_tree(ui);
                     }
                 });
             });
-        });
-        egui::SidePanel::left("tree").resizable(true).default_width(270.0).show(ctx, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if self.sketch.is_some() {
-                    self.sketch_manager(ui);
-                } else if self.editor.is_some() {
-                    self.property_manager(ui);
-                } else {
-                    self.feature_tree(ui);
-                }
-            });
-        });
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
             self.viewport(ui);
         });
