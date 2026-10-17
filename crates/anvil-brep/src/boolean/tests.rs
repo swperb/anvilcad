@@ -800,3 +800,87 @@ fn wrapping_patch_band_gets_a_seam() {
     let want = PI * 4.0 * 3.0;
     assert!(close(v, want, 1e-4), "{v} vs {want}");
 }
+
+/// Volume of solids tessellated finely, each checked valid and watertight first.
+fn fine_volume(solids: &[Solid]) -> f64 {
+    solids
+        .iter()
+        .map(|x| {
+            check::validate(x).expect("valid");
+            let m = tess::tessellate(x, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+            assert!(m.is_watertight(), "not watertight");
+            mass::properties(&m).volume
+        })
+        .sum()
+}
+
+#[test]
+fn bodies_touching_along_a_line_stay_separate() {
+    // A boss flush against a block's side, and two bosses side by side: the solids
+    // touch along a line, which divides no face, so each keeps its own body.
+    let block = cuboid(DVec3::ZERO, DVec3::new(10.0, 10.0, 5.0));
+    let boss = cylinder(DVec3::new(15.0, 5.0, 0.0), DVec3::Z, 5.0, 0.0, 5.0);
+    let u = boolean(&block, &boss, BoolOp::Union).expect("union");
+    assert_eq!(u.len(), 2);
+    let mut v: Vec<f64> = u.iter().map(|s| fine_volume(std::slice::from_ref(s))).collect();
+    v.sort_by(f64::total_cmp);
+    assert!(close(v[0], 125.0 * PI, 1e-4) && close(v[1], 500.0, 1e-9), "{v:?}");
+    let i = boolean(&block, &boss, BoolOp::Intersect).expect("intersect");
+    assert!(i.is_empty());
+    let a = cylinder(DVec3::ZERO, DVec3::Z, 3.0, 0.0, 4.0);
+    let b = cylinder(DVec3::new(5.0, 0.0, 0.0), DVec3::Z, 2.0, 0.0, 4.0);
+    let u = boolean(&a, &b, BoolOp::Union).expect("union");
+    assert_eq!(u.len(), 2);
+    assert!(close(fine_volume(&u), 52.0 * PI, 1e-4), "{}", fine_volume(&u));
+}
+
+#[test]
+fn pin_touching_inside_a_shaft() {
+    // A pin inside a shaft, touching its wall along a line (on both seams, which lie
+    // on the +x side of each): the pin and the shaft are what the intersection and
+    // union leave, and the cut would leave a wall of no thickness, so it is refused.
+    let shaft = cylinder(DVec3::ZERO, DVec3::Z, 5.0, 0.0, 4.0);
+    let pin = cylinder(DVec3::new(3.0, 0.0, 0.0), DVec3::Z, 2.0, -1.0, 5.0);
+    let i = boolean(&shaft, &pin, BoolOp::Intersect).expect("intersect");
+    assert!(close(fine_volume(&i), 16.0 * PI, 1e-4), "{}", fine_volume(&i));
+    let u = boolean(&shaft, &pin, BoolOp::Union).expect("union");
+    assert_eq!(u.len(), 1);
+    assert!(close(fine_volume(&u), 108.0 * PI, 1e-4), "{}", fine_volume(&u));
+    let d = boolean(&shaft, &pin, BoolOp::Subtract);
+    assert!(matches!(&d, Err(KernelError::Unsupported(m)) if m.contains("zero-thickness")), "{d:?}");
+}
+
+#[test]
+fn cuts_grazing_a_face_are_refused() {
+    // Each tool touches a face of the block along a line from inside, so the block would
+    // be left with no thickness there: a slot end grazing a side, a hole touching all
+    // four sides, a cross bore just under the top.
+    let block = cuboid(DVec3::ZERO, DVec3::new(10.0, 10.0, 5.0));
+    let tools = [
+        cylinder(DVec3::new(3.0, 5.0, 0.0), DVec3::Z, 3.0, -1.0, 6.0),
+        cylinder(DVec3::new(5.0, 5.0, 0.0), DVec3::Z, 5.0, -1.0, 6.0),
+        cylinder(DVec3::new(0.0, 5.0, 2.0), DVec3::X, 3.0, -5.0, 15.0),
+    ];
+    for tool in &tools {
+        let d = boolean(&block, tool, BoolOp::Subtract);
+        assert!(matches!(&d, Err(KernelError::Unsupported(m)) if m.contains("zero-thickness")), "{d:?}");
+    }
+    // What the hole touching all four sides takes is still well defined.
+    let i = boolean(&block, &tools[1], BoolOp::Intersect).expect("intersect");
+    assert!(close(fine_volume(&i), 125.0 * PI, 1e-4), "{}", fine_volume(&i));
+}
+
+#[test]
+fn touching_curves_order_by_bend() {
+    // The shaft's top face minus the pin's circle touching its rim: both circles leave
+    // the touch point the same way, the pin's bending harder. The face splits round it
+    // and tessellates watertight however coarse the sampling.
+    let shaft = cylinder(DVec3::ZERO, DVec3::Z, 5.0, 0.0, 4.0);
+    let pin = cylinder(DVec3::new(3.0, 0.0, 0.0), DVec3::Z, 2.0, 1.0, 5.0);
+    let u = boolean(&shaft, &pin, BoolOp::Union).expect("union");
+    for params in [TessParams::default(), TessParams { chord: 0.5, max_angle: 0.5 }] {
+        let m = tess::tessellate(&u[0], &params).expect("tess");
+        assert!(m.is_watertight());
+    }
+    assert!(close(fine_volume(&u), 100.0 * PI + 4.0 * PI, 1e-4), "{}", fine_volume(&u));
+}
