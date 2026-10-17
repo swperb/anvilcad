@@ -220,18 +220,38 @@ pub fn blend(
         return Err("select at least one edge".into());
     }
     let mut bodies = bodies.to_vec();
-    for (k, e) in edges.iter().enumerate() {
-        let runs = find_edges(&bodies, e).len();
-        if runs == 0 {
+    let mut runs = 0;
+    for e in edges {
+        let n = find_edges(&bodies, e).len();
+        if n == 0 {
             return Err("an edge to blend no longer exists".into());
         }
-        // Blending one run renumbers the body, so find the next run afresh each time.
-        for _ in 0..runs {
-            let Some(&(b, edge)) = find_edges(&bodies, e).first() else { break };
-            let result = brep::blend::blend_edge(&bodies[b], edge, kind, feature, 8 * k as u32)
-                .map_err(|err| err.to_string())?;
-            bodies.splice(b..=b, result);
-        }
+        runs += n;
+    }
+    // Blending renumbers a body, so the edges are found afresh each time. Edges that
+    // run smoothly one into the next (a slot's outline) are blended together, in one
+    // step, so their rounds join up.
+    for _ in 0..runs {
+        let found: Vec<(usize, brep::EdgeId, usize)> = edges
+            .iter()
+            .enumerate()
+            .flat_map(|(k, e)| find_edges(&bodies, e).into_iter().map(move |(b, id)| (b, id, k)))
+            .collect();
+        let Some(&(b, first, _)) = found.first() else {
+            return Ok(bodies);
+        };
+        let candidates: Vec<brep::EdgeId> = found.iter().filter(|f| f.0 == b).map(|f| f.1).collect();
+        let run = brep::blend::smooth_run(&bodies[b], first, &candidates);
+        let tagged: Vec<(brep::EdgeId, u32)> = run
+            .iter()
+            .filter_map(|id| found.iter().find(|f| f.0 == b && f.1 == *id).map(|f| (*id, 8 * f.2 as u32)))
+            .collect();
+        let result =
+            brep::blend::blend_chain(&bodies[b], &tagged, kind, feature).map_err(|err| err.to_string())?;
+        bodies.splice(b..=b, result);
+    }
+    if edges.iter().any(|e| !find_edges(&bodies, e).is_empty()) {
+        return Err("the edges to blend did not all blend".into());
     }
     Ok(bodies)
 }

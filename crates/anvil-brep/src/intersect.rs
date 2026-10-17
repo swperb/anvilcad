@@ -212,6 +212,36 @@ fn torus_with(t: &Frame, major: f64, minor: f64, other: &Surface, tol: f64) -> R
             .collect();
         return Ok(Ssi::Curves(circles));
     }
+    // A plane along the axis as far from it as the tube reaches (or farther) touches the
+    // torus at most at a point on its outer equator: nothing to cut along.
+    if let Surface::Plane { frame: p } = other
+        && p.z.dot(t.z).abs() < PARALLEL
+        && (t.origin - p.origin).dot(p.z).abs() >= major + minor - tol
+    {
+        return Ok(Ssi::None);
+    }
+    // A cylinder of the tube's radius whose axis runs along the tube's centre circle,
+    // touching it (where a straight round meets a round turning a corner, as fillets
+    // along a line and an arc that join smoothly do): the surfaces touch along the
+    // tube's cross-section there, and cross nowhere else.
+    if let Surface::Cylinder { frame: c, radius } = other
+        && (radius - minor).abs() < tol
+        && c.z.dot(t.z).abs() < PARALLEL
+    {
+        let d = c.origin - t.origin;
+        if d.dot(t.z).abs() < tol {
+            // The point of the axis nearest the torus's centre.
+            let foot = c.origin - c.z * d.dot(c.z);
+            let off = foot - t.origin;
+            if (off.length() - major).abs() < tol {
+                let s = off / off.length();
+                return Ok(Ssi::Curves(vec![Curve::Circle {
+                    frame: Frame { origin: foot, x: s, y: t.z, z: s.cross(t.z) },
+                    radius: minor,
+                }]));
+            }
+        }
+    }
     // Off the axis: trace it on the torus written as an exact patch.
     let patch = crate::freeform::torus_patch(t, major, minor)?;
     let curves = crate::freeform::intersect(&patch, other)?;
