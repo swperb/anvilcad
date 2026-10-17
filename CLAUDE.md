@@ -13,14 +13,19 @@ types, file formats, PDM or API), you must **always** use the REA (Reverse Engin
 Anything) project, <https://github.com/morluto/rea>, to study the SOLIDWORKS behaviour
 first. Do not skip this step, even for small features.
 
-1. Check that REA is set up (`npx rea-agents setup`; it needs Node.js 22.19 or later, and a
-   decompiler such as Ghidra for native binary analysis). If it is not installed, stop and
-   ask the user to install it rather than continuing without it.
-2. Run REA's workflow against the SOLIDWORKS behaviour or format the feature targets, and
-   write down what it finds: the behaviour, inputs and outputs, edge cases, and for formats
-   the structure of the data.
-3. Save the findings as a specification in `docs/re/<topic>.md`, saying what was studied,
-   with which SOLIDWORKS version, and how.
+No version of SOLIDWORKS is installed on this machine, so REA works from published
+SOLIDWORKS information only: Dassault's public help and API documentation, release notes,
+published tutorials and training material, and publicly available example files. Do not
+look for, download or run SOLIDWORKS, its installers or its libraries to study them.
+
+1. Check that REA is set up (`npx rea-agents setup`; it needs Node.js 22.19 or later). If it
+   is not installed, stop and ask the user to install it rather than continuing without it.
+2. Run REA's workflow against the published information on the SOLIDWORKS behaviour or
+   format the feature targets, and write down what it finds: the behaviour, inputs and
+   outputs, edge cases, and for formats the structure of the data.
+3. Save the findings as a specification in `docs/re/<topic>.md`, listing each published
+   source used (with its URL and the SOLIDWORKS version it describes) and how REA was run.
+   Say where the published information is silent or ambiguous rather than guessing.
 4. Implement the feature in AnvilCAD from that specification, in AnvilCAD's own code. Cite
    the specification in the code or docs next to it.
 

@@ -8,22 +8,25 @@ does that, so contributors and users can rely on it.
 This is the project's engineering policy, not legal advice. Reverse engineering commercial
 software carries legal risk: licence agreements, Dassault's included, restrict it, and the
 statutory exceptions for interoperability (for example in the EU Software Directive) are
-narrow and conditional. This policy must be reviewed by a lawyer in the relevant
-jurisdictions before a 1.0 release, and before anyone sells or markets a feature built from
-reverse-engineering work.
+narrow and conditional.
 
 ## Reverse engineering for interoperability
 
 AnvilCAD studies how SOLIDWORKS and other commercial systems behave, and how their files are
 structured, so that it can match their workflows and read and write their data natively.
 Features that adapt to SOLIDWORKS are developed with REA (Reverse Engineer Anything,
-<https://github.com/morluto/rea>), which may include analysing SOLIDWORKS binaries and
-proprietary formats such as `.sldprt`, `.sldasm` and `.slddrw`.
+<https://github.com/morluto/rea>), working from published SOLIDWORKS information only:
+Dassault's public help and API documentation, release notes, published tutorials and
+training material, and publicly available example files, including `.sldprt`, `.sldasm`
+and `.slddrw` files that are published for download. SOLIDWORKS itself, its installers and
+its libraries are not installed, run or analysed for this work.
 
 The work follows these rules:
 
 1. **Study, then write from scratch.** Findings are written up as a specification in
-   `docs/re/`, saying what was studied, with which version, and how. AnvilCAD's code is
+   `docs/re/`, listing each published source used (with its URL and the SOLIDWORKS version
+   it describes), how REA was run, and where the published information is silent or
+   ambiguous. AnvilCAD's code is
    written from that specification. No code, libraries, type libraries, help text, icons or
    user-interface artwork from commercial products is copied into the repository.
 2. **No circumvention.** AnvilCAD does not circumvent licence checks, copy protection,
@@ -57,10 +60,10 @@ licences and credentials, and credentials are never stored in plain text.
 `third_party/rea` is a git submodule pinning [REA](https://github.com/morluto/rea) (MIT),
 a general-purpose reverse-engineering toolkit, kept so it is available offline and in cloud
 development sessions. It is not part of AnvilCAD's build and nothing in AnvilCAD links to or
-ships it. Having it here changes none of the rules above: it is never pointed at Dassault
-Systèmes software, its libraries or installers, at proprietary CAD formats, or at any other
-software whose licence forbids reverse engineering, and nothing learned that way may enter
-AnvilCAD. Fetch it with `git submodule update --init third_party/rea`.
+ships it. Having it here changes none of the rules above: for SOLIDWORKS it is used on
+published information only, as described above; it is never pointed at Dassault Systèmes
+software, its libraries or installers, or at any other software whose licence forbids
+reverse engineering, and nothing learned that way may enter AnvilCAD. Fetch it with `git submodule update --init third_party/rea`.
 
 ## Trademarks
 

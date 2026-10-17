@@ -22,6 +22,8 @@ AnvilCAD studies commercial CAD, CAM, PDM and PLM systems, including by reverse
 engineering, so it can match them and read their data natively. Please read
 [INTEROPERABILITY.md](INTEROPERABILITY.md). In particular:
 
+- for SOLIDWORKS, study published information only (public documentation, tutorials and
+  example files), never the software, its installers or its libraries;
 - write reverse-engineering findings up as a specification in `docs/re/` first, then write
   AnvilCAD's code from it; never copy code, libraries, help text, icons or artwork from
   commercial products;
