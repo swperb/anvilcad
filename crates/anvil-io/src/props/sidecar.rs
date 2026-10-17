@@ -506,7 +506,14 @@ mod tests {
             value: "Lathe 3".into(),
         });
         sheet.save().unwrap();
+        // Both versions pad to the same compound-file size, and two writes this close together
+        // can share a modification time (as on Windows runners), so move the time on as an
+        // edit made later would.
+        let mtime = std::fs::metadata(&wheel).unwrap().modified().unwrap();
         std::fs::write(&wheel, wheel_bytes("larger wheel, rev B")).unwrap();
+        let f = std::fs::File::options().write(true).open(&wheel).unwrap();
+        f.set_modified(mtime + std::time::Duration::from_secs(2)).unwrap();
+        drop(f);
         assert!(matches!(convert(&wheel, &opts, None, false, false), Outcome::Imported { .. }));
         let sheet = Sheet::open(&wheel, &opts, None);
         assert_eq!(sheet.value("Description"), Some("larger wheel, rev B"));
