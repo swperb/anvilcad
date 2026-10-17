@@ -15,6 +15,7 @@ pub mod boolean;
 pub mod check;
 pub mod error;
 pub mod extrude;
+pub mod freeform;
 pub mod geom;
 pub mod intersect;
 pub mod mass;

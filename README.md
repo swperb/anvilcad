@@ -156,14 +156,23 @@ Kernel design notes:
   or ellipse it is computed in closed form; anything else between cylinders, cones and
   planes (a hole drilled across a shaft, say) is traced; a torus meets planes and surfaces
   on its own axis in exact circles, and so does a sphere (any axis through its centre).
+  Off its axis a torus becomes its exact rational B-spline patch and is traced like any
+  freeform face.
   Sphere faces are laid out by stereographic projection from the point opposite the
   face, and cone faces that reach their apex (drill points) by projection along the
   axis, so neither has poles or seams to handle. Freeform (B-spline) faces lie in their
-  patch's own parameters scaled to millimetres, with seams added where a patch wraps;
-  booleans that would intersect a freeform face are reported as unsupported for now. Traced curves are found this way: each straight line of one
+  patch's own parameters scaled to millimetres, with seams added where a patch wraps.
+  Traced curves between analytic surfaces are found this way: each straight line of one
   surface meets the other at the roots of a quadratic, so every traced point is exact,
   and the points are joined into a cubic B-spline refined until it stays within 1e-7 mm
-  of both surfaces. `anvil-kernel` is a faceted kernel that covers everything else.
+  of both surfaces. A freeform face meets any surface (another freeform face included)
+  by marching: start points where the other surface crosses the patch's sample grid,
+  then steps along the curve with Newton corrections back onto both surfaces, ending
+  exactly on a patch edge; the points are fitted the same way, to 1e-7 mm. Surfaces that
+  only touch (a fillet meeting the face it blends into) are refused rather than traced.
+  Imported faces whose edges stray from their freeform surface (by up to the healing
+  reach) are cut tolerantly: a traced cut is bent onto the point where it crosses such
+  an edge. `anvil-kernel` is a faceted kernel that covers everything else.
 - The rebuild runs on the exact kernel while every feature so far is one it supports
   (extrudes, cuts, patterns, fillets and chamfers on straight edges between flat faces).
   After each exact feature the faceted body is regenerated from the exact result, so
@@ -240,7 +249,7 @@ Part loads a model that uses most features.
 
 The full roadmap is in [ROADMAP.md](ROADMAP.md). In short:
 
-1. CAD: freeform intersections and surfaces of revolution in the exact kernel, a hole
+1. CAD: surfaces of revolution and curved-edge fillets in the exact kernel, a hole
    feature with standard sizes, mirror, sweep, loft, multi-body parts, sheet metal,
    assemblies with mates, drawings, AP242 assemblies and PMI, a scripting and plugin API
 2. CAM: 2.5D adaptive clearing and finishing, feature recognition, a tool and

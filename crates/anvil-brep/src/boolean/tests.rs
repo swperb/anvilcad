@@ -622,9 +622,87 @@ fn freeform_block_cut_below_its_patch() {
     assert_eq!(d.len(), 1);
     let removed = PI * 9.0 * 3.0;
     assert!(close(volume(&d), whole - removed, 2e-3), "{} vs {}", volume(&d), whole - removed);
-    // Cutting into the patch itself needs freeform intersections: refused, not guessed.
-    let deep = cylinder(DVec3::new(15.0, 10.0, -10.0), DVec3::Z, 3.0, 0.0, 30.0);
-    assert!(boolean(&b, &deep, BoolOp::Subtract).is_err());
+}
+
+/// The bump's height above (x, y), from a ray down onto the patch.
+fn bump_height(x: f64, y: f64) -> f64 {
+    let patch = crate::patch::tests::bump();
+    let hits = patch.line_hits(DVec3::new(x, y, 100.0), DVec3::NEG_Z, 0.0, 200.0);
+    hits.first().map_or(0.0, |t| 100.0 - t)
+}
+
+/// Integral over the disc of radius `r` at (cx, cy) of `f(x, y)`, by the midpoint rule.
+fn over_disc(cx: f64, cy: f64, r: f64, f: impl Fn(f64, f64) -> f64) -> f64 {
+    let n = 160;
+    let h = 2.0 * r / n as f64;
+    let mut sum = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = (cx - r + h * (i as f64 + 0.5), cy - r + h * (j as f64 + 0.5));
+            if (x - cx).powi(2) + (y - cy).powi(2) <= r * r {
+                sum += f(x, y) * h * h;
+            }
+        }
+    }
+    sum
+}
+
+#[test]
+fn hole_through_a_freeform_top() {
+    let (b, _) = bumped_block();
+    let whole = volume(std::slice::from_ref(&b));
+    let hole = cylinder(DVec3::new(15.0, 10.0, -10.0), DVec3::Z, 3.0, 0.0, 30.0);
+    let d = boolean(&b, &hole, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&b, &hole, BoolOp::Intersect).expect("intersect");
+    assert_eq!(d.len(), 1);
+    // The cut edges on the patch are traced curves.
+    assert!(d[0].edges.iter().any(|e| matches!(e.curve, Curve::Spline(_))));
+    assert!(close(volume(&d) + volume(&i), whole, 2e-3), "{} + {} vs {whole}", volume(&d), volume(&i));
+    let plug = over_disc(15.0, 10.0, 3.0, |x, y| 5.0 + bump_height(x, y));
+    assert!(close(volume(&i), plug, 3e-3), "{} vs {plug}", volume(&i));
+}
+
+#[test]
+fn plane_cut_across_a_freeform_bump() {
+    let (b, _) = bumped_block();
+    let whole = volume(std::slice::from_ref(&b));
+    let top = cuboid(DVec3::new(-10.0, -10.0, 3.0), DVec3::new(40.0, 30.0, 20.0));
+    let d = boolean(&b, &top, BoolOp::Subtract).expect("subtract");
+    let i = boolean(&b, &top, BoolOp::Intersect).expect("intersect");
+    assert!(close(volume(&d) + volume(&i), whole, 2e-3));
+    // The crown above z = 3, integrated under the patch.
+    let n = 300;
+    let (hx, hy) = (30.0 / n as f64, 20.0 / n as f64);
+    let mut crown = 0.0;
+    for a in 0..n {
+        for c in 0..n {
+            let z = bump_height(hx * (a as f64 + 0.5), hy * (c as f64 + 0.5));
+            crown += (z - 3.0).max(0.0) * hx * hy;
+        }
+    }
+    let fine: f64 = i
+        .iter()
+        .map(|s| {
+            let m = tess::tessellate(s, &TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+            assert!(m.is_watertight());
+            mass::properties(&m).volume
+        })
+        .sum();
+    // The crown is a thin dome, so check it finely tessellated (the default 5 degree
+    // steps lose about 1% of so thin a shape).
+    assert!(close(fine, crown, 3e-4), "{fine} vs {crown}");
+}
+
+#[test]
+fn two_freeform_blocks_combine() {
+    let (a, _) = bumped_block();
+    let m = Frame { origin: DVec3::new(25.0, -5.0, 1.0), x: DVec3::Y, y: DVec3::NEG_X, z: DVec3::Z };
+    let b = a.transformed(&m);
+    let both = volume(std::slice::from_ref(&a)) + volume(std::slice::from_ref(&b));
+    let u = boolean(&a, &b, BoolOp::Union).expect("union");
+    let i = boolean(&a, &b, BoolOp::Intersect).expect("intersect");
+    assert_eq!(u.len(), 1);
+    assert!(close(volume(&u) + volume(&i), both, 3e-3), "{} + {} vs {both}", volume(&u), volume(&i));
 }
 
 /// The seam test's cylinder band (radius 2, height 3, no seam) with its cylinder given as

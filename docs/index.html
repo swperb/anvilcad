@@ -188,7 +188,7 @@
           <p class="lede">Exact geometry where it is supported, a faceted fallback everywhere else.</p>
         </header>
         <div class="prose">
-          <p><code>anvil-brep</code> is an exact boundary-representation kernel. It works with exact lines, circles, ellipses, planes and cylinders, and does exact booleans and exact fillets and chamfers on straight edges. <code>anvil-kernel</code> is a faceted kernel that covers everything else: revolves, shells, fillets on curved edges and imported bodies. A rebuild uses the exact kernel for as long as every feature so far is one it supports, and hands over to the faceted kernel at the first feature it cannot build. A feature is never built worse than it was before.</p>
+          <p><code>anvil-brep</code> is an exact boundary-representation kernel. It works with exact lines, circles, ellipses and B-spline curves on planes, cylinders, cones, spheres, tori and B-spline surfaces, and does exact booleans between any of them (intersection curves are found in closed form where one exists and traced to 1e-7 mm otherwise) and exact fillets and chamfers on straight edges. <code>anvil-kernel</code> is a faceted kernel that covers everything else: revolves, shells, fillets on curved edges and imported bodies. A rebuild uses the exact kernel for as long as every feature so far is one it supports, and hands over to the faceted kernel at the first feature it cannot build. A feature is never built worse than it was before.</p>
           <p>On the bundled sample part, the extrudes, cuts, linear pattern and first fillet build exactly, and the result matches the faceted-only volume to within 0.014 percent.</p>
         </div>
       </div>
@@ -287,7 +287,7 @@
           <p class="lede">Roughly in order. Nothing here has a date attached.</p>
         </header>
         <ol class="roadmap">
-          <li><span class="mono step">next</span><div><h3>Freeform modelling in the kernel</h3><p>Booleans and blends on B-spline faces, surfaces of revolution, and curved-edge fillets built exactly. Planes, cylinders, cones, tori, spheres and B-spline faces already import from STEP as exact geometry.</p></div></li>
+          <li><span class="mono step">next</span><div><h3>Freeform modelling in the kernel</h3><p>Surfaces of revolution, blends on B-spline faces and curved-edge fillets built exactly. Booleans already work on planes, cylinders, cones, tori, spheres and B-spline faces, including those imported from STEP.</p></div></li>
           <li><span class="mono step">now</span><div><h3>CAM</h3><p>2.5D adaptive clearing built from published research, facing, profiling and drilling; feature recognition; a tool and feeds library; simulation with gouge and collision checks; and community post processors checked by a verifier.</p></div></li>
           <li><span class="mono step">then</span><div><h3>More part features</h3><p>A hole feature with standard sizes, mirror, sweep, loft, multi-body parts and sheet metal.</p></div></li>
           <li><span class="mono step">then</span><div><h3>Assemblies and drawings</h3><p>Parts positioned together with mates, and 2D drawings made from them.</p></div></li>

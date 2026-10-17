@@ -396,6 +396,11 @@ pub fn convert(model: &Model, body: &Body) -> Result<Solid, String> {
         let faces = edge_faces.get(&edge)?;
         let [fa, fb] = faces[..] else { return None };
         let (sa, sb) = (surfaces.get(fa)?.as_ref()?, surfaces.get(fb)?.as_ref()?);
+        // Next to a freeform face the file's own curve is the better edge: tracing would
+        // only reproduce it, at more cost, and healing already fits it to its vertices.
+        if matches!(sa, Surface::BSpline(_)) || matches!(sb, Surface::BSpline(_)) {
+            return None;
+        }
         let cs = traced
             .borrow_mut()
             .entry((fa.min(fb), fa.max(fb)))
