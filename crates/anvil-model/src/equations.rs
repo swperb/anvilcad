@@ -81,6 +81,9 @@ fn lex(s: &str) -> Result<Vec<Tok>, EvalError> {
             }
             out.push(Tok::Ident(cs[st..i].iter().collect()));
             i += 1;
+        } else if c == '°' {
+            out.push(Tok::Ident("deg".into()));
+            i += 1;
         } else if "+-*/^(),".contains(c) {
             out.push(Tok::Op(c));
             i += 1;
@@ -95,6 +98,8 @@ struct Parser<'a> {
     toks: Vec<Tok>,
     pos: usize,
     vars: &'a dyn Fn(&str) -> Option<f64>,
+    /// Unit names that may follow a number, with the factor to the base unit.
+    units: &'a [(&'a str, f64)],
 }
 
 impl Parser<'_> {
@@ -154,6 +159,16 @@ impl Parser<'_> {
         match self.peek().cloned() {
             Some(Tok::Num(n)) => {
                 self.pos += 1;
+                // A unit straight after a number scales it: `2in`, `90deg`.
+                if let Some(Tok::Ident(u)) = self.peek() {
+                    let f = self.units.iter().find(|(name, _)| name.eq_ignore_ascii_case(u)).map(|(_, f)| *f);
+                    if let Some(f) = f {
+                        if self.toks.get(self.pos + 1) != Some(&Tok::Op('(')) {
+                            self.pos += 1;
+                            return Ok(n * f);
+                        }
+                    }
+                }
                 Ok(n)
             }
             Some(Tok::Op('(')) => {
@@ -209,8 +224,24 @@ fn call(name: &str, a: &[f64]) -> Result<f64, EvalError> {
 
 /// Evaluates `src` with variables looked up through `vars`.
 pub fn eval(src: &str, vars: &dyn Fn(&str) -> Option<f64>) -> Result<f64, EvalError> {
+    eval_with_units(src, vars, &[])
+}
+
+/// Lengths a number may be written in, in millimetres.
+pub const LENGTH_UNITS: &[(&str, f64)] =
+    &[("mm", 1.0), ("cm", 10.0), ("m", 1000.0), ("in", 25.4), ("inch", 25.4), ("ft", 304.8)];
+
+/// Angles a number may be written in, in degrees (`°` is read as `deg`).
+pub const ANGLE_UNITS: &[(&str, f64)] = &[("deg", 1.0), ("rad", 180.0 / std::f64::consts::PI)];
+
+/// Like [`eval`], but a number may be followed by one of `units`, which scales it.
+pub fn eval_with_units(
+    src: &str,
+    vars: &dyn Fn(&str) -> Option<f64>,
+    units: &[(&str, f64)],
+) -> Result<f64, EvalError> {
     let src = src.trim().trim_start_matches('=');
-    let mut p = Parser { toks: lex(src)?, pos: 0, vars };
+    let mut p = Parser { toks: lex(src)?, pos: 0, vars, units };
     let v = p.expr()?;
     if p.pos != p.toks.len() {
         return Err(EvalError::Syntax("trailing input".into()));
@@ -252,9 +283,56 @@ pub fn eval_all(defs: &[(String, String)]) -> (BTreeMap<String, f64>, BTreeMap<S
     (vals, errs)
 }
 
+/// What was typed into a dimension's value box.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DimInput {
+    /// The value, in millimetres or degrees.
+    pub value: f64,
+    /// The equation to keep linked to the dimension, when the input started with `=`.
+    pub equation: Option<String>,
+}
+
+/// Reads a dimension's value box. Plain input is a number or arithmetic, with optional
+/// units (`25.4`, `1in + 3mm`, `90 - 30deg`), and sets the value once. Input starting with
+/// `=` is an equation over global variables that stays linked to the dimension.
+pub fn parse_dimension_input(
+    text: &str,
+    angle: bool,
+    vars: &dyn Fn(&str) -> Option<f64>,
+) -> Result<DimInput, EvalError> {
+    let t = text.trim();
+    let units = if angle { ANGLE_UNITS } else { LENGTH_UNITS };
+    if let Some(expr) = t.strip_prefix('=') {
+        let expr = expr.trim();
+        let value = eval_with_units(expr, vars, units)?;
+        return Ok(DimInput { value, equation: Some(expr.to_string()) });
+    }
+    let none = |_: &str| None;
+    Ok(DimInput { value: eval_with_units(t, &none, units)?, equation: None })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dimension_input_units_and_equations() {
+        let vars = |n: &str| (n == "width").then_some(40.0);
+        let read = |t: &str, angle: bool| parse_dimension_input(t, angle, &vars).unwrap();
+        assert_eq!(read("12.5", false), DimInput { value: 12.5, equation: None });
+        assert_eq!(read(" 10 + 5 ", false), DimInput { value: 15.0, equation: None });
+        assert_eq!(read("1in", false).value, 25.4);
+        assert_eq!(read("2 in + 3mm", false).value, 53.8);
+        assert_eq!(read("0.5m", false).value, 500.0);
+        assert_eq!(read("90 - 30deg", true).value, 60.0);
+        assert_eq!(read("45°", true).value, 45.0);
+        assert!((read("1.5rad", true).value - 1.5f64.to_degrees()).abs() < 1e-12);
+        // Plain input never links a variable; only an equation does.
+        assert!(parse_dimension_input("width", false, &vars).is_err());
+        assert_eq!(read("= width / 2", false), DimInput { value: 20.0, equation: Some("width / 2".into()) });
+        // Length units are not angle units.
+        assert!(parse_dimension_input("1in", true, &vars).is_err());
+    }
 
     #[test]
     fn arithmetic() {

@@ -4,12 +4,14 @@
 //! [`Sketch::solve`] moves the geometry to satisfy the constraints, and
 //! [`Sketch::profiles`] extracts closed regions for the kernel to extrude or revolve.
 
+pub mod dimension;
 pub mod regions;
 pub mod sketch;
 pub mod solver;
 
+pub use dimension::Pick;
 pub use regions::ProfileError;
-pub use sketch::{Constraint, Entity, EntityId, Geom, Point, PointId, Sketch, ORIGIN};
+pub use sketch::{Constraint, DimAnnotation, Entity, EntityId, Geom, Point, PointId, Sketch, ORIGIN};
 pub use solver::SolveResult;
 
 #[cfg(test)]

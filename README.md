@@ -21,7 +21,11 @@ system are still ahead; see the roadmap.
 - Snapping to existing points and the origin, automatic horizontal/vertical relations
 - Relations: coincident, horizontal, vertical, parallel, perpendicular, equal, tangent,
   concentric, midpoint, point on line/circle, fix
-- Smart Dimension: length, diameter, radius, point distance, angle
+- Dimension tool that infers the dimension from the picks and where its value is placed:
+  length, horizontal/vertical/aligned distance, point-to-line and parallel-line distance,
+  diameter, radius, arc length, angle in the chosen sector, and diameter about a
+  centerline; values take arithmetic and units; over-defining dimensions can become
+  reference dimensions ([spec](docs/re/sketch-dimension.md))
 - Constraint solver with degree-of-freedom reporting (under / fully / over defined, with
   conflicting relations highlighted)
 - Drag points and circles while relations stay satisfied

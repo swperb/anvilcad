@@ -195,7 +195,7 @@ impl SketchFeature {
         if ci >= self.sketch.constraints.len() {
             return;
         }
-        self.sketch.constraints.remove(ci);
+        self.sketch.remove_constraint(ci);
         self.driven.retain(|d| d.constraint != ci);
         for d in &mut self.driven {
             if d.constraint > ci {
@@ -215,19 +215,17 @@ impl SketchFeature {
         self.driven.iter().find(|d| d.constraint == ci).map(|d| d.expr.as_str())
     }
 
-    /// Entity deletion renumbers constraints, so bindings are dropped for safety.
+    /// Deletes entities and the constraints on them, keeping expression bindings on the
+    /// dimensions that remain.
     pub fn delete_entities(&mut self, ids: &[usize]) {
-        let before = self.sketch.constraints.clone();
-        self.sketch.delete_entities(ids);
-        let mut driven = Vec::new();
-        for d in &self.driven {
-            if let Some(c) = before.get(d.constraint) {
-                if let Some(ni) = self.sketch.constraints.iter().position(|x| x == c) {
-                    driven.push(DrivenDim { constraint: ni, expr: d.expr.clone() });
-                }
+        let map = self.sketch.delete_entities(ids);
+        self.driven.retain_mut(|d| match map.get(d.constraint).copied().flatten() {
+            Some(ni) => {
+                d.constraint = ni;
+                true
             }
-        }
-        self.driven = driven;
+            None => false,
+        });
     }
 }
 
