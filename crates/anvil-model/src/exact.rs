@@ -65,6 +65,31 @@ pub fn extrude(
     Ok(tools)
 }
 
+/// Revolved tool bodies, one per region, owned by `feature`: the profiles turned by
+/// `angle` radians about the sketch line through `axis_point` along `axis_dir`.
+pub fn revolve(
+    profiles: &[Profile],
+    f: &Frame,
+    axis_point: anvil_kernel::Vec2,
+    axis_dir: anvil_kernel::Vec2,
+    angle: f64,
+    feature: u32,
+) -> Result<Vec<brep::Solid>, String> {
+    let regions = regions(profiles)?;
+    let mut tools = brep::revolve::revolve_regions(
+        &frame(f),
+        &regions,
+        DVec2::new(axis_point.x, axis_point.y),
+        DVec2::new(axis_dir.x, axis_dir.y),
+        angle,
+    )
+    .map_err(|e| e.to_string())?;
+    for t in &mut tools {
+        t.set_owner(feature);
+    }
+    Ok(tools)
+}
+
 fn boxes_touch(a: (DVec3, DVec3), b: (DVec3, DVec3)) -> bool {
     let pad = 1e-6;
     a.0.cmple(b.1 + pad).all() && b.0.cmple(a.1 + pad).all()
