@@ -11,7 +11,11 @@
 //! faces (out of the part at a convex edge, into it at a concave one) so that they cross
 //! them rather than lie on them.
 //!
-//! The behaviour is specified in `docs/re/shell-and-fillet.md`.
+//! Edges that run smoothly one into the next are blended together ([`blend_chain`]): each
+//! edge's tool stops where its edge runs on, and the tools are united first.
+//!
+//! The behaviour is specified in `docs/re/shell-and-fillet.md` and
+//! `docs/re/fillet-curved-edges.md`.
 
 use crate::boolean::{self, BoolOp};
 use crate::geom::{Curve, Frame, Surface};
@@ -43,6 +47,71 @@ pub fn blend_edge(
     owner: u32,
     tag_base: u32,
 ) -> Result<Vec<Solid>> {
+    blend_chain(solid, &[(edge, tag_base)], blend, owner)
+}
+
+/// Blends edges that run smoothly one into the next (the top edges of an extruded slot,
+/// say) in one step: each edge's tool is made against the solid as it is, stopping
+/// exactly where its edge runs on into the next, and the tools are united and applied
+/// once. Blending them one at a time instead would lose the joins: once an edge is
+/// blended, its neighbour no longer runs on into anything. Each edge comes with its
+/// tag base (see [`blend_edge`]).
+pub fn blend_chain(solid: &Solid, edges: &[(EdgeId, u32)], blend: Blend, owner: u32) -> Result<Vec<Solid>> {
+    let mut tool: Option<(Solid, bool)> = None;
+    for &(edge, tag_base) in edges {
+        let (t, convex) = edge_tool(solid, edge, blend, tag_base)?;
+        tool = Some(match tool {
+            None => (t, convex),
+            Some((acc, c)) => {
+                if c != convex {
+                    return Err(KernelError::Unsupported(
+                        "blending a smooth run of edges that are convex in part and concave in part".into(),
+                    ));
+                }
+                let mut joined = boolean::boolean(&acc, &t, BoolOp::Union)?;
+                if joined.len() != 1 {
+                    return invalid("the blends along these edges do not join up");
+                }
+                (joined.remove(0), c)
+            }
+        });
+    }
+    let (mut tool, convex) = tool.ok_or_else(|| KernelError::InvalidInput("no edge to blend".into()))?;
+    tool.set_owner(owner);
+    let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
+    boolean::boolean(solid, &tool, op)
+}
+
+/// Every edge among `candidates` joined to `edge` through smooth runs, `edge` first.
+pub fn smooth_run(solid: &Solid, edge: EdgeId, candidates: &[EdgeId]) -> Vec<EdgeId> {
+    let mut run = vec![edge];
+    let mut k = 0;
+    while k < run.len() {
+        let e = run[k];
+        for &c in candidates {
+            if !run.contains(&c) && joined_smoothly(solid, e, c) {
+                run.push(c);
+            }
+        }
+        k += 1;
+    }
+    run
+}
+
+/// Whether edges `a` and `b` share an end where one runs smoothly on into the other.
+fn joined_smoothly(solid: &Solid, a: EdgeId, b: EdgeId) -> bool {
+    let (Some(ea), Some(eb)) = (solid.edge(a), solid.edge(b)) else { return false };
+    let leaving = |e: &crate::topo::Edge, t: f64, toward: f64| {
+        let h = (toward - t) * 1e-6;
+        (e.curve.eval(t + h) - e.curve.eval(t)).normalize_or_zero()
+    };
+    let ends = |e: &crate::topo::Edge| [(e.start, leaving(e, e.t0, e.t1)), (e.end, leaving(e, e.t1, e.t0))];
+    ends(ea).iter().any(|(va, da)| ends(eb).iter().any(|(vb, db)| va == vb && da.dot(*db) < -1.0 + 1e-6))
+}
+
+/// The tool that blends one edge, and whether the edge is convex (the tool is cut away)
+/// rather than concave (the tool is added).
+fn edge_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result<(Solid, bool)> {
     let size = match blend {
         Blend::Fillet(r) | Blend::Chamfer(r) => r,
     };
@@ -51,7 +120,7 @@ pub fn blend_edge(
     }
     let e = solid.edge(edge).ok_or_else(|| KernelError::InvalidInput("the edge does not exist".into()))?;
     if let Curve::Circle { frame, radius } = e.curve {
-        return blend_round_edge(solid, edge, &frame, radius, blend, owner, tag_base);
+        return round_edge_tool(solid, edge, &frame, radius, blend, tag_base);
     }
     let Curve::Line { .. } = e.curve else {
         return Err(KernelError::Unsupported(
@@ -83,7 +152,7 @@ pub fn blend_edge(
             }
         }
     }
-    let [(fa, _, wa), (fb, nb, wb)] = sides[..] else {
+    let [(fa, na, wa), (fb, nb, wb)] = sides[..] else {
         return invalid("the edge is not shared by exactly two faces");
     };
     let bend = wa.dot(nb);
@@ -116,38 +185,47 @@ pub fn blend_edge(
     let to2 = |v: DVec3| DVec2::new(v.dot(frame.x), v.dot(frame.y));
     let a = to2(wa * setback);
     let b = to2(wb * setback);
-    let mut segs = vec![Segment::Line { a: DVec2::ZERO, b: a }];
-    match blend {
+    let round = match blend {
         Blend::Fillet(r) => {
             let center = to2((wa + wb).normalize() * (r / (phi / 2.0).sin()));
-            let arc = [true, false]
+            [true, false]
                 .into_iter()
                 .filter_map(|ccw| Segment::arc_from_center(center, a, b, ccw))
                 .find(|s| matches!(s, Segment::Arc { sweep, .. } if sweep.abs() < PI))
-                .ok_or_else(|| KernelError::InvalidInput("degenerate fillet".into()))?;
-            segs.push(arc);
+                .ok_or_else(|| KernelError::InvalidInput("degenerate fillet".into()))?
         }
-        Blend::Chamfer(_) => segs.push(Segment::Line { a, b }),
-    }
-    segs.push(Segment::Line { a: b, b: DVec2::ZERO });
-    let tags = vec![tag_base, tag_base + 2, tag_base + 4];
-    let regions = build_regions(&[Loop2::with_tags(segs, tags)])?;
+        Blend::Chamfer(_) => Segment::Line { a, b },
+    };
+    let regions = build_regions(&[pushed_section(
+        round,
+        a,
+        b,
+        DVec2::ZERO,
+        to2(na),
+        to2(nb),
+        setback,
+        convex,
+        tag_base,
+    )])?;
 
     // Extend past an end only where the far side is open (convex) or solid
     // (concave), so the extension changes nothing but avoids slivers.
     let margin = setback * 2.0;
     let probe = (wa + wb) * setback * 0.25;
     let extend = |end: DVec3, out: DVec3| -> Result<f64> {
+        // Where the edge runs smoothly on into another, that edge's blend carries on
+        // from here, so this one stops exactly at the end.
+        if runs_on(solid, edge, end, out) {
+            return Ok(0.0);
+        }
         let inside = boolean::contains_point(solid, end + out * (margin * 0.5) + probe)?;
         Ok(if inside != convex { margin } else { 0.0 })
     };
     let z0 = -extend(p0, -d)?;
     let z1 = len + extend(p1, d)?;
     let region = regions.first().ok_or_else(|| KernelError::InvalidInput("degenerate blend".into()))?;
-    let mut tool = extrude::extrude(&frame, region, z0, z1)?;
-    tool.set_owner(owner);
-    let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
-    boolean::boolean(solid, &tool, op)
+    let tool = extrude::extrude(&frame, region, z0, z1)?;
+    Ok((tool, convex))
 }
 
 /// The faces at an edge, each with its outward normal at `p` and the direction from
@@ -183,24 +261,76 @@ fn coaxial_line_surface(s: &Surface, o: DVec3, a: DVec3) -> bool {
     }
 }
 
-/// Blends a whole circular edge (see the module notes).
-fn blend_round_edge(
+/// A blend tool's cross-section: the `round` (or bevel) from `pa` on face A to `pb` on
+/// face B, closed by sides pushed off the faces (whose outward normals in the section
+/// are `na` and `nb`, meeting at the edge `c`): out of the part at a convex edge, where
+/// the tool cuts, into it at a concave one, where the tool adds. Lying on the faces
+/// instead, the tool's sides would coincide with them, and where tools meet a curved
+/// round could touch a flat side at a point; pushed off, every side crosses the faces.
+#[allow(clippy::too_many_arguments)]
+fn pushed_section(
+    round: Segment,
+    pa: DVec2,
+    pb: DVec2,
+    c: DVec2,
+    na: DVec2,
+    nb: DVec2,
+    setback: f64,
+    convex: bool,
+    tag_base: u32,
+) -> Loop2 {
+    let push = setback * 0.5 * if convex { 1.0 } else { -1.0 };
+    let (pb2, pc2, pa2) = (pb + nb * push, c + (na + nb) * push, pa + na * push);
+    let segs = vec![
+        round,
+        Segment::Line { a: pb, b: pb2 },
+        Segment::Line { a: pb2, b: pc2 },
+        Segment::Line { a: pc2, b: pa2 },
+        Segment::Line { a: pa2, b: pa },
+    ];
+    Loop2::with_tags(segs, vec![tag_base + 2, tag_base + 4, tag_base + 4, tag_base, tag_base])
+}
+
+/// Whether another edge leaves the vertex at `end` (an end of `edge`) in the direction
+/// `out` that `edge` would carry on in: the edges join smoothly there.
+fn runs_on(solid: &Solid, edge: EdgeId, end: DVec3, out: DVec3) -> bool {
+    solid.edges.iter().enumerate().any(|(i, e)| {
+        if i == edge.index() {
+            return false;
+        }
+        let leaving = |t: f64, toward: f64| {
+            let h = (toward - t) * 1e-6;
+            (e.curve.eval(t + h) - e.curve.eval(t)).normalize_or_zero()
+        };
+        let starts =
+            solid.vertex(e.start).is_some_and(|v| (v.point - end).length() < 1e-9 * (1.0 + end.length()));
+        let ends =
+            solid.vertex(e.end).is_some_and(|v| (v.point - end).length() < 1e-9 * (1.0 + end.length()));
+        (starts && leaving(e.t0, e.t1).dot(out) > 1.0 - 1e-6)
+            || (ends && leaving(e.t1, e.t0).dot(out) > 1.0 - 1e-6)
+    })
+}
+
+/// Blends a circular edge, whole or an arc (see the module notes).
+fn round_edge_tool(
     solid: &Solid,
     edge: EdgeId,
     circle: &Frame,
     radius: f64,
     blend: Blend,
-    owner: u32,
     tag_base: u32,
-) -> Result<Vec<Solid>> {
+) -> Result<(Solid, bool)> {
     let e = solid.edge(edge).ok_or_else(|| KernelError::InvalidInput("the edge does not exist".into()))?;
-    if ((e.t1 - e.t0).abs() - 2.0 * PI).abs() > 1e-9 {
-        return Err(KernelError::Unsupported("fillets and chamfers on part of a circle".into()));
-    }
     let (o, a) = (circle.origin, circle.z);
-    let p = e.curve.eval(e.t0);
-    let tangent = (circle.y * e.t0.cos() - circle.x * e.t0.sin()) * (e.t1 - e.t0).signum();
-    let sides = edge_sides(solid, edge, p, tangent);
+    let dir = (e.t1 - e.t0).signum();
+    let sweep = (e.t1 - e.t0).abs();
+    let whole = (sweep - 2.0 * PI).abs() <= 1e-9;
+    // Position and direction of travel round the circle at parameter `t`.
+    let at = |t: f64| o + (circle.x * t.cos() + circle.y * t.sin()) * radius;
+    let along = |t: f64| (circle.y * t.cos() - circle.x * t.sin()) * dir;
+    let mid = 0.5 * (e.t0 + e.t1);
+    let p = at(mid);
+    let sides = edge_sides(solid, edge, p, along(mid));
     let [(fa, na, wa), (fb, nb, wb)] = sides[..] else {
         return invalid("the edge is not shared by exactly two faces");
     };
@@ -242,7 +372,6 @@ fn blend_round_edge(
     // The cross-section in the meridian half-plane through `p`: x away from the axis,
     // y along it, the edge at (radius, 0).
     let radial = (p - o).normalize();
-    let frame = Frame { origin: o, x: radial, y: a, z: radial.cross(a) };
     let to2 = |v: DVec3| DVec2::new(v.dot(radial), v.dot(a));
     let c = DVec2::new(radius, 0.0);
     let (wa2, wb2, na2, nb2) = (to2(wa), to2(wb), to2(na), to2(nb));
@@ -259,29 +388,42 @@ fn blend_round_edge(
         }
         Blend::Chamfer(_) => Segment::Line { a: pa, b: pb },
     };
-    // The sides pushed off the faces: out of the part at a convex edge (where the tool
-    // cuts), into it at a concave one (where the tool adds).
-    let push = setback * 0.5 * if convex { 1.0 } else { -1.0 };
-    let (pb2, pc2, pa2) = (pb + nb2 * push, c + (na2 + nb2) * push, pa + na2 * push);
-    let segs = vec![
-        round,
-        Segment::Line { a: pb, b: pb2 },
-        Segment::Line { a: pb2, b: pc2 },
-        Segment::Line { a: pc2, b: pa2 },
-        Segment::Line { a: pa2, b: pa },
-    ];
-    let tags = vec![tag_base + 2, tag_base + 4, tag_base + 4, tag_base, tag_base];
-    let regions = build_regions(&[Loop2::with_tags(segs, tags)])?;
+    let regions = build_regions(&[pushed_section(round, pa, pb, c, na2, nb2, setback, convex, tag_base)])?;
     let region = regions.first().ok_or_else(|| KernelError::InvalidInput("degenerate blend".into()))?;
-    let mut tool = match crate::revolve::revolve(&frame, region, DVec2::ZERO, DVec2::Y, 2.0 * PI) {
+    // How far round the tool turns: the whole circle, or the arc, carried on past an
+    // end (by the same margin as a straight edge's) only where nothing lies beyond it,
+    // and never where the edge runs smoothly on into the next.
+    let (start, turn) = if whole {
+        (e.t0, 2.0 * PI)
+    } else {
+        let margin = setback * 2.0;
+        let extend = |t: f64, out: DVec3| -> Result<f64> {
+            let end = at(t);
+            if runs_on(solid, edge, end, out) {
+                return Ok(0.0);
+            }
+            let ends = edge_sides(solid, edge, end, along(t));
+            let [(_, _, ua), (_, _, ub)] = ends[..] else { return Ok(0.0) };
+            let probe = end + out * (margin * 0.5) + (ua + ub) * setback * 0.25;
+            let inside = boolean::contains_point(solid, probe)?;
+            Ok(if inside != convex { margin / radius } else { 0.0 })
+        };
+        let before = extend(e.t0, -along(e.t0))?;
+        let after = extend(e.t1, along(e.t1))?;
+        let turn = (sweep + before + after).min(2.0 * PI - 1e-6);
+        (e.t0 - dir * before, turn)
+    };
+    let x0 = (at(start) - o).normalize();
+    let frame = Frame { origin: o, x: x0, y: a, z: x0.cross(a) };
+    // A positive turn of the revolve goes towards frame.z, which is backwards along
+    // the circle's parameter.
+    let tool = match crate::revolve::revolve(&frame, region, DVec2::ZERO, DVec2::Y, -dir * turn) {
         Ok(t) => t,
         // The cross-section reaching the axis: the blend is wider than the circle.
         Err(KernelError::InvalidInput(_) | KernelError::Unsupported(_)) => return too_big(),
         Err(err) => return Err(err),
     };
-    tool.set_owner(owner);
-    let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
-    boolean::boolean(solid, &tool, op)
+    Ok((tool, convex))
 }
 
 /// Finds the edge closest to `p` (within `tol`).
@@ -512,5 +654,112 @@ mod tests {
         let x = 4.0 + inset;
         let want = 400.0 * 6.0 + 16.0 * PI * 4.0 + 2.0 * PI * x * spandrel;
         assert!((fine_volume(&r) - want).abs() / want < 1e-5, "{} vs {want}", fine_volume(&r));
+    }
+
+    /// The corner a fillet of radius 1 takes off (or fills): its area and how far its
+    /// centroid lies in from the edge.
+    fn spandrel() -> (f64, f64) {
+        (1.0 - PI / 4.0, (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI)))
+    }
+
+    /// A stadium: two half circles of radius `r` about (0, 0) and (`len`, 0), joined
+    /// by straight sides.
+    fn stadium(r: f64, len: f64) -> Loop2 {
+        Loop2::new(vec![
+            Segment::Line { a: DVec2::new(0.0, -r), b: DVec2::new(len, -r) },
+            Segment::Arc { center: DVec2::new(len, 0.0), radius: r, start: -0.5 * PI, sweep: PI },
+            Segment::Line { a: DVec2::new(len, r), b: DVec2::new(0.0, r) },
+            Segment::Arc { center: DVec2::ZERO, radius: r, start: 0.5 * PI, sweep: PI },
+        ])
+    }
+
+    #[test]
+    fn fillet_an_arc_edge_between_flat_sides() {
+        // A quarter disc of radius 10, 5 thick: filleting its round top edge takes the
+        // corner off over a quarter turn, cut clean at the flat sides.
+        let sector = Loop2::new(vec![
+            Segment::Line { a: DVec2::ZERO, b: DVec2::new(10.0, 0.0) },
+            Segment::Arc { center: DVec2::ZERO, radius: 10.0, start: 0.0, sweep: 0.5 * PI },
+            Segment::Line { a: DVec2::new(0.0, 10.0), b: DVec2::ZERO },
+        ]);
+        let r = build_regions(&[sector]).expect("region");
+        let s = extrude::extrude(&Frame::world(), &r[0], 0.0, 5.0).expect("sector");
+        let mid = DVec3::new(10.0 * (PI / 4.0).cos(), 10.0 * (PI / 4.0).sin(), 5.0);
+        let out = blend_edge(&s, edge(&s, mid), Blend::Fillet(1.0), 1, 0).expect("fillet");
+        let (area, inset) = spandrel();
+        let want = 25.0 * PI * 5.0 - area * 0.5 * PI * (10.0 - inset);
+        assert!((fine_volume(&out) - want).abs() / want < 5e-5, "{} vs {want}", fine_volume(&out));
+    }
+
+    #[test]
+    fn fillet_a_stadium_all_round() {
+        // Its four top edges run smoothly one into the next, so they are blended as one
+        // run: each edge's tool stops where its edge runs on, and the rounds meet
+        // without a step. The corner comes off along the straight sides and round a
+        // whole turn at the ends.
+        let (r, len) = (4.0, 10.0);
+        let reg = build_regions(&[stadium(r, len)]).expect("region");
+        let mut s = extrude::extrude(&Frame::world(), &reg[0], 0.0, 5.0).expect("stadium");
+        let edges: Vec<EdgeId> = [
+            DVec3::new(0.5 * len, -r, 5.0),
+            DVec3::new(len + r, 0.0, 5.0),
+            DVec3::new(0.5 * len, r, 5.0),
+            DVec3::new(-r, 0.0, 5.0),
+        ]
+        .map(|p| edge(&s, p))
+        .to_vec();
+        let run = smooth_run(&s, edges[0], &edges);
+        assert_eq!(run.len(), 4);
+        let tagged: Vec<(EdgeId, u32)> = run.iter().enumerate().map(|(k, e)| (*e, 8 * k as u32)).collect();
+        s = blend_chain(&s, &tagged, Blend::Fillet(1.0), 1).expect("fillet").remove(0);
+        let (area, inset) = spandrel();
+        let whole = (2.0 * r * len + PI * r * r) * 5.0;
+        let want = whole - area * (2.0 * len + 2.0 * PI * (r - inset));
+        assert!(
+            (fine_volume(std::slice::from_ref(&s)) - want).abs() / want < 5e-5,
+            "{} vs {want}",
+            fine_volume(std::slice::from_ref(&s))
+        );
+        assert_eq!(check::genus(&s).expect("valid"), 0);
+    }
+
+    #[test]
+    fn fillet_a_stadium_pocket_floor() {
+        // A stadium pocket 3 deep in a block: the floor's edges are concave, and their
+        // fillets (one run) fill the corner along the sides and round the ends.
+        use crate::boolean::{BoolOp, boolean};
+        let (r, len) = (4.0, 10.0);
+        let block = prism(
+            &[
+                DVec2::new(-10.0, -10.0),
+                DVec2::new(20.0, -10.0),
+                DVec2::new(20.0, 10.0),
+                DVec2::new(-10.0, 10.0),
+            ],
+            6.0,
+        );
+        let reg = build_regions(&[stadium(r, len)]).expect("region");
+        let pocket = extrude::extrude(&Frame::world(), &reg[0], 3.0, 7.0).expect("pocket");
+        let mut s = boolean(&block, &pocket, BoolOp::Subtract).expect("pocket").remove(0);
+        let edges: Vec<EdgeId> = [
+            DVec3::new(0.5 * len, -r, 3.0),
+            DVec3::new(len + r, 0.0, 3.0),
+            DVec3::new(0.5 * len, r, 3.0),
+            DVec3::new(-r, 0.0, 3.0),
+        ]
+        .map(|p| edge(&s, p))
+        .to_vec();
+        let run = smooth_run(&s, edges[0], &edges);
+        assert_eq!(run.len(), 4);
+        let tagged: Vec<(EdgeId, u32)> = run.iter().enumerate().map(|(k, e)| (*e, 8 * k as u32)).collect();
+        s = blend_chain(&s, &tagged, Blend::Fillet(1.0), 1).expect("fillet").remove(0);
+        let (area, inset) = spandrel();
+        let before = 30.0 * 20.0 * 6.0 - (2.0 * r * len + PI * r * r) * 3.0;
+        let want = before + area * (2.0 * len + 2.0 * PI * (r - inset));
+        assert!(
+            (fine_volume(std::slice::from_ref(&s)) - want).abs() / want < 1e-5,
+            "{} vs {want}",
+            fine_volume(std::slice::from_ref(&s))
+        );
     }
 }

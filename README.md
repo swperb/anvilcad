@@ -281,15 +281,18 @@ Kernel design notes:
   an edge. `anvil-kernel` is a faceted kernel that covers everything else.
 - The rebuild runs on the exact kernel while every feature so far is one it supports
   (extrudes, revolves, cuts, patterns, shells, and fillets and chamfers on straight
-  edges between flat faces and on circular edges between faces round about the same
-  axis). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
+  edges between flat faces and on circular edges or arcs between faces round about the
+  same axis; selected edges that run smoothly one into the next, such as a slot's
+  outline, are blended together so their rounds join). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
   and tori exactly, with pointed cones and sphere poles where it meets the axis. A round
   edge is filleted with a torus (chamfered with a cone) by a boolean with the corner's
   cross-section revolved about the axis. A shell is the part less its cavity: every
   face offset inwards onto its exact offset surface (removed faces outwards), each edge
   and corner solved where the offset faces meet, keeping the part's shape; a wall too
   thick for that, a sealed hollow or a freeform face goes to the faceted kernel. The
-  behaviour is specified in [docs/re/shell-and-fillet.md](docs/re/shell-and-fillet.md).
+  behaviour is specified in [docs/re/shell-and-fillet.md](docs/re/shell-and-fillet.md)
+  and [docs/re/fillet-curved-edges.md](docs/re/fillet-curved-edges.md), the latter
+  studied with REA from Dassault's published help pages only.
   After each exact feature the faceted body is regenerated from the exact result, so
   display, picking, mass properties, export and later features work unchanged. The first
   feature the exact kernel cannot build, or declines, hands the part over to the faceted

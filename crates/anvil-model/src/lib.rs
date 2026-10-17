@@ -392,6 +392,64 @@ mod exact_shell {
 }
 
 #[cfg(test)]
+mod exact_round_fillets {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A slot (two half circles of radius 4, 10 apart) extruded 5 tall, all four top
+    /// edges filleted with radius 1 in one feature: the lines and arcs run smoothly into
+    /// each other, so they are blended together on the exact kernel and the rounds join.
+    #[test]
+    fn slot_outline_fillets_exactly() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let s = &mut sf.sketch;
+        let p: Vec<usize> = [v2(0.0, -4.0), v2(10.0, -4.0), v2(10.0, 4.0), v2(0.0, 4.0)]
+            .iter()
+            .map(|&q| s.add_point(q))
+            .collect();
+        let (c1, c0) = (s.add_point(v2(10.0, 0.0)), s.add_point(v2(0.0, 0.0)));
+        let entities = [
+            s.add_line(p[0], p[1]),
+            s.add_arc(c1, p[1], p[2]),
+            s.add_line(p[2], p[3]),
+            s.add_arc(c0, p[3], p[0]),
+        ];
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(5.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let top = FaceId { feature: base, index: FaceId::END_CAP };
+        let edges = entities.iter().map(|&e| EdgeRef::new(top, FaceId::side(base, e as u32))).collect();
+        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature { edges, radius: Dim::Value(1.0) }));
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert_eq!(st.faceted_from, None);
+        assert!(st.exact_features.contains(&fillet));
+        // Pappus: the corner a radius 1 fillet takes off (area 1 - pi/4, centroid
+        // (10 - 3 pi) / (3 (4 - pi)) in from the edge), along the sides and round the ends.
+        let pi = std::f64::consts::PI;
+        let (area, inset) = (1.0 - pi / 4.0, (10.0 - 3.0 * pi) / (3.0 * (4.0 - pi)));
+        let want = (80.0 + 16.0 * pi) * 5.0 - area * (20.0 + 2.0 * pi * (4.0 - inset));
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        let v: f64 = st
+            .exact
+            .as_ref()
+            .expect("exact")
+            .iter()
+            .map(|b| {
+                anvil_brep::mass::properties(&anvil_brep::tess::tessellate(b, &fine).expect("tess")).volume
+            })
+            .sum();
+        assert!((v - want).abs() / want < 5e-5, "{v} vs {want}");
+    }
+}
+
+#[cfg(test)]
 mod revolve_open_profile {
     use super::*;
     use anvil_kernel::v2;
