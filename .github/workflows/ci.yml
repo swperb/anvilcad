@@ -13,6 +13,13 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Debug info is not needed to build and test in CI. Leaving it out cut a cold build's CPU
+# time by about a quarter and its target/ from 1.5 GB to 660 MB, so the per-OS caches stay
+# well inside the repository's 10 GB and restore faster.
+env:
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
 jobs:
   test:
     strategy:
