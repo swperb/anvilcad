@@ -506,7 +506,14 @@ mod tests {
             value: "Lathe 3".into(),
         });
         sheet.save().unwrap();
+        // The new description pads to the same size (whole sectors), and a rewrite this
+        // soon can keep the same modification time (it did on Windows), so date it later,
+        // as an edit made afterwards would be.
+        let mtime = std::fs::metadata(&wheel).unwrap().modified().unwrap();
         std::fs::write(&wheel, wheel_bytes("larger wheel, rev B")).unwrap();
+        let f = std::fs::File::options().write(true).open(&wheel).unwrap();
+        f.set_modified(mtime + std::time::Duration::from_secs(2)).unwrap();
+        drop(f);
         assert!(matches!(convert(&wheel, &opts, None, false, false), Outcome::Imported { .. }));
         let sheet = Sheet::open(&wheel, &opts, None);
         assert_eq!(sheet.value("Description"), Some("larger wheel, rev B"));
