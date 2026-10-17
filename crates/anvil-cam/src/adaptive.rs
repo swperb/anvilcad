@@ -1415,19 +1415,22 @@ mod tests {
 
     #[test]
     fn closed_pocket_with_islands_stays_under_limit() {
+        // Every channel between islands and walls is at least 11 mm (1.4 tool diameters)
+        // wide. One layer: layers repeat the same plan (checked in the open-stock test),
+        // so replaying one is enough here.
         let region = Region::new(
-            rect(0.0, 0.0, 60.0, 40.0),
-            vec![rect(12.0, 12.0, 22.0, 26.0), crate::geom::circle_points(v2(42.0, 20.0), 6.0, 48)],
+            rect(0.0, 0.0, 54.0, 34.0),
+            vec![rect(12.0, 11.0, 20.0, 23.0), crate::geom::circle_points(v2(37.0, 17.0), 5.0, 48)],
         )
         .unwrap();
         let mut p = AdaptiveParams::new(8.0, 0.0, -6.0, 1200.0);
-        p.step_down = 3.0;
+        p.step_down = 6.0;
         p.max_engagement_deg = 45.0;
         // The coarsest raster allowed keeps the test quick; the verifier runs finer.
         p.resolution = Some(0.125);
         let res = adaptive_clear(&region, None, &p).unwrap();
         let rep = &res.report;
-        assert_eq!(rep.layers, 2);
+        assert_eq!(rep.layers, 1);
         assert_eq!(rep.helix_entries, 1, "{rep:?}");
         assert!(rep.passes > 3);
         // Most moves between passes stay down in cleared space.
@@ -1487,8 +1490,18 @@ mod tests {
         p.max_engagement_deg = 30.0;
         p.chip_thinning_max = Some(2.0);
         p.resolution = Some(10.0 / 64.0);
+        // Two layers: the plan is repeated at each depth and checked layer by layer below.
+        p.step_down = 2.5;
         let res = adaptive_clear(&region, Some(&stock), &p).unwrap();
         assert_eq!(res.report.helix_entries, 0);
+        assert_eq!(res.report.layers, 2);
+        let depths: std::collections::BTreeSet<i64> = res
+            .toolpath
+            .moves()
+            .filter(|m| m.kind == MoveKind::Cut)
+            .map(|m| (m.to.z * 1000.0).round() as i64)
+            .collect();
+        assert_eq!(depths.into_iter().collect::<Vec<_>>(), vec![-5000, -2500]);
         let m = measure_engagement(
             &region,
             Some(&stock),

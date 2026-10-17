@@ -134,14 +134,16 @@ its cuts only to a cell, so a link may brush up to about that much), and the are
 
 Tests (`cargo test -p anvil-cam adaptive`):
 
-- a 60 x 40 mm pocket with a rectangular and a round island, 8 mm tool, 45 degree limit,
-  two layers: one helix, links far outnumber retracts, under 1% of the reachable area
-  left, and the verifier at half the planner's cell size finds no sample over 45 degrees
-  but a maximum over 30 (so the check is not vacuous), no slotting, no link touching
-  material, and no tool position closer than its radius to a wall;
-- 40 x 30 mm stock with room around it, 10 mm tool, 30 degree limit: entered from the side
-  with no helix, under 1 mm^2 left, no sample over 30 degrees, chip-thinning feeds between
-  1 and 2 times the base feed;
+- a 54 x 34 mm pocket with a rectangular and a round island (every channel at least 11 mm,
+  1.4 tool diameters, wide), 8 mm tool, 45 degree limit: one helix, links far outnumber
+  retracts, under 1% of the reachable area left, and the verifier at half the planner's
+  cell size finds no sample over 45 degrees but a maximum over 30 (so the check is not
+  vacuous), no slotting, no link touching material, and no tool position closer than its
+  radius to a wall;
+- 40 x 30 mm stock with room around it, 10 mm tool, 30 degree limit, two layers: entered
+  from the side with no helix, cuts at exactly the two layer depths, under 1 mm^2 left, no
+  sample over 30 degrees in either layer, chip-thinning feeds between 1 and 2 times the
+  base feed;
 - bad parameters (negative or NaN sizes, a limit of 180 degrees, a floor above the top, a
   tool wider than the pocket) return errors.
 
