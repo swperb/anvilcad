@@ -184,3 +184,54 @@ fn ftc_07_freeform_faces_take_a_hole() {
     }
     assert!(through_freeform >= 1, "no hole crossed the freeform faces");
 }
+
+/// Countersinks (cones 59 degrees from their axes): large holes drilled through the part
+/// pass beside them, meeting each double cone on both nappes; only the face's own nappe
+/// is kept. What a hole removes and what is left add back up to the whole.
+#[test]
+fn ctc_05_holes_beside_countersinks() {
+    use anvil_brep::boolean::{BoolOp, boolean};
+    use anvil_brep::profile::{Loop2, Segment, build_regions};
+    let imp = load("nist_ctc_05_asme1_rd.stp");
+    let solid = imp.bodies.iter().find_map(|b| b.exact.clone()).expect("exact");
+    let (lo, hi) = solid.bounds().expect("bounds");
+    let c = (lo + hi) * 0.5;
+    let reach = (hi - lo).length();
+    let r = 0.15 * (hi - lo).min_element();
+    let vol = |s: &[anvil_brep::Solid]| -> f64 {
+        s.iter()
+            .map(|x| {
+                anvil_brep::check::validate(x).expect("valid");
+                let m = anvil_brep::tess::tessellate(x, &Default::default()).expect("tessellate");
+                assert!(m.is_watertight());
+                anvil_brep::mass::properties(&m).volume
+            })
+            .sum()
+    };
+    let whole = vol(std::slice::from_ref(&solid));
+    let mut through_cones = 0;
+    for (axis, hint) in [(DVec3::X, DVec3::Y), (DVec3::Y, DVec3::Z), (DVec3::Z, DVec3::X)] {
+        let frame = anvil_brep::Frame::new(c - axis * reach, axis, hint).expect("frame");
+        let disc = build_regions(&[Loop2::new(vec![Segment::circle(glam::DVec2::ZERO, r)])]).expect("region");
+        let drill = anvil_brep::extrude::extrude(&frame, &disc[0], 0.0, 2.0 * reach).expect("drill");
+        let left = boolean(&solid, &drill, BoolOp::Subtract).expect("subtract");
+        let cut = boolean(&solid, &drill, BoolOp::Intersect).expect("intersect");
+        let (l, k) = (vol(&left), vol(&cut));
+        assert!(k > 0.01 * whole, "{axis:?}: {k}");
+        assert!((l + k - whole).abs() < 1e-3 * k, "{axis:?}: {l} + {k} vs {whole}");
+        // A cone face of what is left, bounded by a traced edge on the hole's wall.
+        let wall = anvil_brep::Surface::Cylinder { frame, radius: r };
+        if left.iter().any(|s| {
+            s.faces.iter().filter(|f| matches!(f.surface, anvil_brep::Surface::Cone { .. })).any(|f| {
+                f.loops().flat_map(|l| &l.coedges).any(|e| {
+                    let e = &s.edges[e.edge.index()];
+                    matches!(e.curve, anvil_brep::Curve::Spline(_))
+                        && wall.distance(e.curve.eval(0.5 * (e.t0 + e.t1))) < 1e-6
+                })
+            })
+        }) {
+            through_cones += 1;
+        }
+    }
+    assert!(through_cones >= 1, "no hole cut a cone");
+}

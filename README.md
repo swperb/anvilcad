@@ -164,7 +164,9 @@ Kernel design notes:
   Traced curves between analytic surfaces are found this way: each straight line of one
   surface meets the other at the roots of a quadratic, so every traced point is exact,
   and the points are joined into a cubic B-spline refined until it stays within 1e-7 mm
-  of both surfaces. A freeform face meets any surface (another freeform face included)
+  of both surfaces. A cone's quadric has two nappes; only the face's own is kept, and a
+  curve that reaches the apex (where it has a corner, and may pass to the other nappe)
+  is split there into pieces that end exactly at the apex. A freeform face meets any surface (another freeform face included)
   by marching: start points where the other surface crosses the patch's sample grid,
   then steps along the curve with Newton corrections back onto both surfaces, ending
   exactly on a patch edge; the points are fitted the same way, to 1e-7 mm. Surfaces that

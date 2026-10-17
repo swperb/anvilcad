@@ -462,6 +462,20 @@ impl<'a> Engine<'a> {
     }
 
     fn cut_along(&mut self, fa: usize, fb: usize, curve: Curve) {
+        // An open curve ending on both faces (at a cone's apex, say) ends at a vertex, at
+        // its own end parameter (both ends can be the same point).
+        let mut ends: Vec<(f64, usize)> = Vec::new();
+        if let Curve::Spline(sp) = &curve
+            && !sp.closed
+        {
+            let (lo, hi) = sp.domain();
+            for t in [lo, hi] {
+                let p = sp.eval(t);
+                if self.locate(0, fa, p) != Loc::Outside && self.locate(1, fb, p) != Loc::Outside {
+                    ends.push((t, self.add_point(p, 0.0)));
+                }
+            }
+        }
         let mut verts: Vec<(f64, usize)> = self
             .pts
             .iter()
@@ -471,10 +485,14 @@ impl<'a> Engine<'a> {
                     && self.locate_point(0, fa, *i) != Loc::Outside
                     && self.locate_point(1, fb, *i) != Loc::Outside
             })
+            .filter(|(i, _)| ends.iter().all(|e| e.1 != *i))
             .map(|(i, p)| (curve.param_of(*p), i))
             .collect();
+        verts.extend(ends);
         verts.sort_by(|a, b| a.0.total_cmp(&b.0));
-        verts.dedup_by(|a, b| a.1 == b.1);
+        // The same vertex twice is one crossing, unless it is an open curve's two ends.
+        let gap = 1e-9 * curve.period().unwrap_or(1.0);
+        verts.dedup_by(|a, b| a.1 == b.1 && (a.0 - b.0).abs() < gap.max(1e-12));
 
         let mut spans: Vec<(f64, f64, usize, usize)> = Vec::new();
         if let Some(period) = curve.period() {
@@ -498,7 +516,7 @@ impl<'a> Engine<'a> {
             }
         } else {
             for w in verts.windows(2) {
-                if w[0].1 != w[1].1 {
+                if w[0].1 != w[1].1 || w[1].0 - w[0].0 > 1e-9 {
                     spans.push((w[0].0, w[1].0, w[0].1, w[1].1));
                 }
             }
