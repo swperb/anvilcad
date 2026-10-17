@@ -23,6 +23,7 @@ pub mod offset;
 pub mod patch;
 pub mod profile;
 pub mod revolve;
+pub mod rolling;
 pub mod seam;
 pub mod shell;
 pub mod spline;

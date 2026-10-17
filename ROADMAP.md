@@ -8,9 +8,9 @@ when they are in the code and tested.
 
 ## CAD
 
-1. Kernel: fillets on edges between faces not round about a common axis (freeform
-   rolling-ball rounds), tangent propagation to unselected edges, overflow choices and
-   round corners, spherical corner blends, variable-radius fillets, draft; shells of freeform
+1. Kernel: rolling-ball rounds along runs of edges and chamfers on freeform edges,
+   conic and curvature-continuous profiles, tangent propagation to unselected edges,
+   overflow choices and round corners, spherical corner blends, variable-radius fillets, draft; shells of freeform
    faces, sealed hollows (a second shell inside a solid), and walls thick enough to
    change a part's shape; freeform faces that touch other surfaces without crossing them, and
    results that would touch themselves at a single point.

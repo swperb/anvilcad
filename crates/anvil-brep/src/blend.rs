@@ -58,8 +58,13 @@ pub fn blend_edge(
 /// tag base (see [`blend_edge`]).
 pub fn blend_chain(solid: &Solid, edges: &[(EdgeId, u32)], blend: Blend, owner: u32) -> Result<Vec<Solid>> {
     let mut tool: Option<(Solid, bool)> = None;
+    let mut contacts = Vec::new();
     for &(edge, tag_base) in edges {
-        let (t, convex) = edge_tool(solid, edge, blend, tag_base)?;
+        let (t, convex, touch) = edge_tool(solid, edge, blend, tag_base)?;
+        if !touch.is_empty() && edges.len() > 1 {
+            return Err(KernelError::Unsupported("rolling-ball fillets along a smooth run of edges".into()));
+        }
+        contacts = touch;
         tool = Some(match tool {
             None => (t, convex),
             Some((acc, c)) => {
@@ -79,7 +84,7 @@ pub fn blend_chain(solid: &Solid, edges: &[(EdgeId, u32)], blend: Blend, owner: 
     let (mut tool, convex) = tool.ok_or_else(|| KernelError::InvalidInput("no edge to blend".into()))?;
     tool.set_owner(owner);
     let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
-    boolean::boolean(solid, &tool, op)
+    boolean::boolean_with_contacts(solid, &tool, op, &contacts)
 }
 
 /// Every edge among `candidates` joined to `edge` through smooth runs, `edge` first.
@@ -109,9 +114,24 @@ fn joined_smoothly(solid: &Solid, a: EdgeId, b: EdgeId) -> bool {
     ends(ea).iter().any(|(va, da)| ends(eb).iter().any(|(vb, db)| va == vb && da.dot(*db) < -1.0 + 1e-6))
 }
 
-/// The tool that blends one edge, and whether the edge is convex (the tool is cut away)
-/// rather than concave (the tool is added).
-fn edge_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result<(Solid, bool)> {
+/// The tool that blends one edge, whether the edge is convex (the tool is cut away)
+/// rather than concave (the tool is added), and the (solid face, tool face) pairs the
+/// tool touches by construction. A fillet the closed-form tools do not cover (an edge
+/// between faces not round about a common axis) is a rolling-ball one.
+fn edge_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result<crate::rolling::Tool> {
+    match analytic_tool(solid, edge, blend, tag_base) {
+        Ok((tool, convex)) => Ok((tool, convex, Vec::new())),
+        Err(KernelError::Unsupported(why)) => match blend {
+            Blend::Fillet(r) => crate::rolling::rolling_tool(solid, edge, r, tag_base),
+            Blend::Chamfer(_) => Err(KernelError::Unsupported(why)),
+        },
+        Err(e) => Err(e),
+    }
+}
+
+/// The tool for a blend in closed form: a prism along a straight edge, the corner
+/// revolved round a circular one.
+fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result<(Solid, bool)> {
     let size = match blend {
         Blend::Fillet(r) | Blend::Chamfer(r) => r,
     };
@@ -230,7 +250,12 @@ fn edge_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result
 
 /// The faces at an edge, each with its outward normal at `p` and the direction from
 /// the edge into it there (`tangent` is the edge's direction at `p`).
-fn edge_sides(solid: &Solid, edge: EdgeId, p: DVec3, tangent: DVec3) -> Vec<(usize, DVec3, DVec3)> {
+pub(crate) fn edge_sides(
+    solid: &Solid,
+    edge: EdgeId,
+    p: DVec3,
+    tangent: DVec3,
+) -> Vec<(usize, DVec3, DVec3)> {
     let mut sides = Vec::new();
     for (fi, face) in solid.faces.iter().enumerate() {
         for c in face.loops().flat_map(|l| &l.coedges) {
@@ -293,7 +318,7 @@ fn pushed_section(
 
 /// Whether another edge leaves the vertex at `end` (an end of `edge`) in the direction
 /// `out` that `edge` would carry on in: the edges join smoothly there.
-fn runs_on(solid: &Solid, edge: EdgeId, end: DVec3, out: DVec3) -> bool {
+pub(crate) fn runs_on(solid: &Solid, edge: EdgeId, end: DVec3, out: DVec3) -> bool {
     solid.edges.iter().enumerate().any(|(i, e)| {
         if i == edge.index() {
             return false;

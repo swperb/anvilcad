@@ -55,6 +55,19 @@ fn fail<T>(msg: impl Into<String>) -> Result<T> {
 
 /// Combines two solids. The result may contain several bodies (or none).
 pub fn boolean(a: &Solid, b: &Solid, op: BoolOp) -> Result<Vec<Solid>> {
+    boolean_with_contacts(a, b, op, &[])
+}
+
+/// Like [`boolean`], given pairs (face of `a`, face of `b`) that are known to touch
+/// without crossing, as a tool built tangent to a solid's faces does (a fillet's round).
+/// Their contact is not traced: it divides neither face, and tracing a touching contact
+/// is ill-conditioned.
+pub fn boolean_with_contacts(
+    a: &Solid,
+    b: &Solid,
+    op: BoolOp,
+    contacts: &[(usize, usize)],
+) -> Result<Vec<Solid>> {
     let (Some(ba), Some(bb)) = (a.bounds(), b.bounds()) else {
         return fail("empty solid");
     };
@@ -65,7 +78,9 @@ pub fn boolean(a: &Solid, b: &Solid, op: BoolOp) -> Result<Vec<Solid>> {
             BoolOp::Intersect => Vec::new(),
         });
     }
-    Engine::new([a, b])?.run(op)
+    let mut engine = Engine::new([a, b])?;
+    engine.contacts = contacts.to_vec();
+    engine.run(op)
 }
 
 /// The piece of spline `c` from `t0` to `t1` with its ends moved to `a` and `b`, as a
@@ -178,6 +193,8 @@ struct Engine<'a> {
     /// Points where a face of each solid touch without crossing: (point, face of the
     /// first solid, face of the second).
     touches: Vec<(DVec3, usize, usize)>,
+    /// Face pairs known to touch without crossing (see [`boolean_with_contacts`]).
+    contacts: Vec<(usize, usize)>,
 }
 
 fn unwrap(prev: f64, u: f64, period: f64) -> f64 {
@@ -264,6 +281,7 @@ impl<'a> Engine<'a> {
                 vec![BTreeSet::new(); solids[1].faces.len()],
             ],
             touches: Vec::new(),
+            contacts: Vec::new(),
         };
         for (s, solid) in solids.iter().enumerate() {
             let ids = solid.vertices.iter().map(|v| eng.add_point(v.point, 0.0)).collect();
@@ -286,19 +304,18 @@ impl<'a> Engine<'a> {
     /// requested direction is opposite to the stored one.
     fn add_edge(&mut self, curve: Curve, t0: f64, t1: f64, v0: usize, v1: usize) -> Use {
         let new = PEdge { curve, t0, t1, v0, v1 };
-        let q1 = new.at(0.25);
-        let mid = new.at(0.5);
+        // The same edge when the new one runs along the old (it may be parameterised
+        // differently: a traced cut and a tool's own edge along one contact curve).
+        let probes = [0.25, 0.5, 0.75].map(|f| new.at(f));
         for (i, e) in self.edges.iter().enumerate() {
             let same_ends = (e.v0 == v0 && e.v1 == v1) || (e.v0 == v1 && e.v1 == v0);
-            if !same_ends || (e.at(0.5) - mid).length() > ON {
+            if !same_ends || probes.iter().any(|p| e.curve.distance_to(*p, e.t0, e.t1) >= ON) {
                 continue;
             }
-            if (e.at(0.25) - q1).length() < ON {
-                return (i, false);
-            }
-            if (e.at(0.75) - q1).length() < ON {
-                return (i, true);
-            }
+            // Which way it runs along the old one, from two points round its middle.
+            let (a, b) = (new.at(0.45), new.at(0.55));
+            let (ta, tb) = (e.curve.param_in_range(a, e.t0, e.t1), e.curve.param_in_range(b, e.t0, e.t1));
+            return (i, (tb - ta) * (e.t1 - e.t0) < 0.0);
         }
         self.edges.push(new);
         (self.edges.len() - 1, false)
@@ -521,7 +538,9 @@ impl<'a> Engine<'a> {
         let (na, nb) = (self.solids[0].faces.len(), self.solids[1].faces.len());
         for fa in 0..na {
             for fb in 0..nb {
-                if !boxes_overlap(self.infos[0][fa].bbox, self.infos[1][fb].bbox, ON) {
+                if !boxes_overlap(self.infos[0][fa].bbox, self.infos[1][fb].bbox, ON)
+                    || self.contacts.contains(&(fa, fb))
+                {
                     continue;
                 }
                 let ssi = intersect::surfaces(self.surface(0, fa), self.surface(1, fb), TOL)?;
@@ -723,7 +742,8 @@ impl<'a> Engine<'a> {
 
         let mut halves: Vec<Half> = Vec::new();
         let (mut umin, mut umax) = (f64::INFINITY, f64::NEG_INFINITY);
-        for l in &boundary {
+        for (li, l) in boundary.iter().enumerate() {
+            let first = halves.len();
             let mut prev: Option<f64> = None;
             for &(e, rev) in l {
                 let mut pts = self.polyline(e);
@@ -739,9 +759,11 @@ impl<'a> Engine<'a> {
                     uv.push(q);
                 }
                 prev = uv.last().map(|q| q.x);
-                for q in &uv {
-                    umin = umin.min(q.x);
-                    umax = umax.max(q.x);
+                if li == 0 {
+                    for q in &uv {
+                        umin = umin.min(q.x);
+                        umax = umax.max(q.x);
+                    }
                 }
                 let (v0, v1) = if rev {
                     (self.edges[e].v1, self.edges[e].v0)
@@ -750,6 +772,30 @@ impl<'a> Engine<'a> {
                 };
                 let (a, b) = (uv[0].x, uv[uv.len() - 1].x);
                 halves.push(Half { edge: e, reversed: rev, from: node(v0, a), to: node(v1, b), uv });
+            }
+            // On a surface that wraps, an inner loop goes on the outer loop's turn: shifted
+            // by whole periods so its middle falls within the outer loop's range (its own
+            // points may start on another turn: a hole at a negative angle).
+            if let Some(per) = period
+                && li > 0
+            {
+                let (lo, hi) = halves[first..]
+                    .iter()
+                    .flat_map(|h| &h.uv)
+                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), q| (a.min(q.x), b.max(q.x)));
+                let mid = 0.5 * (lo + hi);
+                let shift = per * ((0.5 * (umin + umax) - mid) / per).round();
+                if shift != 0.0 {
+                    for h in &mut halves[first..] {
+                        for q in h.uv.iter_mut() {
+                            q.x += shift;
+                        }
+                        let (a, b) = (h.uv[0].x, h.uv[h.uv.len() - 1].x);
+                        let (va, vb) = (h.from.0, h.to.0);
+                        h.from = node(va, a);
+                        h.to = node(vb, b);
+                    }
+                }
             }
         }
         for &e in &cuts {
