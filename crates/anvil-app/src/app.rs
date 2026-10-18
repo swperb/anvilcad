@@ -875,6 +875,29 @@ impl AnvilApp {
         self.open_editor(id, before, true);
     }
 
+    /// Convert Entities: the edges of the face the sketch lies on, or of the face last
+    /// clicked, copied into the open sketch.
+    fn cmd_convert(&mut self) {
+        let Some(sk) = self.sketch.as_ref().map(|s| s.feature) else { return };
+        let face = match self.doc.sketch(sk).map(|s| s.plane) {
+            Some(PlaneRef::Face(f)) => Some(f),
+            _ => self.face_click.map(|(f, _)| f),
+        };
+        let Some(face) = face else {
+            self.message = Some((
+                "Convert Entities".into(),
+                "Sketch on a face, or click a face before opening the sketch.".into(),
+            ));
+            return;
+        };
+        let edges = anvil_model::convert::face_edges(&self.state, face);
+        match self.doc.convert_entities(sk, &self.state, &edges) {
+            Ok(n) => self.status = format!("Converted {n} edge(s) into the sketch"),
+            Err(e) => self.message = Some(("Convert Entities".into(), e)),
+        }
+        self.rebuild();
+    }
+
     fn cmd_draft(&mut self) {
         if self.state.body.is_empty() {
             self.message = Some(("Draft".into(), "There is no body to draft yet.".into()));
@@ -1330,9 +1353,16 @@ impl AnvilApp {
                         }
                         theme::group_rule(ui);
                         let mut exit = false;
+                        let mut convert = false;
                         theme::command_group(ui, "Finish", |ui| {
+                            convert = theme::command_button(ui, Icon::Convert, "Convert", None)
+                                .on_hover_text("Convert Entities: copy the edges of the sketch's face (or the face last clicked) into the sketch")
+                                .clicked();
                             exit = theme::command_button(ui, Icon::ExitSketch, "Exit Sketch", None).clicked();
                         });
+                        if convert {
+                            self.cmd_convert();
+                        }
                         if exit {
                             self.exit_sketch();
                         }

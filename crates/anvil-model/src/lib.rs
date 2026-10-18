@@ -7,6 +7,7 @@
 
 pub mod bodies;
 pub mod config;
+pub mod convert;
 pub mod dfm;
 pub mod document;
 pub mod equations;

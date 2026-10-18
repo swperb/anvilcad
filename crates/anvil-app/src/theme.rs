@@ -226,6 +226,7 @@ pub enum Icon {
     Rib,
     Bodies,
     Section,
+    Convert,
     Measure,
     Imported,
     Select,
@@ -478,6 +479,12 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
                 ln,
             );
             poly(&[(8.0, 3.0), (14.0, 6.0), (14.0, 12.0), (8.0, 9.0)], tint, hi);
+        }
+        Icon::Convert => {
+            // A face's edge carried down into the sketch.
+            poly(&[(3.0, 2.0), (13.0, 2.0), (13.0, 7.0), (3.0, 7.0)], tint, ln);
+            path(&[(3.0, 10.0), (13.0, 10.0), (13.0, 14.5), (3.0, 14.5), (3.0, 10.0)], hi);
+            line((8.0, 7.0), (8.0, 9.0), ln);
         }
         Icon::Measure => {
             // A rule with ticks.
