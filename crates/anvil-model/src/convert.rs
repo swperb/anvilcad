@@ -12,6 +12,10 @@ use crate::rebuild::BuildState;
 use anvil_kernel::{EdgeRef, FaceId, Vec2, Vec3};
 use anvil_sketch::Constraint;
 
+/// A converted piece in the sketch's plane: its start and end, and for an arc its
+/// centre and whether it runs counter-clockwise.
+type Piece = (Vec2, Vec2, Option<(Vec2, bool)>);
+
 /// The edges bounding a face, as edge names.
 pub fn face_edges(st: &BuildState, f: FaceId) -> Vec<EdgeRef> {
     let mut out: Vec<EdgeRef> =
@@ -35,7 +39,7 @@ impl Document {
         let frame = *st.frames.get(&sketch).ok_or("the sketch has not been built")?;
         let to2 = |p: Vec3| frame.to_local(p);
         // Each edge as 2D pieces: (start, end, Some((centre, counter-clockwise)) for arcs).
-        let mut curves: Vec<Vec<(Vec2, Vec2, Option<(Vec2, bool)>)>> = Vec::new();
+        let mut curves: Vec<Vec<Piece>> = Vec::new();
         for e in edges {
             curves.push(self.edge_pieces(st, *e, &frame, &to2)?);
         }
@@ -88,14 +92,13 @@ impl Document {
         Ok(added)
     }
 
-    #[allow(clippy::type_complexity)]
     fn edge_pieces(
         &self,
         st: &BuildState,
         e: EdgeRef,
         frame: &anvil_kernel::Frame,
         to2: &dyn Fn(Vec3) -> Vec2,
-    ) -> Result<Vec<(Vec2, Vec2, Option<(Vec2, bool)>)>, String> {
+    ) -> Result<Vec<Piece>, String> {
         let k = |p: glam::DVec3| Vec3 { x: p.x, y: p.y, z: p.z };
         if let Some(bodies) = &st.exact {
             for b in bodies {
@@ -124,7 +127,7 @@ impl Document {
                 }
             }
         }
-        let segs: Vec<(Vec2, Vec2, Option<(Vec2, bool)>)> = st
+        let segs: Vec<Piece> = st
             .body
             .model_edges()
             .into_iter()
