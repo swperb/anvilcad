@@ -1290,14 +1290,32 @@ impl AnvilApp {
                     } else {
                         let s = self.sketch.as_mut().unwrap();
                         theme::command_group(ui, "Draw", |ui| {
-                            for t in SKETCH_TOOLS {
-                                if theme::command_button(ui, tool_icon(t), t.label(), Some(s.tool == t))
-                                    .clicked()
-                                {
-                                    s.set_tool(t);
+                            tool_family_button(ui, s, &[Tool::Select]);
+                            for family in sketcher::DRAW_FAMILIES {
+                                tool_family_button(ui, s, family);
+                            }
+                            tool_family_button(ui, s, &[Tool::Dimension]);
+                        });
+                        theme::group_rule(ui);
+                        let mut toggle = false;
+                        theme::command_group(ui, "Modify", |ui| {
+                            for family in sketcher::MODIFY_FAMILIES {
+                                tool_family_button(ui, s, family);
+                            }
+                            toggle = theme::command_button(ui, Icon::Construction, "Construction", None)
+                                .on_hover_text("Construction Geometry: toggle the selected entities")
+                                .clicked();
+                        });
+                        if toggle {
+                            if let Some(sf) = self.doc.sketch_mut(s.feature) {
+                                if s.toggle_construction(sf) {
+                                    s.status = sf.sketch.solve();
+                                } else {
+                                    self.status =
+                                        "Select sketch entities to make them construction geometry.".into();
                                 }
                             }
-                        });
+                        }
                         theme::group_rule(ui);
                         let mut exit = false;
                         theme::command_group(ui, "Finish", |ui| {
@@ -2162,6 +2180,9 @@ impl AnvilApp {
                 }
             }
         });
+        if s.options_ui(ui, sf, &mut self.status) {
+            s.status = sf.sketch.solve();
+        }
         ui.separator();
 
         let mut solve = false;
@@ -2252,9 +2273,11 @@ impl AnvilApp {
         if !rels.is_empty() {
             ui.label(RichText::new("Add Relations").strong());
             ui.horizontal_wrapped(|ui| {
-                for (name, c) in rels {
+                for (name, group) in rels {
                     if ui.button(name).clicked() {
-                        sf.sketch.add_constraint(c);
+                        for c in group {
+                            sf.sketch.add_constraint(c);
+                        }
                         solve = true;
                     }
                 }
@@ -4062,16 +4085,41 @@ fn default_near_sink(h: &HoleFeature) -> Option<hole::Sink> {
     Some(hole::Sink { diameter: Dim::Value(bore + 1.0), angle: Dim::Value(angle) })
 }
 
-/// The sketch tools, in command-bar order.
-const SKETCH_TOOLS: [Tool; 8] = [
+/// The sketch tools, in the order the sketch panel lists them.
+const SKETCH_TOOLS: [Tool; 33] = [
     Tool::Select,
     Tool::Line,
     Tool::Centerline,
     Tool::Rectangle,
+    Tool::CenterRectangle,
+    Tool::Rectangle3Corner,
+    Tool::Rectangle3Center,
+    Tool::Parallelogram,
+    Tool::StraightSlot,
+    Tool::CenterSlot,
+    Tool::ArcSlot3,
+    Tool::CenterArcSlot,
+    Tool::Polygon,
     Tool::Circle,
+    Tool::PerimeterCircle,
     Tool::Arc,
+    Tool::TangentArc,
+    Tool::Arc3,
     Tool::Point,
     Tool::Dimension,
+    Tool::Fillet,
+    Tool::Chamfer,
+    Tool::Trim,
+    Tool::Extend,
+    Tool::Split,
+    Tool::Offset,
+    Tool::Mirror,
+    Tool::LinearPattern,
+    Tool::CircularPattern,
+    Tool::Move,
+    Tool::Copy,
+    Tool::Rotate,
+    Tool::Scale,
 ];
 
 fn tool_icon(t: Tool) -> Icon {
@@ -4080,11 +4128,80 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Line => Icon::Line,
         Tool::Centerline => Icon::Centerline,
         Tool::Rectangle => Icon::Rectangle,
+        Tool::CenterRectangle => Icon::CenterRectangle,
+        Tool::Rectangle3Corner => Icon::Rectangle3Corner,
+        Tool::Rectangle3Center => Icon::Rectangle3Center,
+        Tool::Parallelogram => Icon::Parallelogram,
+        Tool::StraightSlot => Icon::StraightSlot,
+        Tool::CenterSlot => Icon::CenterSlot,
+        Tool::ArcSlot3 => Icon::ArcSlot3,
+        Tool::CenterArcSlot => Icon::CenterArcSlot,
+        Tool::Polygon => Icon::Polygon,
         Tool::Circle => Icon::Circle,
+        Tool::PerimeterCircle => Icon::PerimeterCircle,
         Tool::Arc => Icon::Arc,
+        Tool::TangentArc => Icon::TangentArc,
+        Tool::Arc3 => Icon::Arc3,
         Tool::Point => Icon::Point,
         Tool::Dimension => Icon::Dimension,
+        Tool::Fillet => Icon::SketchFillet,
+        Tool::Chamfer => Icon::SketchChamfer,
+        Tool::Trim => Icon::Trim,
+        Tool::Extend => Icon::Extend,
+        Tool::Split => Icon::Split,
+        Tool::Offset => Icon::Offset,
+        Tool::Mirror => Icon::Mirror,
+        Tool::LinearPattern => Icon::SketchLinearPattern,
+        Tool::CircularPattern => Icon::SketchCircularPattern,
+        Tool::Move => Icon::Move,
+        Tool::Copy => Icon::Copy,
+        Tool::Rotate => Icon::Rotate,
+        Tool::Scale => Icon::Scale,
     }
+}
+
+/// A command-bar button for a family of sketch tools (sketch-entities.md, "Tool families
+/// and the property panel"): it shows the family's last-used tool, and the narrow arrow
+/// beside it opens a menu of the others.
+fn tool_family_button(ui: &mut egui::Ui, s: &mut SketchSession, family: &[Tool]) {
+    let active = family.contains(&s.tool);
+    let shown = if active { s.tool } else { s.family_tool(family) };
+    if theme::command_button(ui, tool_icon(shown), shown.bar_label(), Some(active))
+        .on_hover_text(shown.label())
+        .clicked()
+    {
+        s.set_tool(shown);
+    }
+    if family.len() < 2 {
+        return;
+    }
+    let pal = Palette::of(ui);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(10.0, 54.0), Sense::click());
+    let name = format!("More {} tools", family[0].label());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+    let ink = if resp.hovered() { pal.text } else { pal.text_weak };
+    let c = egui::pos2(rect.center().x, rect.top() + 20.0);
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![c + egui::vec2(-3.5, -2.0), c + egui::vec2(3.5, -2.0), c + egui::vec2(0.0, 2.5)],
+        ink,
+        Stroke::NONE,
+    ));
+    let id = ui.make_persistent_id(("sketch-tool-family", family[0].label()));
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    egui::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_min_width(220.0);
+        for &t in family {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), Sense::hover());
+                theme::paint_icon(ui.painter(), r, tool_icon(t), pal.text, pal.accent);
+                if ui.selectable_label(s.tool == t, t.label()).clicked() {
+                    s.set_tool(t);
+                }
+            });
+        }
+    });
 }
 
 /// The title of a panel in the left pane: an icon and a name, over a rule.
@@ -4223,13 +4340,15 @@ mod ui_tests {
     struct Harness {
         ctx: egui::Context,
         app: AnvilApp,
+        /// Modifier keys held during the next steps.
+        mods: Modifiers,
     }
 
     impl Harness {
         fn new() -> Harness {
             let ctx = egui::Context::default();
             let app = AnvilApp::new(&ctx, None, None, None);
-            let mut h = Harness { ctx, app };
+            let mut h = Harness { ctx, app, mods: Modifiers::NONE };
             h.step(vec![]);
             h.step(vec![]);
             h
@@ -4239,36 +4358,51 @@ mod ui_tests {
             let input = RawInput {
                 screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))),
                 events,
+                modifiers: self.mods,
                 ..Default::default()
             };
             let app = &mut self.app;
             let _ = self.ctx.run(input, |ctx| app.frame(ctx));
         }
 
-        fn button(p: Pos2, pressed: bool) -> Event {
-            Event::PointerButton {
-                pos: p,
-                button: PointerButton::Primary,
-                pressed,
-                modifiers: Default::default(),
-            }
+        fn button(&self, p: Pos2, pressed: bool) -> Event {
+            Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: self.mods }
         }
 
         fn click(&mut self, p: Pos2) {
             self.step(vec![Event::PointerMoved(p)]);
-            self.step(vec![Self::button(p, true)]);
-            self.step(vec![Self::button(p, false)]);
+            let (down, up) = (self.button(p, true), self.button(p, false));
+            self.step(vec![down]);
+            self.step(vec![up]);
             self.step(vec![]);
+        }
+
+        /// Clicks at a point of the open sketch.
+        fn click_at(&mut self, x: f64, y: f64) {
+            let p = self.screen(x, y);
+            self.click(p);
+        }
+
+        /// Moves the pointer to a point of the open sketch.
+        fn hover_at(&mut self, x: f64, y: f64) {
+            let p = self.screen(x, y);
+            self.step(vec![Event::PointerMoved(p)]);
+        }
+
+        fn session(&mut self) -> &mut SketchSession {
+            self.app.sketch.as_mut().expect("sketch open")
         }
 
         fn drag(&mut self, from: Pos2, to: Pos2) {
             self.step(vec![Event::PointerMoved(from)]);
-            self.step(vec![Self::button(from, true)]);
+            let down = self.button(from, true);
+            self.step(vec![down]);
             for i in 1..=8 {
                 let t = i as f32 / 8.0;
                 self.step(vec![Event::PointerMoved(from + (to - from) * t)]);
             }
-            self.step(vec![Self::button(to, false)]);
+            let up = self.button(to, false);
+            self.step(vec![up]);
             self.step(vec![]);
         }
 
@@ -4712,5 +4846,219 @@ mod ui_tests {
         assert!(sk.constraints.iter().any(|c| matches!(c, Constraint::Horizontal { line: 0 })));
         let profiles = sk.profiles().expect("closed profile");
         assert_eq!(profiles.len(), 1);
+    }
+
+    fn new_sketch(h: &mut Harness) {
+        h.app.start_sketch(PlaneRef::Front);
+        h.step(vec![]);
+    }
+
+    fn profile_area(h: &Harness) -> f64 {
+        let p = h.sketch().profiles().expect("closed profile");
+        assert_eq!(p.len(), 1);
+        p[0].area()
+    }
+
+    #[test]
+    fn straight_slot_by_three_clicks() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::StraightSlot);
+        h.click_at(-15.0, 10.0);
+        h.click_at(15.0, 10.0);
+        assert_eq!(h.sketch().entities.len(), 0, "the width pick is still to come");
+        h.click_at(0.0, 15.0);
+        let sk = h.sketch();
+        assert_eq!(sk.entities.iter().filter(|e| !e.construction).count(), 4);
+        assert_eq!(sk.entities.iter().filter(|e| e.construction).count(), 1);
+        let a = profile_area(&h);
+        assert!((a - (30.0 * 10.0 + std::f64::consts::PI * 25.0)).abs() < 0.05, "area {a}");
+        let st = &h.app.sketch.as_ref().unwrap().status;
+        assert!(st.converged && st.dof == 5, "a free slot has 5 freedoms: {st:?}");
+    }
+
+    #[test]
+    fn polygon_by_two_clicks_centred_on_the_origin() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Polygon);
+        h.session().params.polygon_circle = anvil_sketch::entities::PolygonCircle::Circumscribed;
+        h.click_at(0.0, 0.0);
+        h.click_at(10.0, 0.0);
+        let sk = h.sketch();
+        let sides: Vec<usize> = (0..sk.entities.len()).filter(|&e| sk.entities[e].is_line()).collect();
+        assert_eq!(sides.len(), 6);
+        for &l in &sides {
+            assert!((sk.line_length(l) - 10.0).abs() < 1e-3, "{}", sk.line_length(l));
+        }
+        // The centre snapped to the origin, so only the size and turn are free.
+        let st = &h.app.sketch.as_ref().unwrap().status;
+        assert!(st.converged && st.dof == 2, "{st:?}");
+        assert!((profile_area(&h) - 259.808).abs() < 0.05);
+    }
+
+    #[test]
+    fn sketch_fillets_by_clicking_corners() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Rectangle);
+        h.click_at(10.0, 10.0);
+        h.click_at(50.0, 30.0);
+        h.tool(Tool::Fillet);
+        h.session().params.fillet.radius = 5.0;
+        h.click_at(10.0, 10.0);
+        h.click_at(50.0, 30.0);
+        let sk = h.sketch();
+        let arcs: Vec<usize> = (0..sk.entities.len()).filter(|&e| !sk.entities[e].is_line()).collect();
+        assert_eq!(arcs.len(), 2);
+        assert!(sk.constraints.contains(&Constraint::Radius { entity: arcs[0], value: 5.0 }));
+        assert!(
+            sk.constraints.contains(&Constraint::Equal { a: arcs[0], b: arcs[1] }),
+            "later fillets follow the first"
+        );
+        let removed = 25.0 - 25.0 * std::f64::consts::PI / 4.0;
+        assert!((profile_area(&h) - (800.0 - 2.0 * removed)).abs() < 0.05, "{}", profile_area(&h));
+        assert!(h.app.sketch.as_ref().unwrap().status.converged);
+    }
+
+    #[test]
+    fn power_trim_by_click() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Line);
+        h.click_at(-10.0, 5.0);
+        h.click_at(10.0, 5.0);
+        h.tool(Tool::Line);
+        h.click_at(0.0, -5.0);
+        h.click_at(0.0, 15.0);
+        h.tool(Tool::Trim);
+        h.click_at(5.0, 5.0);
+        let sk = h.sketch();
+        let (a, b) = line_ends(sk, 0);
+        assert!(a.distance(v2(-10.0, 5.0)) < 1e-3 && b.distance(v2(0.0, 5.0)) < 1e-3, "{a:?} {b:?}");
+        assert!(sk.constraints.iter().any(|c| matches!(c, Constraint::PointOnLine { line: 1, .. })));
+    }
+
+    #[test]
+    fn tangent_arc_follows_the_pointer() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Line);
+        h.click_at(10.0, 10.0);
+        h.click_at(20.0, 10.0);
+        h.tool(Tool::TangentArc);
+        h.click_at(20.0, 10.0);
+        // Leave forwards along the line, then come round to the end.
+        h.hover_at(25.0, 10.5);
+        h.click_at(20.0, 20.0);
+        let sk = h.sketch();
+        let arc = sk.entities.len() - 1;
+        let Geom::Arc { c, .. } = sk.entities[arc].geom else { panic!("expected an arc") };
+        assert!(sk.pos(c).distance(v2(20.0, 15.0)) < 1e-3, "{:?}", sk.pos(c));
+        assert!((sk.radius(arc) - 5.0).abs() < 1e-3);
+        assert!(sk.constraints.contains(&Constraint::Tangent { line: 0, entity: arc }));
+    }
+
+    #[test]
+    fn centerpoint_arc_runs_the_way_the_pointer_went() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Arc);
+        h.click_at(10.0, 10.0);
+        h.click_at(20.0, 10.0);
+        // Clockwise, three quarters of the way round.
+        for (x, y) in [(17.0, 3.0), (10.0, 0.0), (3.0, 3.0), (0.0, 10.0)] {
+            h.hover_at(x, y);
+        }
+        h.click_at(10.0, 20.0);
+        let sk = h.sketch();
+        let len = sk.measure(&Constraint::ArcLength { entity: 0, value: 0.0 }).unwrap();
+        assert!((len - 10.0 * 1.5 * std::f64::consts::PI).abs() < 1e-2, "{len}");
+    }
+
+    #[test]
+    fn automatic_relations_from_the_pointer() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        // s26: 1.7 degrees off horizontal gets Horizontal, 5.7 degrees does not.
+        h.tool(Tool::Line);
+        h.click_at(0.0, 0.0);
+        h.click_at(10.0, 0.3);
+        h.tool(Tool::Line);
+        h.click_at(0.0, 20.0);
+        h.click_at(10.0, 21.0);
+        // With Ctrl held, a nearly horizontal line gets nothing.
+        h.tool(Tool::Line);
+        h.mods = Modifiers::CTRL;
+        h.click_at(0.0, 40.0);
+        h.click_at(10.0, 40.3);
+        h.mods = Modifiers::NONE;
+        let sk = h.sketch();
+        let horiz: Vec<usize> = sk
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                Constraint::Horizontal { line } => Some(*line),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(horiz, vec![0]);
+
+        // s27: a point on a line's midpoint marker stays at the midpoint.
+        h.tool(Tool::Point);
+        h.click_at(5.0, 20.5);
+        let sk = h.sketch();
+        let p = sk.points.len() - 1;
+        assert!(sk.constraints.contains(&Constraint::Midpoint { p, line: 1 }), "{:?}", sk.constraints);
+        let Geom::Line { b: end, .. } = sk.entities[1].geom else { panic!("a line") };
+        let id = h.app.sketch.as_ref().unwrap().feature;
+        let sf = h.app.doc.sketch_mut(id).unwrap();
+        assert!(sf.sketch.drag_point(end, v2(30.0, 25.0)).converged);
+        let (a, b) = line_ends(&sf.sketch, 1);
+        assert!(sf.sketch.pos(p).distance((a + b) * 0.5) < 1e-7);
+    }
+
+    #[test]
+    fn offset_a_rectangle_from_the_panel() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Rectangle);
+        h.click_at(10.0, 10.0);
+        h.click_at(50.0, 30.0);
+        h.tool(Tool::Offset);
+        h.click_at(30.0, 10.0);
+        assert_eq!(h.session().selected_entities(), vec![0]);
+        let id = h.app.sketch.as_ref().unwrap().feature;
+        let s = h.app.sketch.as_mut().unwrap();
+        s.params.offset.distance = 5.0;
+        s.apply(h.app.doc.sketch_mut(id).unwrap()).unwrap();
+        h.step(vec![]);
+        let sk = h.sketch();
+        assert_eq!(sk.entities.len(), 8);
+        let xs: Vec<f64> = sk.points.iter().skip(1).map(|p| p.x).collect();
+        let lo = xs.iter().copied().fold(f64::MAX, f64::min);
+        let hi = xs.iter().copied().fold(f64::MIN, f64::max);
+        assert!((lo - 5.0).abs() < 1e-3 && (hi - 55.0).abs() < 1e-3, "{lo} {hi}");
+        assert!(sk.constraints.iter().any(|c| matches!(c, Constraint::Offset { .. })));
+    }
+
+    #[test]
+    fn deleting_a_split_point_joins_the_line() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Line);
+        h.click_at(10.0, 10.0);
+        h.click_at(50.0, 10.0);
+        h.tool(Tool::Split);
+        h.click_at(20.0, 10.0);
+        assert_eq!(h.sketch().entities.len(), 2);
+        let p = h.sketch().pick_point(v2(20.0, 10.0), 0.5).expect("split point");
+        h.tool(Tool::Select);
+        let s = h.app.sketch.as_mut().unwrap();
+        s.selection = vec![SkSel::Point(p)];
+        let id = s.feature;
+        s.delete_selection(h.app.doc.sketch_mut(id).unwrap());
+        assert_eq!(h.sketch().entities.len(), 1);
+        assert!((h.sketch().line_length(0) - 40.0).abs() < 1e-3);
     }
 }
