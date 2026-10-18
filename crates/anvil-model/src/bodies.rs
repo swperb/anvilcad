@@ -369,8 +369,11 @@ mod tests {
     use super::*;
     use anvil_kernel::v2;
 
+    /// A rectangle's two corners and the box's height.
+    type Boxed = ((f64, f64), (f64, f64), f64);
+
     /// A new part with a box per rectangle, each its own body (merge result off).
-    fn boxes(rects: &[((f64, f64), (f64, f64), f64)]) -> (Document, Vec<u32>) {
+    fn boxes(rects: &[Boxed]) -> (Document, Vec<u32>) {
         let mut doc = Document::new();
         let mut ids = Vec::new();
         for &(a, b, h) in rects {
@@ -411,9 +414,9 @@ mod tests {
         st
     }
 
-    const A: ((f64, f64), (f64, f64), f64) = ((0.0, 0.0), (10.0, 10.0), 10.0);
-    const B: ((f64, f64), (f64, f64), f64) = ((5.0, 0.0), (15.0, 10.0), 10.0);
-    const D: ((f64, f64), (f64, f64), f64) = ((20.0, 0.0), (30.0, 10.0), 10.0);
+    const A: Boxed = ((0.0, 0.0), (10.0, 10.0), 10.0);
+    const B: Boxed = ((5.0, 0.0), (15.0, 10.0), 10.0);
+    const D: Boxed = ((20.0, 0.0), (30.0, 10.0), 10.0);
 
     #[test]
     fn s01_merge_result_off_makes_bodies() {

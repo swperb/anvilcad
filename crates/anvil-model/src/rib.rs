@@ -11,7 +11,7 @@ use crate::thin::chains;
 use anvil_brep as brep;
 use anvil_brep::boolean::{boolean, contains_point, BoolOp};
 use anvil_kernel::offset::thin_wall;
-use anvil_kernel::{v2, Loop2, Profile, Seg2, Vec2, Vec3};
+use anvil_kernel::{Loop2, Profile, Seg2, Vec2, Vec3};
 use serde::{Deserialize, Serialize};
 
 /// Which side of the contour a rib's thickness goes.
@@ -231,7 +231,7 @@ impl Document {
 mod tests {
     //! Rib statements 1, 3, 4 and 5 of `docs/re/rib-draft-dome.md`.
     use super::*;
-    use anvil_kernel::FaceId;
+    use anvil_kernel::{v2, FaceId};
 
     /// The open box: [0,100] x [0,60] x [0,30], 5 mm walls and floor, open at the top.
     fn open_box() -> Document {
