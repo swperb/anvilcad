@@ -825,6 +825,7 @@ pub enum FeatureKind {
     Sweep(crate::sweep::SweepFeature),
     Draft(crate::modify::DraftFeature),
     Dome(crate::modify::DomeFeature),
+    Loft(crate::loft::LoftFeature),
 }
 
 impl FeatureKind {
@@ -851,6 +852,8 @@ impl FeatureKind {
             FeatureKind::Sweep(s) if s.op == BodyOp::Cut => "Cut-Sweep",
             FeatureKind::Sweep(_) => "Sweep",
             FeatureKind::Draft(_) => "Draft",
+            FeatureKind::Loft(l) if l.op == BodyOp::Cut => "Cut-Loft",
+            FeatureKind::Loft(_) => "Loft",
             FeatureKind::Dome(_) => "Dome",
             FeatureKind::Axis(_) => "Axis",
             FeatureKind::Point(_) => "Point",
@@ -881,6 +884,7 @@ impl FeatureKind {
             FeatureKind::Axis(a) => a.kind.dependencies(),
             FeatureKind::Sweep(s) => s.dependencies(),
             FeatureKind::Draft(d) => d.dependencies(),
+            FeatureKind::Loft(l) => l.profiles.clone(),
             FeatureKind::Dome(d) => d.dependencies(),
             FeatureKind::Point(p) => p.dependencies(),
             FeatureKind::CoordSys(c) => c.dependencies(),

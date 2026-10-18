@@ -26,7 +26,7 @@ pub fn frame(f: &Frame) -> brep::Frame {
     brep::Frame { origin: d3(f.origin), x: d3(f.x), y: d3(f.y), z: d3(f.z) }
 }
 
-fn exact_loop(l: &Loop2) -> brep::Loop2 {
+pub(crate) fn exact_loop(l: &Loop2) -> brep::Loop2 {
     let mut segs = Vec::with_capacity(l.segs.len());
     let mut tags = Vec::with_capacity(l.segs.len());
     for s in &l.segs {

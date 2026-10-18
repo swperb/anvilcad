@@ -222,6 +222,7 @@ pub enum Icon {
     Sweep,
     Draft,
     Dome,
+    Loft,
     Measure,
     Imported,
     Select,
@@ -417,6 +418,13 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             // A cylinder with a rounded cap.
             arc((8.0, 8.0), 5.0, 0.0, 180.0, hi);
             path(&[(3.0, 8.0), (3.0, 14.0), (13.0, 14.0), (13.0, 8.0)], ln);
+        }
+        Icon::Loft => {
+            // A wide square joined by straight rulings to a small one above it.
+            poly(&[(1.5, 14.0), (14.5, 14.0), (11.5, 11.0), (4.5, 11.0)], tint, ln);
+            poly(&[(5.5, 3.0), (10.5, 3.0), (10.5, 6.0), (5.5, 6.0)], Color32::TRANSPARENT, ln);
+            line((1.5, 14.0), (5.5, 6.0), hi);
+            line((14.5, 14.0), (10.5, 6.0), hi);
         }
         Icon::Measure => {
             // A rule with ticks.

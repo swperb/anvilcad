@@ -841,6 +841,28 @@ impl AnvilApp {
         });
     }
 
+    /// Lofts between the two newest sketches, in tree order.
+    fn cmd_loft(&mut self) {
+        if self.sketch.is_some() {
+            self.exit_sketch();
+        }
+        let mut sketches: Vec<u32> = self
+            .doc
+            .features
+            .iter()
+            .filter(|f| matches!(f.kind, FeatureKind::Sketch(_)))
+            .map(|f| f.id)
+            .collect();
+        if sketches.len() < 2 {
+            self.message = Some(("Loft".into(), "Draw the two profiles in two sketches first.".into()));
+            return;
+        }
+        let profiles = sketches.split_off(sketches.len() - 2);
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::Loft(LoftFeature { profiles, op: BodyOp::Boss }));
+        self.open_editor(id, before, true);
+    }
+
     fn cmd_draft(&mut self) {
         if self.state.body.is_empty() {
             self.message = Some(("Draft".into(), "There is no body to draft yet.".into()));
@@ -1238,6 +1260,9 @@ impl AnvilApp {
                         }
                         if theme::command_button(ui, Icon::Sweep, "Swept Boss/Base", None).clicked() {
                             self.cmd_sweep();
+                        }
+                        if theme::command_button(ui, Icon::Loft, "Lofted Boss/Base", None).clicked() {
+                            self.cmd_loft();
                         }
                         if theme::command_button(ui, Icon::Draft, "Draft", None).clicked() {
                             self.cmd_draft();
@@ -2041,6 +2066,12 @@ impl AnvilApp {
                             });
                         ui.label(format!("{} face(s) to draft.", d.faces.len()));
                         ui.weak("Click faces in the graphics area to add or remove them.");
+                    }
+                    FeatureKind::Loft(l) => {
+                        let names: Vec<String> =
+                            l.profiles.iter().filter_map(|i| sketch_names.get(i).cloned()).collect();
+                        ui.label(format!("Profiles: {}", names.join(", ")));
+                        changed |= op_combo(ui, &mut l.op);
                     }
                     FeatureKind::Dome(d) => {
                         changed |= dim_edit(ui, "Height (mm)", &mut d.height, bufs, "height", &vars);
@@ -3615,6 +3646,7 @@ fn kind_name(k: &FeatureKind) -> &'static str {
         FeatureKind::Sweep(_) => "Sweep",
         FeatureKind::Draft(_) => "Draft",
         FeatureKind::Dome(_) => "Dome",
+        FeatureKind::Loft(_) => "Loft",
     }
 }
 
@@ -3639,6 +3671,7 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Sweep(_) => Icon::Sweep,
         FeatureKind::Draft(_) => Icon::Draft,
         FeatureKind::Dome(_) => Icon::Dome,
+        FeatureKind::Loft(_) => Icon::Loft,
     }
 }
 
