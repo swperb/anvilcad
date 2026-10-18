@@ -3268,6 +3268,7 @@ fn kind_name(k: &FeatureKind) -> &'static str {
         FeatureKind::Axis(_) => "Axis",
         FeatureKind::Point(_) => "Point",
         FeatureKind::CoordSys(_) => "CoordinateSystem",
+        FeatureKind::Sweep(_) => "Sweep",
     }
 }
 
@@ -3289,6 +3290,7 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Mirror(_) => Icon::LinearPattern,
         FeatureKind::SketchPattern(_) => Icon::LinearPattern,
         FeatureKind::Axis(_) | FeatureKind::Point(_) | FeatureKind::CoordSys(_) => Icon::Plane,
+        FeatureKind::Sweep(_) => Icon::Extrude,
     }
 }
 

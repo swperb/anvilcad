@@ -331,6 +331,28 @@ impl Document {
                 }
                 st.tools.insert(id, (tool, ef.op));
             }
+            FeatureKind::Sweep(sw) => {
+                let plan = self.plan_sweep(&sw, st)?;
+                let tool = plan.faceted(id)?;
+                let mut exact_tools = None;
+                let done = st.exact_step(id, |bodies| {
+                    let tools = plan.exact(id)?;
+                    let mut out = bodies.to_vec();
+                    for t in &tools {
+                        out = exact::combine(&out, t, sw.op)?;
+                    }
+                    exact_tools = Some(tools);
+                    Ok(out)
+                });
+                if done {
+                    if let Some(t) = exact_tools {
+                        st.exact_tools.insert(id, (t, sw.op));
+                    }
+                } else {
+                    apply(&mut st.body, &tool, sw.op)?;
+                }
+                st.tools.insert(id, (tool, sw.op));
+            }
             FeatureKind::Revolve(rf) => {
                 if rf.flip_side {
                     return Err("flip side to cut is not available for revolves yet".into());

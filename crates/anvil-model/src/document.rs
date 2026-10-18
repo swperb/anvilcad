@@ -822,6 +822,7 @@ pub enum FeatureKind {
     Axis(crate::refgeom::AxisFeature),
     Point(crate::refgeom::PointFeature),
     CoordSys(crate::refgeom::CoordSysFeature),
+    Sweep(crate::sweep::SweepFeature),
 }
 
 impl FeatureKind {
@@ -845,6 +846,8 @@ impl FeatureKind {
             FeatureKind::Shell(_) => "Shell",
             FeatureKind::Hole(_) => "Hole",
             FeatureKind::Mirror(_) => "Mirror",
+            FeatureKind::Sweep(s) if s.op == BodyOp::Cut => "Cut-Sweep",
+            FeatureKind::Sweep(_) => "Sweep",
             FeatureKind::Axis(_) => "Axis",
             FeatureKind::Point(_) => "Point",
             FeatureKind::CoordSys(_) => "Coordinate System",
@@ -872,6 +875,7 @@ impl FeatureKind {
                 v
             }
             FeatureKind::Axis(a) => a.kind.dependencies(),
+            FeatureKind::Sweep(s) => s.dependencies(),
             FeatureKind::Point(p) => p.dependencies(),
             FeatureKind::CoordSys(c) => c.dependencies(),
             FeatureKind::LinearPattern(p) => p.features.clone(),

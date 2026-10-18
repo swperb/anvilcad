@@ -18,6 +18,7 @@ pub mod rebuild;
 pub mod refgeom;
 mod revolve;
 pub mod step;
+pub mod sweep;
 pub mod thin;
 
 pub use config::{ConfigError, ConfigParam, ConfigValue, Configuration, ConfiguredParam, DimSlot};
@@ -29,6 +30,7 @@ pub use refgeom::{
     AlongMode, ArcRef, AxisFeature, AxisKind, CoordSysFeature, DirRef, IntersectWith, LineRef, PlaneKind,
     PointFeature,
 };
+pub use sweep::{SweepDirection, SweepFeature};
 
 #[cfg(test)]
 mod tests {
