@@ -210,10 +210,18 @@ fn find_edges(bodies: &[brep::Solid], e: &EdgeRef) -> Vec<(usize, brep::EdgeId)>
 }
 
 /// Fillets or chamfers the named edges. Every run of an edge is blended.
+/// A blend as a feature gives it. An angle-distance chamfer's distance runs along one of
+/// each edge's two named faces: the first, or the second when flipped.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Treatment {
+    Plain(brep::blend::Blend),
+    AngleChamfer { distance: f64, angle: f64, flip: bool },
+}
+
 pub fn blend(
     bodies: &[brep::Solid],
     edges: &[EdgeRef],
-    kind: brep::blend::Blend,
+    treatment: Treatment,
     feature: u32,
 ) -> Result<Vec<brep::Solid>, String> {
     if edges.is_empty() {
@@ -237,8 +245,20 @@ pub fn blend(
             .enumerate()
             .flat_map(|(k, e)| find_edges(&bodies, e).into_iter().map(move |(b, id)| (b, id, k)))
             .collect();
-        let Some(&(b, first, _)) = found.first() else {
+        let Some(&(b, first, k)) = found.first() else {
             return Ok(bodies);
+        };
+        let kind = match treatment {
+            Treatment::Plain(kind) => kind,
+            Treatment::AngleChamfer { distance, angle, flip } => {
+                let name = if flip { edges[k].b } else { edges[k].a };
+                let along = bodies[b]
+                    .faces
+                    .iter()
+                    .position(|f| face_id(f) == name)
+                    .ok_or("the face a chamfer's distance runs along no longer exists")?;
+                brep::blend::Blend::ChamferAngle { distance, angle, along }
+            }
         };
         let candidates: Vec<brep::EdgeId> = found.iter().filter(|f| f.0 == b).map(|f| f.1).collect();
         let run = brep::blend::smooth_run(&bodies[b], first, &candidates);

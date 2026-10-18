@@ -106,7 +106,17 @@ Silent or ambiguous:
   rolling-ball round. On flat faces this is the same bevel as the closed-form chamfer.
   This is not the published offset face chamfer, which sets back d cot(phi / 2) on faces
   meeting at angle phi; AnvilCAD keeps one meaning of a chamfer's size for every edge.
-  Offset face chamfers could be offered as an option later.
+- A chamfer can instead be an offset face chamfer, as published: the faces offset by the
+  distance meet at a point (in each section, where a ball of that radius touching both
+  faces has its centre), and the bevel joins the feet of the normals from it, straight.
+- Or an angle and distance chamfer: the distance along one face, then the bevel leaving
+  that face at the angle, straight across to the other. The pages say the distance's
+  direction can be flipped but not which face the angle is measured from; AnvilCAD
+  measures it from the face the distance runs along, which is the edge's first face (by
+  the faces' names) unless flipped. On flat faces meeting at phi it sets back
+  d sin(a) / sin(phi + a) on the other face.
+- Offset face and angle and distance chamfers need the exact kernel; a part already
+  handed to the faceted kernel reports that rather than building them.
 - Runs mixing convex and concave edges, conic and curvature-continuous profiles, hold lines,
   overflow choices and round corners are not offered yet; those fall back to the faceted
   kernel or are refused.

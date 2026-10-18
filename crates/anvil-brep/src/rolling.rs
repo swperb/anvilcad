@@ -113,6 +113,18 @@ struct Leg<'a> {
     dir: f64,
 }
 
+/// How a chamfer's bevel is set out in each section.
+#[derive(Clone, Copy, PartialEq)]
+enum BevelKind {
+    /// The same distance from the edge on both faces (as a chord in the section).
+    Equal,
+    /// The distance from the edge on side A's face, leaving it at this angle (radians).
+    Angle(f64),
+    /// Between where a ball of the distance would touch the faces: the faces offset by
+    /// the distance meet at its centre.
+    Offset,
+}
+
 /// Rates of change of a section's rows along the run.
 type Rates = [(DVec3, f64); 6];
 
@@ -125,6 +137,8 @@ struct Roller<'a> {
     radius: f64,
     /// A chamfer's straight bevel rather than a fillet's round.
     bevel: bool,
+    /// Which bevel.
+    kind: BevelKind,
     /// Whether the run is convex (the tool is cut away).
     convex: bool,
     /// The centre's signed distance from both faces: inside at a convex edge.
@@ -191,9 +205,85 @@ impl Roller<'_> {
     /// The exact section in the plane square to the run at `t`, its centre found from
     /// `guess`, between the faces of the leg there.
     fn section(&self, t: f64, near: &Section) -> Option<Section> {
-        if self.bevel {
-            return self.bevel_section(t);
+        match (self.bevel, self.kind) {
+            (false, _) => self.round_section(t, near),
+            (true, BevelKind::Equal) => self.bevel_section(t),
+            (true, BevelKind::Angle(angle)) => self.angle_section(t, angle),
+            (true, BevelKind::Offset) => {
+                // The ball's contacts, joined straight.
+                let s = self.round_section(t, near)?;
+                let leg = &self.legs[self.leg_at(t)];
+                Some(self.bevel_between(s.edge, s.a, s.b, leg))
+            }
         }
+    }
+
+    /// The leg the section at `t` uses.
+    fn leg_at(&self, t: f64) -> usize {
+        let n = self.span();
+        let tt = if self.closed { t.rem_euclid(n) } else { t.clamp(0.0, n) };
+        self.leg_of(tt).0
+    }
+
+    /// A bevel section from `a` (on side A's face) straight to `b` (on side B's), the
+    /// edge's point there being `e`, its sides pushed off the faces (out of the part at a
+    /// convex edge, into it at a concave one).
+    fn bevel_between(&self, e: DVec3, a: DVec3, b: DVec3, leg: &Leg) -> Section {
+        let (fa, fb) = (&self.solid.faces[leg.fa], &self.solid.faces[leg.fb]);
+        let sign = if self.convex { 1.0 } else { -1.0 };
+        let (da, db) = (foot(fa, a).1 * sign, foot(fb, b).1 * sign);
+        let corner = (a + b) * 0.5;
+        Section {
+            edge: e,
+            centre: corner,
+            a,
+            b,
+            corner,
+            weight: 1.0,
+            a_off: a + da * self.push,
+            b_off: b + db * self.push,
+            corner_off: e + (da + db) * self.push,
+        }
+    }
+
+    /// The exact angle-distance chamfer section at `t`: the point on side A's face the
+    /// chamfer's distance from the edge (as for an equal-distance bevel), and from it a
+    /// straight line leaving that face at `angle` across the corner to side B's face.
+    fn angle_section(&self, t: f64, angle: f64) -> Option<Section> {
+        let first = self.bevel_section(t)?;
+        let (e, a) = (first.edge, first.a);
+        let leg = &self.legs[self.leg_at(t)];
+        let (fa, fb) = (&self.solid.faces[leg.fa], &self.solid.faces[leg.fb]);
+        let na = foot(fa, a).1;
+        // Along face A back towards the edge, then turned by the angle across the corner
+        // (into the part at a convex edge, out of it at a concave one).
+        let back = ((e - a) - na * (e - a).dot(na)).normalize_or_zero();
+        let across = if self.convex { -na } else { na };
+        let dir = back * angle.cos() + across * angle.sin();
+        // Where that line meets side B's face, by Newton's method from the flat estimate.
+        let mut l = (e - a).length();
+        let tol = 1e-13 * self.size;
+        for _ in 0..60 {
+            let p = a + dir * l;
+            let f = outside(fb, p);
+            if f.abs() < tol {
+                let b = p;
+                return Some(self.bevel_between(e, a, b, leg));
+            }
+            let d = foot(fb, p).1.dot(dir);
+            if d.abs() < 1e-12 {
+                return None;
+            }
+            l -= f / d;
+            if l <= 0.0 {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// The exact rolling-ball section at `t`, its centre found from `near`'s.
+    fn round_section(&self, t: f64, near: &Section) -> Option<Section> {
         let guess = near.centre;
         let (e, tangent) = self.point(t);
         let n = self.span();
@@ -290,22 +380,7 @@ impl Roller<'_> {
         };
         let a = on(fa, e + away(na, nb) * c)?;
         let b = on(fb, e + away(nb, na) * c)?;
-        // The sides go off the faces: out of the part at a convex edge, into it at a
-        // concave one.
-        let sign = if self.convex { 1.0 } else { -1.0 };
-        let (da, db) = (foot(fa, a).1 * sign, foot(fb, b).1 * sign);
-        let corner = (a + b) * 0.5;
-        Some(Section {
-            edge: e,
-            centre: corner,
-            a,
-            b,
-            corner,
-            weight: 1.0,
-            a_off: a + da * self.push,
-            b_off: b + db * self.push,
-            corner_off: e + (da + db) * self.push,
-        })
+        Some(self.bevel_between(e, a, b, leg))
     }
 }
 
@@ -321,17 +396,36 @@ pub fn rolling_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) ->
 /// one ball rolls along the whole run, touching the faces of each edge in turn, so the
 /// round is one face from end to end.
 pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base: u32) -> Result<Tool> {
-    let (radius, bevel) = match blend {
-        Blend::Fillet(r) => (r, false),
-        Blend::Chamfer(c) => (c, true),
+    let (radius, bevel, kind, along) = match blend {
+        Blend::Fillet(r) => (r, false, BevelKind::Equal, None),
+        Blend::Chamfer(c) => (c, true, BevelKind::Equal, None),
+        Blend::ChamferOffset(d) => (d, true, BevelKind::Offset, None),
+        Blend::ChamferAngle { distance, angle, along } => {
+            if !(angle > 0.0 && angle < std::f64::consts::PI) {
+                return Err(KernelError::InvalidInput(
+                    "the chamfer's angle must be between 0 and 180 degrees".into(),
+                ));
+            }
+            (distance, true, BevelKind::Angle(angle), Some(along))
+        }
     };
     if !(radius.is_finite() && radius > 0.0) {
         return Err(KernelError::InvalidInput("the size must be a positive number".into()));
     }
     let size = solid.bounds().map_or(1.0, |(lo, hi)| (hi - lo).length().max(1.0));
     let (legs, closed) = run_in_order(solid, edges)?;
-    let mut roller =
-        Roller { solid, legs, radius, bevel, convex: true, target: 0.0, push: 0.5 * radius, closed, size };
+    let mut roller = Roller {
+        solid,
+        legs,
+        radius,
+        bevel,
+        kind,
+        convex: true,
+        target: 0.0,
+        push: 0.5 * radius,
+        closed,
+        size,
+    };
     // The faces at the first leg's middle, which way the run bends, and a first centre.
     let (pm, dm) = roller.on_leg(0, 0.5);
     let first_leg = roller.legs[0].id;
@@ -351,6 +445,18 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
     roller.convex = convex;
     // The same side of the run on every leg, and the same bend.
     assign_sides(solid, &mut roller.legs, convex)?;
+    // An angle-distance bevel measures along a chosen face: that side is side A.
+    if let Some(f) = along {
+        if roller.legs[0].fb == f {
+            for leg in &mut roller.legs {
+                std::mem::swap(&mut leg.fa, &mut leg.fb);
+            }
+        } else if roller.legs[0].fa != f {
+            return Err(KernelError::InvalidInput(
+                "the face the chamfer's distance is measured along is not at this edge".into(),
+            ));
+        }
+    }
     let (wa, wb) = {
         let s = crate::blend::edge_sides(
             solid,

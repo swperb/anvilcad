@@ -817,7 +817,11 @@ impl Ctx<'_> {
                 }
                 let items = data.call("Edges", &[]).map_err(err)?.objects();
                 let edges = self.map_edges(&items)?;
-                Ok(vec![FeatureKind::Chamfer(ChamferFeature { edges, distance: Dim::Value(d1) })])
+                Ok(vec![FeatureKind::Chamfer(ChamferFeature {
+                    edges,
+                    distance: Dim::Value(d1),
+                    kind: ChamferKind::EqualDistance,
+                })])
             }),
             "Shell" => with_selections(&data, &self.model, || {
                 if data.i64("GetMultipleThicknessFacesCount", &[]).unwrap_or(0) > 0 {
