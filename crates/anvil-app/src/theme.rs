@@ -217,6 +217,7 @@ pub enum Icon {
     Fillet,
     Chamfer,
     Shell,
+    Hole,
     Imported,
     Select,
     Line,
@@ -224,6 +225,7 @@ pub enum Icon {
     Rectangle,
     Circle,
     Arc,
+    Point,
     Dimension,
     ExitSketch,
     Mass,
@@ -375,6 +377,14 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             line((2.0, 3.0), (4.5, 3.0), ln);
             line((11.5, 3.0), (14.0, 3.0), ln);
         }
+        Icon::Hole => {
+            // A counterbored hole in section.
+            path(&[(1.5, 3.0), (4.0, 3.0), (4.0, 7.0), (6.0, 7.0), (6.0, 14.0)], ln);
+            path(&[(14.5, 3.0), (12.0, 3.0), (12.0, 7.0), (10.0, 7.0), (10.0, 14.0)], ln);
+            line((1.5, 14.0), (6.0, 14.0), ln);
+            line((10.0, 14.0), (14.5, 14.0), ln);
+            line((8.0, 1.5), (8.0, 15.0), hi);
+        }
         Icon::Imported => {
             cube(1);
             line((6.25, 0.5), (6.25, 4.0), hi);
@@ -404,6 +414,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
         Icon::Circle => {
             painter.circle_stroke(p(8.0, 8.0), 5.8 * s, ln);
             dot(8.0, 8.0, accent);
+        }
+        Icon::Point => {
+            line((3.0, 8.0), (13.0, 8.0), hi);
+            line((8.0, 3.0), (8.0, 13.0), hi);
+            painter.circle_filled(p(8.0, 8.0), 2.2 * s, ink);
         }
         Icon::Arc => {
             arc((8.0, 11.0), 6.0, 0.0, 180.0, ln);

@@ -42,6 +42,9 @@ system are still ahead; see the roadmap.
   into each other are blended as one; convex edges are rounded off, concave edges are
   filled in
 - Shell to a uniform wall thickness, with any faces opened
+- Holes at sketch points: drilled, counterbored, countersunk and tapped, blind (with a
+  drill point) or through, with an optional near-side countersink, sized from ISO metric
+  and ANSI inch fastener tables
 - Reference planes offset from planes or faces
 - Sketch on Front/Top/Right planes, reference planes, or any planar model face
 - Edit, suppress, rename, delete (with dependents), roll back

@@ -500,7 +500,65 @@ impl Document {
                     st.body = shell(&st.body, &s.remove, thickness, id).map_err(|e| e.to_string())?;
                 }
             }
+            FeatureKind::Hole(h) => self.rebuild_hole(id, &h, st)?,
         }
+        Ok(())
+    }
+
+    /// Cuts one hole at each free point of the hole's sketch. Each hole is its section
+    /// turned about the hole's axis; see `docs/re/hole-wizard.md`.
+    fn rebuild_hole(&self, id: u32, h: &crate::hole::HoleFeature, st: &mut BuildState) -> Result<(), String> {
+        let sf = self.sketch(h.sketch).ok_or("the sketch this feature uses is missing")?;
+        let frame = self.sketch_profiles_frame(h.sketch, st)?;
+        let centers = crate::hole::positions(&sf.sketch);
+        if centers.is_empty() {
+            return Err("the sketch has no points to place holes at; add sketch points".into());
+        }
+        let section = h.resolve(&st.variables)?;
+        if st.body.is_empty() {
+            return Err("there is no body to cut".into());
+        }
+        let b = st.body.bounds();
+        let through = b.diagonal() + (b.center() - frame.origin).length() + 1.0;
+        let profile =
+            anvil_kernel::Profile::new(anvil_kernel::Loop2::polygon(&section.outline(through), 0), vec![]);
+        let profiles = [profile];
+        // The section lies in a plane through the axis: x across it, y out of the face.
+        let out = if h.reverse { -frame.z } else { frame.z };
+        let place = |c: anvil_kernel::Vec2| {
+            let x = frame.x;
+            Frame { origin: frame.origin + frame.x * c.x + frame.y * c.y, x, y: out, z: x.cross(out) }
+        };
+        let axis = (anvil_kernel::v2(0.0, 0.0), anvil_kernel::v2(0.0, 1.0));
+        let full = std::f64::consts::TAU;
+
+        let mut faceted = Vec::new();
+        for &c in &centers {
+            faceted.push(revolve(&profiles, &place(c), axis.0, axis.1, full, id).map_err(|e| e.to_string())?);
+        }
+        let mut exact_tools = Vec::new();
+        let done = st.exact_step(id, |bodies| {
+            let mut out = bodies.to_vec();
+            for &c in &centers {
+                for t in exact::revolve(&profiles, &place(c), axis.0, axis.1, full, id)? {
+                    out = exact::combine(&out, &t, BodyOp::Cut)?;
+                    exact_tools.push(t);
+                }
+            }
+            Ok(out)
+        });
+        if done {
+            st.exact_tools.insert(id, (exact_tools, BodyOp::Cut));
+        } else {
+            for t in &faceted {
+                apply(&mut st.body, t, BodyOp::Cut)?;
+            }
+        }
+        let mut polys = Vec::new();
+        for t in faceted {
+            polys.extend(t.polygons);
+        }
+        st.tools.insert(id, (Solid::new(polys), BodyOp::Cut));
         Ok(())
     }
 

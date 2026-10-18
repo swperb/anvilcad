@@ -17,6 +17,7 @@ pub enum Tool {
     Rectangle,
     Circle,
     Arc,
+    Point,
     Dimension,
 }
 
@@ -29,6 +30,7 @@ impl Tool {
             Tool::Rectangle => "Rectangle",
             Tool::Circle => "Circle",
             Tool::Arc => "Centerpoint Arc",
+            Tool::Point => "Point",
             Tool::Dimension => "Dimension",
         }
     }
@@ -315,6 +317,14 @@ impl SketchSession {
                         }
                     } else {
                         self.pending.push(c);
+                    }
+                }
+                Tool::Point => {
+                    // A lone point, e.g. where a hole goes. Clicking an existing point
+                    // adds nothing.
+                    if sk.pick_point(mouse, radius).is_none() {
+                        sk.add_point(mouse);
+                        out.modified = true;
                     }
                 }
                 Tool::Circle => {
