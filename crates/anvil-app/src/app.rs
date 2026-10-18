@@ -814,12 +814,14 @@ impl AnvilApp {
                 edges: Vec::new(),
                 distance: Dim::Value(1.0),
                 kind: ChamferKind::EqualDistance,
+                tangent_propagation: true,
             })
         } else {
             FeatureKind::Fillet(FilletFeature {
                 edges: Vec::new(),
                 radius: Dim::Value(2.0),
                 profile: FilletProfile::Circular,
+                tangent_propagation: true,
             })
         };
         let id = self.doc.add_feature(kind);
@@ -1637,6 +1639,10 @@ impl AnvilApp {
                             }
                             _ => {}
                         }
+                        changed |= ui
+                            .checkbox(&mut fl.tangent_propagation, "Tangent propagation")
+                            .on_hover_text("Also blend the edges that run smoothly on from the selected ones (on the exact kernel)")
+                            .changed();
                         ui.label(format!("{} edge(s) selected.", fl.edges.len()));
                         ui.weak("Click edges in the graphics area to add or remove them.");
                         if !fl.edges.is_empty() && ui.button("Clear selection").clicked() {
@@ -1680,6 +1686,10 @@ impl AnvilApp {
                             );
                             changed |= ui.checkbox(flip, "Measure along the other face").changed();
                         }
+                        changed |= ui
+                            .checkbox(&mut ch.tangent_propagation, "Tangent propagation")
+                            .on_hover_text("Also blend the edges that run smoothly on from the selected ones (on the exact kernel)")
+                            .changed();
                         ui.label(format!("{} edge(s) selected.", ch.edges.len()));
                         ui.weak("Click edges in the graphics area to add or remove them.");
                         if !ch.edges.is_empty() && ui.button("Clear selection").clicked() {

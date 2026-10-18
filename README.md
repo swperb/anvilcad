@@ -37,7 +37,8 @@ system are still ahead; see the roadmap.
 - Revolved Boss and Revolved Cut about any sketch line
 - Linear Pattern and Circular Pattern (about any axis)
 - Fillet (constant radius, with a circular, conic rho, conic radius or
-  curvature-continuous profile) and Chamfer (equal distance, angle and distance, or offset
+  curvature-continuous profile, and tangent propagation to the edges that run smoothly on
+  from those selected) and Chamfer (equal distance, angle and distance, or offset
   face) on any edge between two faces, built exactly: straight and round edges in closed
   form, any other edge with a rolling-ball round or a swept bevel; edges that run smoothly
   into each other are blended as one; convex edges are rounded off, concave edges are

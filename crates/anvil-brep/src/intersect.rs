@@ -264,14 +264,25 @@ fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) ->
         return Ok(Ssi::Curves(vec![Curve::Circle { frame: cone.with_origin(center), radius }]));
     }
     let apex = crate::geom::cone_apex(cone, r, half_angle);
-    if cos.abs() < PARALLEL && (apex - plane.origin).dot(n).abs() < tol {
-        // A plane through the axis: the two generators in it.
-        let side = n.cross(axis).normalize();
+    if (apex - plane.origin).dot(n).abs() < tol {
+        // A plane through the apex: the generators in it, where n . g = 0 for the
+        // generator g = axis cos(a) + (x cos(t) + y sin(t)) sin(a). Two where the plane
+        // cuts into the cone, one where it touches it along a generator (the bevel plane
+        // of a straight edge's chamfer running on into an arc's), none where it misses.
         let (c, s) = (half_angle.cos(), half_angle.sin());
-        return Ok(Ssi::Curves(vec![
-            Curve::Line { origin: apex, dir: axis * c + side * s },
-            Curve::Line { origin: apex, dir: axis * c - side * s },
-        ]));
+        let (ca, cb, cc) = (n.dot(cone.x) * s, n.dot(cone.y) * s, -cos * c);
+        let len = (ca * ca + cb * cb).sqrt();
+        let generator = |t: f64| axis * c + (cone.x * t.cos() + cone.y * t.sin()) * s;
+        if len < PARALLEL || len < cc.abs() * (1.0 - 1e-9) {
+            return Ok(Ssi::None);
+        }
+        let phase = cb.atan2(ca);
+        let spread = (cc / len).clamp(-1.0, 1.0).acos();
+        let mut curves = vec![Curve::Line { origin: apex, dir: generator(phase + spread) }];
+        if spread > 1e-9 {
+            curves.push(Curve::Line { origin: apex, dir: generator(phase - spread) });
+        }
+        return Ok(Ssi::Curves(curves));
     }
     // At an angle: an ellipse when the plane cuts every generator, traced in general.
     Ok(Ssi::Curves(crate::ssi::intersect(

@@ -270,9 +270,17 @@ impl Roller<'_> {
             if leg.dir > 0.0 { t } else { leg.lo + leg.hi - t }
         };
         let h = 1e-6;
-        let (u0, u1) = ((u - h).max(0.0), (u + h).min(1.0));
-        let d = (leg.edge.curve.eval(param(u1)) - leg.edge.curve.eval(param(u0))) / (u1 - u0);
-        (leg.edge.curve.eval(param(u)), d)
+        let at = |u: f64| leg.edge.curve.eval(param(u));
+        let p = at(u);
+        // Central differences, or second-order one-sided ones at the leg's ends.
+        let d = if u - h < 0.0 {
+            (at(u + h) * 4.0 - p * 3.0 - at(u + 2.0 * h)) / (2.0 * h)
+        } else if u + h > 1.0 {
+            (p * 3.0 - at(u - h) * 4.0 + at(u - 2.0 * h)) / (2.0 * h)
+        } else {
+            (at(u + h) - at(u - h)) / (2.0 * h)
+        };
+        (p, d)
     }
 
     /// Which leg holds `t`, and how far along it. An end of a leg belongs to the leg it
@@ -300,11 +308,20 @@ impl Roller<'_> {
         self.on_leg(k, u).0
     }
 
-    /// A point of the run at `t` and its unit direction of travel, from points either side
-    /// (across a join between legs, or round a closed run's start).
+    /// A point of the run at `t` and its unit direction of travel, from the leg there.
     fn point(&self, t: f64) -> (DVec3, DVec3) {
-        let h = 1e-6;
-        (self.position(t), (self.position(t + h) - self.position(t - h)).normalize_or_zero())
+        let n = self.span();
+        // Past an open run's ends it carries on straight.
+        if !self.closed && (t < 0.0 || t > n) {
+            let (k, u) = if t < 0.0 { (0, 0.0) } else { (self.legs.len() - 1, 1.0) };
+            return (self.position(t), self.on_leg(k, u).1.normalize_or_zero());
+        }
+        // From the leg holding `t` alone: the legs meet smoothly, but their speeds
+        // differ, so a difference taken across a join would be a little off.
+        let tt = if self.closed { t.rem_euclid(n) } else { t };
+        let (k, u) = self.leg_of(tt);
+        let (p, d) = self.on_leg(k, u);
+        (p, d.normalize_or_zero())
     }
 
     /// The exact section in the plane square to the run at `t`, its centre found from
@@ -660,6 +677,15 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
     let h = 1e-5;
     let rows_at = |t: f64, near: &Section| -> Option<Rates> { roller.section(t, near).map(|s| s.rows()) };
     let is_join = |t: f64| (t - t.round()).abs() < 1e-9 && t > s0 && t < s1;
+    // For a section within two steps of a join but not on it, which way lies away from
+    // the join: +1 after it, -1 before it. (A closed run's start is a join too when the
+    // run has more than one leg.)
+    let beside_join = |t: f64| -> Option<f64> {
+        let j = t.round();
+        let joins = (j > s0 && j < s1) || (closed && roller.legs.len() > 1);
+        let off = t - j;
+        (joins && off.abs() >= 1e-9 && off.abs() < 2.0 * h && roller.legs.len() > 1).then_some(off.signum())
+    };
     let mut sections = solve(&ts)?;
     loop {
         if ts.len() > MAX_SECTIONS {
@@ -693,6 +719,19 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
                     )
                 });
                 rates.push((left, right));
+            } else if let Some(side) = beside_join(*t) {
+                // Close beside a join: differences on this side of it only, as across it
+                // the run's speed may change.
+                let (Some(a1), Some(a2)) = (rows_at(t + side * h, s), rows_at(t + side * 2.0 * h, s)) else {
+                    return refuse("the ball cannot roll along this edge");
+                };
+                let d: Rates = std::array::from_fn(|j| {
+                    (
+                        (a1[j].0 * 4.0 - here[j].0 * 3.0 - a2[j].0) * (side / (2.0 * h)),
+                        (a1[j].1 * 4.0 - here[j].1 * 3.0 - a2[j].1) * (side / (2.0 * h)),
+                    )
+                });
+                rates.push((d, d));
             } else {
                 let (Some(a), Some(b)) = (rows_at(t - h, s), rows_at(t + h, s)) else {
                     return refuse("the ball cannot roll along this edge");
