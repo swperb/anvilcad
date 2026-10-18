@@ -13,6 +13,7 @@ pub mod exact;
 mod extrude;
 pub mod hole;
 pub mod material;
+pub mod measure;
 pub mod modify;
 mod pattern;
 pub mod rebuild;
