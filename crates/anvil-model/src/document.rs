@@ -452,6 +452,10 @@ pub struct ExtrudeFeature {
     /// Cuts only: remove the material outside the profile instead of inside.
     #[serde(default)]
     pub flip_side: bool,
+    /// Bosses only: join the new material to the bodies it touches. Off, it is a body of
+    /// its own.
+    #[serde(default = "yes")]
+    pub merge: bool,
 }
 
 impl Default for ExtrudeFeature {
@@ -469,6 +473,7 @@ impl Default for ExtrudeFeature {
             start_offset: None,
             start_flip: false,
             flip_side: false,
+            merge: true,
         }
     }
 }
@@ -826,6 +831,11 @@ pub enum FeatureKind {
     Draft(crate::modify::DraftFeature),
     Dome(crate::modify::DomeFeature),
     Loft(crate::loft::LoftFeature),
+    Combine(crate::bodies::CombineFeature),
+    MoveCopy(crate::bodies::MoveCopyFeature),
+    DeleteBody(crate::bodies::DeleteBodyFeature),
+    Split(crate::bodies::SplitFeature),
+    Scale(crate::bodies::ScaleFeature),
 }
 
 impl FeatureKind {
@@ -854,6 +864,12 @@ impl FeatureKind {
             FeatureKind::Draft(_) => "Draft",
             FeatureKind::Loft(l) if l.op == BodyOp::Cut => "Cut-Loft",
             FeatureKind::Loft(_) => "Loft",
+            FeatureKind::Combine(_) => "Combine",
+            FeatureKind::MoveCopy(_) => "Body-Move/Copy",
+            FeatureKind::DeleteBody(d) if d.keep => "Keep Body",
+            FeatureKind::DeleteBody(_) => "Delete Body",
+            FeatureKind::Split(_) => "Split",
+            FeatureKind::Scale(_) => "Scale",
             FeatureKind::Dome(_) => "Dome",
             FeatureKind::Axis(_) => "Axis",
             FeatureKind::Point(_) => "Point",
@@ -885,6 +901,24 @@ impl FeatureKind {
             FeatureKind::Sweep(s) => s.dependencies(),
             FeatureKind::Draft(d) => d.dependencies(),
             FeatureKind::Loft(l) => l.profiles.clone(),
+            FeatureKind::Combine(c) => c.bodies.iter().chain(c.main.iter()).map(|b| b.feature).collect(),
+            FeatureKind::MoveCopy(m) => m.bodies.iter().map(|b| b.feature).collect(),
+            FeatureKind::DeleteBody(d) => d.bodies.iter().map(|b| b.feature).collect(),
+            FeatureKind::Split(s) => s
+                .bodies
+                .iter()
+                .map(|b| b.feature)
+                .chain(s.planes.iter().filter_map(|p| p.dependency()))
+                .collect(),
+            FeatureKind::Scale(s) => s
+                .bodies
+                .iter()
+                .map(|b| b.feature)
+                .chain(match s.about {
+                    crate::bodies::ScaleAbout::CoordSys(c) => Some(c),
+                    _ => None,
+                })
+                .collect(),
             FeatureKind::Dome(d) => d.dependencies(),
             FeatureKind::Point(p) => p.dependencies(),
             FeatureKind::CoordSys(c) => c.dependencies(),

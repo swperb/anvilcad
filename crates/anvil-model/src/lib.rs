@@ -5,6 +5,7 @@
 //! [`Document::rebuild`] regenerates the solid. A part can have several configurations
 //! (see [`config`]).
 
+pub mod bodies;
 pub mod config;
 pub mod dfm;
 pub mod document;
@@ -24,6 +25,10 @@ pub mod step;
 pub mod sweep;
 pub mod thin;
 
+pub use bodies::{
+    BodyRef, CombineFeature, CombineOp, DeleteBodyFeature, MoveCopyFeature, ScaleAbout, ScaleFeature,
+    SplitFeature,
+};
 pub use config::{ConfigError, ConfigParam, ConfigValue, Configuration, ConfiguredParam, DimSlot};
 pub use document::*;
 pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};

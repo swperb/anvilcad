@@ -3670,6 +3670,11 @@ fn kind_name(k: &FeatureKind) -> &'static str {
         FeatureKind::Draft(_) => "Draft",
         FeatureKind::Dome(_) => "Dome",
         FeatureKind::Loft(_) => "Loft",
+        FeatureKind::Combine(_) => "Combine",
+        FeatureKind::MoveCopy(_) => "MoveCopy",
+        FeatureKind::DeleteBody(_) => "DeleteBody",
+        FeatureKind::Split(_) => "Split",
+        FeatureKind::Scale(_) => "Scale",
     }
 }
 
@@ -3695,6 +3700,11 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Draft(_) => Icon::Draft,
         FeatureKind::Dome(_) => Icon::Dome,
         FeatureKind::Loft(_) => Icon::Loft,
+        FeatureKind::Combine(_)
+        | FeatureKind::MoveCopy(_)
+        | FeatureKind::DeleteBody(_)
+        | FeatureKind::Split(_)
+        | FeatureKind::Scale(_) => Icon::Bodies,
     }
 }
 
