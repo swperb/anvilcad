@@ -41,7 +41,7 @@ fn square(s: f64) -> Loop2 {
 
 /// The rolling-ball tool applied directly (bypassing the closed-form blends).
 fn roll(solid: &Solid, edge: EdgeId, r: f64) -> Vec<Solid> {
-    let (tool, convex, contacts) = rolling_tool(solid, edge, r, 0).expect("tool");
+    let (tool, convex, contacts) = rolling_tool(solid, edge, Blend::Fillet(r), 0).expect("tool");
     let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
     boolean_with_contacts(solid, &tool, op, &contacts).expect("boolean")
 }
@@ -245,7 +245,7 @@ fn run_matches_the_closed_form_round_a_slot() {
     let tagged: Vec<(EdgeId, u32)> = edges.iter().map(|e| (*e, 0)).collect();
     let closed =
         volume(&crate::blend::blend_chain(&slot, &tagged, Blend::Fillet(1.0), 1).expect("closed form"));
-    let (tool, convex, contacts) = rolling_run_tool(&slot, &edges, 1.0, 0).expect("tool");
+    let (tool, convex, contacts) = rolling_run_tool(&slot, &edges, Blend::Fillet(1.0), 0).expect("tool");
     assert!(convex);
     assert_eq!(tool.faces.iter().filter(|f| matches!(f.surface, Surface::BSpline(_))).count(), 5);
     let rolled = volume(&boolean_with_contacts(&slot, &tool, BoolOp::Subtract, &contacts).expect("boolean"));
@@ -332,4 +332,113 @@ fn slot_boss_root_at_larger_radii() {
         assert!(rough_volume(&out) > rough_volume(std::slice::from_ref(&part)));
         round_is_a_rolling_ball(&out[0], 1, r);
     }
+}
+
+/// The swept chamfer tool applied directly (bypassing the closed-form chamfers).
+fn bevel(solid: &Solid, edge: EdgeId, c: f64) -> Vec<Solid> {
+    let (tool, convex, contacts) = rolling_tool(solid, edge, Blend::Chamfer(c), 0).expect("tool");
+    let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
+    boolean_with_contacts(solid, &tool, op, &contacts).expect("boolean")
+}
+
+/// Checks the bevel owned by `owner`: every section across it is straight, and its two
+/// edges lie the chamfer's distance `c` from `edge` (the edge it replaced).
+fn bevel_is_straight(solid: &Solid, owner: u32, edge: &crate::topo::Edge, c: f64) {
+    let face = solid
+        .faces
+        .iter()
+        .find(|f| f.owner == owner && matches!(f.surface, Surface::BSpline(_)))
+        .expect("bevel");
+    let Surface::BSpline(sp) = &face.surface else { unreachable!() };
+    let ((s0, s1), _) = sp.domain();
+    for k in 0..20 {
+        let s = s0 + (s1 - s0) * (k as f64 + 0.5) / 20.0;
+        let at = |t: f64| sp.eval_st(glam::DVec2::new(s, t));
+        let (a, m, b) = (at(0.0), at(0.5), at(1.0));
+        assert!((m - (a + b) * 0.5).length() < 1e-9, "not straight");
+        for p in [a, b] {
+            let d = edge.curve.distance_to(p, edge.t0, edge.t1);
+            assert!((d - c).abs() < 1e-6, "{d} from the edge");
+        }
+    }
+}
+
+#[test]
+fn chamfer_matches_the_closed_form_on_flat_faces() {
+    // A cube's edge, and a 60 degree wedge's: set back the same along both faces as the
+    // prism tool's chamfer.
+    let cube = prism(&[square(10.0)], &Frame::world(), 0.0, 10.0);
+    let e = edge_near(&cube, DVec3::new(5.0, 0.0, 10.0), 1e-6).expect("edge");
+    let want = 1000.0 - 4.5 * 10.0;
+    assert!((volume(&bevel(&cube, e, 3.0)) - want).abs() / want < 1e-9);
+    let wedge = Loop2::new(vec![
+        Segment::Line { a: DVec2::ZERO, b: DVec2::new(10.0, 0.0) },
+        Segment::Line { a: DVec2::new(10.0, 0.0), b: DVec2::new(10.0, 4.0) },
+        Segment::Line { a: DVec2::new(10.0, 4.0), b: DVec2::new(0.0, 4.0 + 10.0 * (PI / 6.0).tan()) },
+        Segment::Line { a: DVec2::new(0.0, 4.0 + 10.0 * (PI / 6.0).tan()), b: DVec2::ZERO },
+    ]);
+    let w = prism(&[wedge], &Frame::world(), 0.0, 8.0);
+    let e = edge_near(&w, DVec3::new(10.0, 4.0, 4.0), 1e-6).expect("edge");
+    let closed = volume(&blend_edge(&w, e, Blend::Chamfer(1.5), 1, 0).expect("prism tool"));
+    let swept = volume(&bevel(&w, e, 1.5));
+    assert!((swept - closed).abs() / closed < 1e-9, "{swept} vs {closed}");
+}
+
+#[test]
+fn chamfer_a_hole_slanting_through_a_plate() {
+    // The slanted hole's elliptical rim, between a plane and a cylinder with no common
+    // axis: the bevel is straight across, set back 1 from the rim on both faces.
+    let plate = prism(&[square(40.0)], &Frame::world(), 0.0, 6.0);
+    let axis = DVec3::new((PI / 6.0).sin(), 0.0, (PI / 6.0).cos());
+    let f = Frame::new(DVec3::new(20.0, 20.0, 3.0), axis, DVec3::Y).expect("frame");
+    let hole = prism(&[Loop2::new(vec![Segment::circle(DVec2::ZERO, 4.0)])], &f, -20.0, 20.0);
+    let holed = crate::boolean::boolean(&plate, &hole, BoolOp::Subtract).expect("hole").remove(0);
+    let top = holed
+        .edges
+        .iter()
+        .position(|e| matches!(e.curve, Curve::Ellipse { frame, .. } if (frame.origin.z - 6.0).abs() < 1e-9))
+        .map(|i| EdgeId(i as u32))
+        .expect("top edge");
+    let rim = holed.edges[top.index()].clone();
+    let before = rough_volume(std::slice::from_ref(&holed));
+    let out = blend_edge(&holed, top, Blend::Chamfer(1.0), 1, 0).expect("chamfer");
+    // Somewhere between a right-angled corner's half square and twice it, round a rim a
+    // little longer than the hole's circumference.
+    let taken = before - rough_volume(&out);
+    let around = 2.0 * PI * 4.0;
+    assert!(taken > 0.5 * around * 0.8 && taken < 0.5 * around * 2.0, "{taken}");
+    bevel_is_straight(&out[0], 1, &rim, 1.0);
+}
+
+#[test]
+fn chamfer_a_slot_boss_root_on_a_shaft() {
+    // The concave run round a slot-shaped boss on a shaft, bevelled as one face.
+    let shaft = prism(
+        &[Loop2::new(vec![Segment::circle(DVec2::ZERO, 10.0)])],
+        &Frame::new(DVec3::new(-20.0, 0.0, 0.0), DVec3::X, DVec3::Y).expect("frame"),
+        0.0,
+        50.0,
+    );
+    let boss = prism(&[stadium(3.0, 8.0)], &Frame::world(), 0.0, 16.0);
+    let part = crate::boolean::boolean(&shaft, &boss, BoolOp::Union).expect("union").remove(0);
+    let shaft_face = |f: &crate::topo::Face| matches!(f.surface, Surface::Cylinder { radius, .. } if (radius - 10.0).abs() < 1e-9);
+    let root: Vec<EdgeId> = (0..part.edges.len())
+        .map(|i| EdgeId(i as u32))
+        .filter(|&id| {
+            let faces = part.edge_faces(id);
+            let high = part.edge(id).is_some_and(|e| e.curve.eval(0.5 * (e.t0 + e.t1)).z > 5.0);
+            faces.len() == 2
+                && high
+                && faces.iter().any(|f| part.face(*f).is_some_and(shaft_face))
+                && faces.iter().any(|f| part.face(*f).is_some_and(|x| !shaft_face(x)))
+        })
+        .collect();
+    let tagged: Vec<(EdgeId, u32)> = root.iter().map(|e| (*e, 0)).collect();
+    let before = rough_volume(std::slice::from_ref(&part));
+    let out = crate::blend::blend_chain(&part, &tagged, Blend::Chamfer(1.0), 1).expect("chamfer");
+    assert!(rough_volume(&out) > before);
+    assert_eq!(
+        out[0].faces.iter().filter(|f| f.owner == 1 && matches!(f.surface, Surface::BSpline(_))).count(),
+        1
+    );
 }

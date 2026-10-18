@@ -18,6 +18,7 @@
 //!
 //! The behaviour is specified in `docs/re/fillet-curved-edges.md`.
 
+use crate::blend::Blend;
 use crate::geom::{Curve, Frame, Surface};
 use crate::patch::SplineSurface;
 use crate::spline::Spline;
@@ -73,6 +74,8 @@ fn foot(face: &Face, x: DVec3) -> (DVec3, DVec3) {
 /// the corners of the sides pushed off the faces.
 #[derive(Clone, Copy, Debug)]
 struct Section {
+    /// The point of the edge (or run) the section is square to.
+    edge: DVec3,
     centre: DVec3,
     a: DVec3,
     b: DVec3,
@@ -118,7 +121,12 @@ struct Roller<'a> {
     /// The run's edges in order of travel. The run's parameter `t` goes from 0 to the
     /// number of legs, leg `k` taking `k..k + 1`.
     legs: Vec<Leg<'a>>,
+    /// The fillet's radius, or the chamfer's distance.
     radius: f64,
+    /// A chamfer's straight bevel rather than a fillet's round.
+    bevel: bool,
+    /// Whether the run is convex (the tool is cut away).
+    convex: bool,
     /// The centre's signed distance from both faces: inside at a convex edge.
     target: f64,
     /// How far the sides are pushed off the faces.
@@ -182,7 +190,11 @@ impl Roller<'_> {
 
     /// The exact section in the plane square to the run at `t`, its centre found from
     /// `guess`, between the faces of the leg there.
-    fn section(&self, t: f64, guess: DVec3) -> Option<Section> {
+    fn section(&self, t: f64, near: &Section) -> Option<Section> {
+        if self.bevel {
+            return self.bevel_section(t);
+        }
+        let guess = near.centre;
         let (e, tangent) = self.point(t);
         let n = self.span();
         let tt = if self.closed { t.rem_euclid(n) } else { t.clamp(0.0, n) };
@@ -223,6 +235,7 @@ impl Roller<'_> {
         let bis = (da + db).normalize();
         let corner = centre + bis * (r / half.cos());
         Some(Section {
+            edge: e,
             centre,
             a,
             b,
@@ -235,24 +248,90 @@ impl Roller<'_> {
     }
 }
 
+impl Roller<'_> {
+    /// The exact chamfer section in the plane square to the run at `t`: the point on each
+    /// face the chamfer's distance from the run (as the chord in that plane), joined by a
+    /// straight line.
+    fn bevel_section(&self, t: f64) -> Option<Section> {
+        let (e, tangent) = self.point(t);
+        let n = self.span();
+        let tt = if self.closed { t.rem_euclid(n) } else { t.clamp(0.0, n) };
+        let leg = &self.legs[self.leg_of(tt).0];
+        let u1 = tangent.any_orthonormal_vector();
+        let u2 = tangent.cross(u1);
+        let c = self.radius;
+        let tol = 1e-13 * self.size;
+        let on = |face: &Face, guess: DVec3| -> Option<DVec3> {
+            let mut x = glam::DVec2::new((guess - e).dot(u1), (guess - e).dot(u2));
+            for _ in 0..60 {
+                let p = e + u1 * x.x + u2 * x.y;
+                let (f1, f2) = (outside(face, p), (p - e).length_squared() - c * c);
+                if f1.abs() < tol && f2.abs() < tol * c {
+                    return Some(p);
+                }
+                let nf = foot(face, p).1;
+                let d = (p - e) * 2.0;
+                let (j11, j12, j21, j22) = (nf.dot(u1), nf.dot(u2), d.dot(u1), d.dot(u2));
+                let det = j11 * j22 - j12 * j21;
+                if det.abs() < 1e-14 {
+                    return None;
+                }
+                x -= glam::DVec2::new((j22 * f1 - j12 * f2) / det, (j11 * f2 - j21 * f1) / det);
+            }
+            None
+        };
+        let (fa, fb) = (&self.solid.faces[leg.fa], &self.solid.faces[leg.fb]);
+        // A first guess along each face, square to the run and the face's normal, away
+        // from the other face (as at a convex edge, or towards it at a concave one).
+        let (na, nb) = (foot(fa, e).1, foot(fb, e).1);
+        let away = |n: DVec3, other: DVec3| {
+            let w = tangent.cross(n).normalize_or_zero();
+            if (w.dot(other) < 0.0) == self.convex { w } else { -w }
+        };
+        let a = on(fa, e + away(na, nb) * c)?;
+        let b = on(fb, e + away(nb, na) * c)?;
+        // The sides go off the faces: out of the part at a convex edge, into it at a
+        // concave one.
+        let sign = if self.convex { 1.0 } else { -1.0 };
+        let (da, db) = (foot(fa, a).1 * sign, foot(fb, b).1 * sign);
+        let corner = (a + b) * 0.5;
+        Some(Section {
+            edge: e,
+            centre: corner,
+            a,
+            b,
+            corner,
+            weight: 1.0,
+            a_off: a + da * self.push,
+            b_off: b + db * self.push,
+            corner_off: e + (da + db) * self.push,
+        })
+    }
+}
+
 /// The tool for a rolling-ball fillet of `radius` on `edge`, whether the edge is convex
 /// (the tool is cut away) or concave (the tool is added), and the (solid face, tool face)
 /// pairs that touch along the round's contact curves. Tool faces are tagged as the other
 /// blends' are (`tag_base`, `tag_base + 2` for the round, `tag_base + 4`).
-pub fn rolling_tool(solid: &Solid, edge: EdgeId, radius: f64, tag_base: u32) -> Result<Tool> {
-    rolling_run_tool(solid, &[edge], radius, tag_base)
+pub fn rolling_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result<Tool> {
+    rolling_run_tool(solid, &[edge], blend, tag_base)
 }
 
 /// Like [`rolling_tool`], for edges that run smoothly one into the next (in any order):
 /// one ball rolls along the whole run, touching the faces of each edge in turn, so the
 /// round is one face from end to end.
-pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: u32) -> Result<Tool> {
+pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base: u32) -> Result<Tool> {
+    let (radius, bevel) = match blend {
+        Blend::Fillet(r) => (r, false),
+        Blend::Chamfer(c) => (c, true),
+    };
     if !(radius.is_finite() && radius > 0.0) {
         return Err(KernelError::InvalidInput("the size must be a positive number".into()));
     }
     let size = solid.bounds().map_or(1.0, |(lo, hi)| (hi - lo).length().max(1.0));
     let (legs, closed) = run_in_order(solid, edges)?;
-    let mut roller = Roller { solid, legs, radius, target: 0.0, push: 0.5 * radius, closed, size };
+    let mut roller =
+        Roller { solid, legs, radius, bevel, convex: true, target: 0.0, push: 0.5 * radius, closed, size };
     // The faces at the first leg's middle, which way the run bends, and a first centre.
     let (pm, dm) = roller.on_leg(0, 0.5);
     let first_leg = roller.legs[0].id;
@@ -269,6 +348,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
     }
     let convex = bend < 0.0;
     roller.target = if convex { -radius } else { radius };
+    roller.convex = convex;
     // The same side of the run on every leg, and the same bend.
     assign_sides(solid, &mut roller.legs, convex)?;
     let (wa, wb) = {
@@ -282,7 +362,17 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
         (w(roller.legs[0].fa).unwrap_or(wa), w(roller.legs[0].fb).unwrap_or(wb))
     };
     let phi = wa.dot(wb).clamp(-1.0, 1.0).acos();
-    let first = pm + (wa + wb).normalize() * (radius / (0.5 * phi).sin());
+    let first = Section {
+        edge: pm,
+        centre: pm + (wa + wb).normalize() * (radius / (0.5 * phi).sin()),
+        a: pm + wa * radius,
+        b: pm + wb * radius,
+        corner: pm,
+        weight: 1.0,
+        a_off: pm,
+        b_off: pm,
+        corner_off: pm,
+    };
 
     // Carry the round past an open run's ends only where nothing lies beyond them (as the
     // other blends do), never where the run carries on smoothly into an edge not in it.
@@ -317,14 +407,14 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
         let mut by_index: Vec<Option<Section>> = vec![None; ts.len()];
         for k in (m..ts.len()).chain((0..m).rev()) {
             if k + 1 == m {
-                guess = by_index[m].map_or(first, |s| s.centre);
+                guess = by_index[m].unwrap_or(first);
             }
-            let s = roller.section(ts[k], guess).ok_or_else(|| {
+            let s = roller.section(ts[k], &guess).ok_or_else(|| {
                 KernelError::Unsupported(
                     "the ball cannot roll along this edge (the faces do not leave room for it)".into(),
                 )
             })?;
-            guess = s.centre;
+            guess = s;
             by_index[k] = Some(s);
         }
         let mut out: Vec<Section> = Vec::with_capacity(ts.len());
@@ -338,7 +428,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
         Ok(out)
     };
     let h = 1e-5;
-    let rows_at = |t: f64, near: DVec3| -> Option<Rates> { roller.section(t, near).map(|s| s.rows()) };
+    let rows_at = |t: f64, near: &Section| -> Option<Rates> { roller.section(t, near).map(|s| s.rows()) };
     let is_join = |t: f64| (t - t.round()).abs() < 1e-9 && t > s0 && t < s1;
     let mut sections = solve(&ts)?;
     loop {
@@ -354,12 +444,9 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
         for (t, s) in ts.iter().zip(&sections) {
             let here = s.rows();
             if is_join(*t) || (closed && (*t == s0 || *t == s1) && roller.legs.len() > 1) {
-                let (Some(a2), Some(a1), Some(b1), Some(b2)) = (
-                    rows_at(t - 2.0 * h, s.centre),
-                    rows_at(t - h, s.centre),
-                    rows_at(t + h, s.centre),
-                    rows_at(t + 2.0 * h, s.centre),
-                ) else {
+                let (Some(a2), Some(a1), Some(b1), Some(b2)) =
+                    (rows_at(t - 2.0 * h, s), rows_at(t - h, s), rows_at(t + h, s), rows_at(t + 2.0 * h, s))
+                else {
                     return refuse("the ball cannot roll along this edge");
                 };
                 // Second-order one-sided differences.
@@ -377,7 +464,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
                 });
                 rates.push((left, right));
             } else {
-                let (Some(a), Some(b)) = (rows_at(t - h, s.centre), rows_at(t + h, s.centre)) else {
+                let (Some(a), Some(b)) = (rows_at(t - h, s), rows_at(t + h, s)) else {
                     return refuse("the ball cannot roll along this edge");
                 };
                 let d = diff(&a, &b, 2.0 * h);
@@ -393,7 +480,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
             let (t0, t1) = (ts[k], ts[k + 1]);
             let dt = t1 - t0;
             let tm = 0.5 * (t0 + t1);
-            let Some(exact) = roller.section(tm, sections[k].centre) else {
+            let Some(exact) = roller.section(tm, &sections[k]) else {
                 return refuse("the ball cannot roll along this edge");
             };
             let (r0, r1) = (sections[k].rows(), sections[k + 1].rows());
@@ -418,7 +505,9 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], radius: f64, tag_base: 
             let (pc, wc) = hermite(1);
             let (pb, _) = hermite(2);
             let arc_mid = (pa + pc * 2.0 + pb) / (2.0 + 2.0 * wc);
-            err = err.max(((arc_mid - exact.centre).length() - radius).abs());
+            if !bevel {
+                err = err.max(((arc_mid - exact.centre).length() - radius).abs());
+            }
             if err > FIT {
                 split.push(tm);
             }
@@ -674,7 +763,7 @@ fn build(
             let (p0, p1) = (s.rows()[j0], s.rows()[j1]);
             let (p0, p1) = (p0.0 / p0.1, p1.0 / p1.1);
             let is_arc = (j0 == 0 && j1 == 2) || (j0 == 2 && j1 == 0);
-            let (curve, t0, t1) = if is_arc {
+            let (curve, t0, t1) = if is_arc && !roller.bevel {
                 let r = roller.radius;
                 let x = (s.a - s.centre) / r;
                 let y = ((s.b - s.centre) - x * (s.b - s.centre).dot(x)).normalize();
@@ -705,9 +794,12 @@ fn build(
             break;
         }
         let s = &sections[ends[end]];
-        let z = (s.a - s.centre).cross(s.b - s.centre).normalize();
+        // The section's plane: through the ball's centre for a round, through the edge
+        // for a bevel (whose middle lies on the line between its ends).
+        let o = if roller.bevel { s.edge } else { s.centre };
+        let z = (s.a - o).cross(s.b - o).normalize();
         let z = if z.dot(outward) < 0.0 { -z } else { z };
-        let frame = Frame::new(s.centre, z, s.a - s.centre)?;
+        let frame = Frame::new(o, z, s.a - o)?;
         let coedges = if end == 1 {
             across[1].iter().copied().map(fwd).collect()
         } else {
@@ -734,7 +826,11 @@ fn build(
         // A point on the side and its outward direction: right of the profile's travel.
         let rs = sm.rows();
         let (p0, p1) = (rs[j0].0 / rs[j0].1, rs[j1].0 / rs[j1].1);
-        let (p, out) = if is_arc {
+        let (p, out) = if is_arc && roller.bevel {
+            // The bevel faces away from the edge's corner, which the tool holds.
+            let p = (p0 + p1) * 0.5;
+            (p, p - sm.edge)
+        } else if is_arc {
             let p = sm.centre + ((p0 + p1) * 0.5 - sm.centre).normalize() * roller.radius;
             (p, sm.centre - p)
         } else {

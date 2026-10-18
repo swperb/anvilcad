@@ -8,11 +8,11 @@ when they are in the code and tested.
 
 ## CAD
 
-1. Kernel: chamfers on freeform edges,
-   conic and curvature-continuous profiles, tangent propagation to unselected edges,
-   overflow choices and round corners, spherical corner blends, variable-radius fillets, draft; shells of freeform
-   faces, sealed hollows (a second shell inside a solid), and walls thick enough to
-   change a part's shape; freeform faces that touch other surfaces without crossing them, and
+1. Kernel: offset face and angle-distance chamfers, conic and curvature-continuous
+   profiles, tangent propagation to unselected edges, overflow choices and round corners,
+   spherical corner blends, variable-radius fillets, draft; shells of freeform faces,
+   sealed hollows (a second shell inside a solid), and walls thick enough to change a
+   part's shape; freeform faces that touch other surfaces without crossing them, and
    results that would touch themselves at a single point.
 2. Features: a hole feature with standard sizes (ISO and ANSI clearance, tapped,
    counterbored and countersunk holes), mirror, sweep, loft, multi-body parts, sheet metal

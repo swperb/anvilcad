@@ -34,6 +34,8 @@ with a scenario of the form
 | Fillet Overview, SOLIDWORKS Design Help, <https://help.solidworks.com/2021/English/SolidWorks/sldworks/c_fillet_overview.htm> | SOLIDWORKS 2021 | `ev_90b89e9aee2e27ccd19a0fdde662af591f4ec46578357648a0c9ea1397ce057c`, capture complete |
 | Face Fillets, SOLIDWORKS Design Help, <https://help.solidworks.com/2019/English/SolidWorks/sldworks/r_Face_Fillets.htm> | SOLIDWORKS 2019 | `ev_92874d12cb9d4541be5492984be033e89bfe35c987383b03275cd04d375e7b5f`, capture complete |
 | Conic Fillets, What's New in SOLIDWORKS, <https://help.solidworks.com/2014/english/WhatsNew/c_conic_fillets.htm> | SOLIDWORKS 2014 | `ev_d16710332fae420f094cc76fdd00da1b21d5a1311f327043551391d0798bf72c`, capture complete |
+| Chamfer PropertyManager, SOLIDWORKS Design Help, <https://help.solidworks.com/2021/English/SolidWorks/sldworks/r_chamfer_pm.htm> | SOLIDWORKS 2021 | `ev_a1506bf3486d15f9c128bc75f847876d2899a172ced50eecdb46808171c20969`, capture complete |
+| Chamfer Enhancements, What's New in SOLIDWORKS, <https://help.solidworks.com/2017/english/WhatsNew/c_chamfer_enhancements.htm> | SOLIDWORKS 2017 | `ev_2fd007313bc314c69549dd49f721615d298a00c695e3e57becf47db9ead0bc1c`, capture complete |
 
 The findings below paraphrase those pages; no text was copied.
 
@@ -58,6 +60,13 @@ Observed (stated on the pages):
 - A fillet's profile is its cross-sectional shape: circular, or conic shapes weighted by a
   Rho value (Face Fillets, Conic Fillets). Face fillets can instead follow a hold line,
   and fillets can be made curvature continuous at their boundaries (Face Fillets).
+
+- Chamfers come in several kinds: angle and distance, two distances (equal when
+  symmetric), offset face, face face (with hold lines or a chord width) and vertex
+  chamfers (Chamfer PropertyManager). An offset face chamfer is found by offsetting the
+  faces next to the edge, taking where the offset faces meet, and dropping a normal from
+  there to each face; the page says this gives predictable results between faces that
+  are not flat.
 
 Silent or ambiguous:
 
@@ -91,6 +100,13 @@ Silent or ambiguous:
   rolling ball (the root of a slot-shaped boss standing on a shaft, say), get one round
   along the whole run: one ball rolls along the edges in order, touching the faces of each
   in turn, so the round is a single face, closed where the run closes.
-- Chamfers on such edges, runs mixing convex and concave edges, conic and curvature-continuous profiles, hold lines,
+- Chamfers on such edges are equal-distance chamfers, as on straight and round edges: in
+  each plane square to the edge, the point on each face the chamfer's distance from the
+  edge (as a straight chord), joined by a straight line, swept along the edge like the
+  rolling-ball round. On flat faces this is the same bevel as the closed-form chamfer.
+  This is not the published offset face chamfer, which sets back d cot(phi / 2) on faces
+  meeting at angle phi; AnvilCAD keeps one meaning of a chamfer's size for every edge.
+  Offset face chamfers could be offered as an option later.
+- Runs mixing convex and concave edges, conic and curvature-continuous profiles, hold lines,
   overflow choices and round corners are not offered yet; those fall back to the faceted
   kernel or are refused.
