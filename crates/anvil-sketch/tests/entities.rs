@@ -368,6 +368,7 @@ fn s18_polygon_freedoms_and_resize() {
             let mut s = Sketch::new();
             s.add_polygon(v2(3.0, -2.0), v2(13.0, 1.0), n, kind).unwrap();
             assert_eq!(dof(&mut s), 4, "{n} sides, {kind:?}");
+            assert!(s.constraints.iter().all(|c| !c.is_dimension()), "relations only, no dimensions");
         }
     }
     let mut s = Sketch::new();

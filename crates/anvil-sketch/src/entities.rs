@@ -97,7 +97,8 @@ pub struct PolygonIds {
     /// Side k runs from `vertices[k]` to `vertices[k + 1]`.
     pub sides: Vec<EntityId>,
     pub vertices: Vec<PointId>,
-    /// The construction circle.
+    /// The construction circle of the chosen kind: through the corners, or touching the
+    /// sides.
     pub circle: EntityId,
     pub center: PointId,
 }
@@ -530,13 +531,15 @@ impl Sketch {
     }
 
     /// Regular polygon with `sides` sides (3 to 40), centred on `center`, with a vertex at
-    /// `vertex` (sketch-entities.md, "Polygon"). Built from lines held regular by exterior
-    /// `Angle`s and `Equal`s, with a construction circle through the corners
-    /// (circumscribed) or touching the sides (inscribed): 4 degrees of freedom.
+    /// `vertex` (sketch-entities.md, "Polygon"): 4 degrees of freedom (centre, size and
+    /// turn).
     ///
-    /// The specification ties the circle to v0, v1 and v2 (or sides 0 to 2). Any three
-    /// distinct corners give the same freedoms; they are spread round the polygon here so
-    /// that the solve stays well conditioned for many sides.
+    /// The specification holds the shape with exterior `Angle`s and `Equal`s. In AnvilCAD
+    /// an `Angle` is a dimension, drawn with a value on screen, so the polygon is held
+    /// another way with the same freedoms: equal sides with every corner on a construction
+    /// circle (equal chords of one circle make a regular polygon). That circle is the
+    /// circumscribed one. For an inscribed circle a second construction circle shares the
+    /// centre and touches one side; it is the one returned, for the user to dimension.
     pub fn add_polygon(
         &mut self,
         center: Vec2,
@@ -556,32 +559,24 @@ impl Sketch {
             polygon_vertices(center, vertex, sides).into_iter().map(|p| self.add_point(p)).collect();
         let lines: Vec<EntityId> =
             (0..n).map(|k| self.add_line(vertices[k], vertices[(k + 1) % n])).collect();
-        let exterior = 360.0 / f64::from(sides);
-        for k in 0..n - 1 {
-            self.add_constraint(Constraint::Angle { a: lines[k], b: lines[k + 1], degrees: exterior });
-        }
-        for &l in lines.iter().take(n - 2).skip(1) {
+        for &l in lines.iter().skip(1) {
             self.add_constraint(Constraint::Equal { a: lines[0], b: l });
         }
         let c = self.add_point(center);
-        let cr = match circle {
-            PolygonCircle::Circumscribed => r,
-            PolygonCircle::Inscribed => r * (PI / f64::from(sides)).cos(),
-        };
-        let circ = self.add_circle(c, cr);
-        self.entities[circ].construction = true;
-        let mut ties = [0, n / 3, 2 * n / 3];
-        ties.sort_unstable();
-        for k in ties {
-            match circle {
-                PolygonCircle::Circumscribed => {
-                    self.add_constraint(Constraint::PointOnCircle { p: vertices[k], entity: circ })
-                }
-                PolygonCircle::Inscribed => {
-                    self.add_constraint(Constraint::Tangent { line: lines[k], entity: circ })
-                }
-            };
+        let outer = self.add_circle(c, r);
+        self.entities[outer].construction = true;
+        for &v in &vertices {
+            self.add_constraint(Constraint::PointOnCircle { p: v, entity: outer });
         }
+        let circ = match circle {
+            PolygonCircle::Circumscribed => outer,
+            PolygonCircle::Inscribed => {
+                let inner = self.add_circle(c, r * (PI / f64::from(sides)).cos());
+                self.entities[inner].construction = true;
+                self.add_constraint(Constraint::Tangent { line: lines[0], entity: inner });
+                inner
+            }
+        };
         Ok(PolygonIds { sides: lines, vertices, circle: circ, center: c })
     }
 
