@@ -218,6 +218,11 @@ pub enum Icon {
     Chamfer,
     Shell,
     Hole,
+    Mirror,
+    Sweep,
+    Draft,
+    Dome,
+    Measure,
     Imported,
     Select,
     Line,
@@ -386,6 +391,43 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             line((1.5, 14.0), (6.0, 14.0), ln);
             line((10.0, 14.0), (14.5, 14.0), ln);
             line((8.0, 1.5), (8.0, 15.0), hi);
+        }
+        Icon::Mirror => {
+            // A shape and its reflection either side of a dashed plane.
+            poly(&[(2.0, 4.0), (6.5, 4.0), (6.5, 12.0), (4.0, 12.0)], tint, ln);
+            poly(&[(9.5, 4.0), (14.0, 4.0), (12.0, 12.0), (9.5, 12.0)], Color32::TRANSPARENT, ln);
+            for i in 0..4 {
+                let y = 1.5 + i as f32 * 3.6;
+                line((8.0, y), (8.0, y + 2.0), hi);
+            }
+        }
+        Icon::Sweep => {
+            // A round section carried along a bent path.
+            path(&[(3.0, 13.0), (3.0, 8.0), (4.5, 5.0), (8.0, 3.5), (13.5, 3.5)], hi);
+            arc((3.0, 13.0), 2.0, 0.0, 360.0, ln);
+            path(&[(1.0, 13.0), (1.0, 8.0), (2.8, 4.0), (8.0, 1.5), (13.5, 1.5)], ln);
+            path(&[(5.0, 13.0), (5.0, 8.0), (6.0, 6.2), (8.0, 5.5), (13.5, 5.5)], ln);
+        }
+        Icon::Draft => {
+            // A block whose sides lean in towards the top, over its neutral plane.
+            poly(&[(3.0, 13.0), (13.0, 13.0), (11.0, 4.0), (5.0, 4.0)], tint, ln);
+            line((1.0, 13.0), (15.0, 13.0), hi);
+        }
+        Icon::Dome => {
+            // A cylinder with a rounded cap.
+            arc((8.0, 8.0), 5.0, 0.0, 180.0, hi);
+            path(&[(3.0, 8.0), (3.0, 14.0), (13.0, 14.0), (13.0, 8.0)], ln);
+        }
+        Icon::Measure => {
+            // A rule with ticks.
+            poly(&[(1.5, 9.0), (14.5, 9.0), (14.5, 13.0), (1.5, 13.0)], tint, ln);
+            for i in 0..6 {
+                let x = 3.0 + i as f32 * 2.0;
+                line((x, 9.0), (x, if i % 2 == 0 { 11.5 } else { 10.5 }), ln);
+            }
+            line((1.5, 5.0), (14.5, 5.0), hi);
+            line((1.5, 3.5), (1.5, 6.5), hi);
+            line((14.5, 3.5), (14.5, 6.5), hi);
         }
         Icon::Imported => {
             cube(1);

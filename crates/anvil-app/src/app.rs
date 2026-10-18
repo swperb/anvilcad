@@ -5,8 +5,8 @@ use crate::render::{Renderer, SceneData};
 use crate::sketcher::{self, OverDefine, SkSel, SketchSession, Tool};
 use crate::theme::{self, Icon, Palette, RowLook};
 use anvil_kernel::{EdgeRef, FaceId, Mesh, ModelEdge, Vec2, Vec3};
-use anvil_model::hole;
 use anvil_model::*;
+use anvil_model::{hole, measure};
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Sense, Stroke};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -132,6 +132,8 @@ pub struct AnvilApp {
     scripted_dialogs: Option<VecDeque<Option<PathBuf>>>,
     /// File dialogs asked for since the harness last looked, with the answer each got.
     dialog_log: Vec<DialogRequest>,
+    /// The Measure window's picks, while it is open.
+    measure: Option<Vec<measure::Pick>>,
     /// The configuration manager and its windows.
     cfg: ConfigUi,
 }
@@ -210,6 +212,7 @@ impl AnvilApp {
             hover_edge: None,
             scripted_dialogs: None,
             dialog_log: Vec::new(),
+            measure: None,
             cfg: ConfigUi::default(),
         };
         if let Some(p) = open {
@@ -746,7 +749,15 @@ impl AnvilApp {
     fn cmd_pattern(&mut self, circular: bool) {
         let seed = match self.selection {
             Selection::Feature(id) => match self.doc.feature(id).map(|f| &f.kind) {
-                Some(FeatureKind::Extrude(_) | FeatureKind::Revolve(_) | FeatureKind::Hole(_)) => Some(id),
+                Some(
+                    FeatureKind::Extrude(_)
+                    | FeatureKind::Revolve(_)
+                    | FeatureKind::Hole(_)
+                    | FeatureKind::Sweep(_)
+                    | FeatureKind::LinearPattern(_)
+                    | FeatureKind::CircularPattern(_)
+                    | FeatureKind::Mirror(_),
+                ) => Some(id),
                 _ => None,
             },
             _ => None,
@@ -780,6 +791,92 @@ impl AnvilApp {
         self.open_editor(id, before, true);
     }
 
+    /// Mirrors the selected feature in the Right plane (changed in its panel), or the
+    /// whole body when no feature is selected.
+    fn cmd_mirror(&mut self) {
+        let seed = match self.selection {
+            Selection::Feature(id) => match self.doc.feature(id).map(|f| &f.kind) {
+                Some(FeatureKind::Sketch(_) | FeatureKind::Plane(_)) | None => None,
+                Some(_) => Some(id),
+            },
+            _ => None,
+        };
+        if seed.is_none() && self.state.body.is_empty() {
+            self.message = Some(("Mirror".into(), "There is nothing to mirror yet.".into()));
+            return;
+        }
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::Mirror(MirrorFeature {
+            plane: PlaneRef::Right,
+            features: seed.into_iter().collect(),
+            bodies: seed.is_none(),
+            plane2: None,
+            seed_only: false,
+        }));
+        self.open_editor(id, before, true);
+    }
+
+    /// Sweeps the selected sketch's profile along the newest other sketch.
+    fn cmd_sweep(&mut self) {
+        let Some(profile) = self.target_sketch() else {
+            self.message = Some((
+                "Sweep".into(),
+                "Select the profile's sketch; the path is the newest other sketch.".into(),
+            ));
+            return;
+        };
+        let path = self
+            .doc
+            .features
+            .iter()
+            .rev()
+            .find(|f| f.id != profile && matches!(f.kind, FeatureKind::Sketch(_)))
+            .map(|f| f.id);
+        let Some(path) = path else {
+            self.message = Some(("Sweep".into(), "Draw the path in a second sketch first.".into()));
+            return;
+        };
+        self.begin_feature(|_, _| {
+            Some(FeatureKind::Sweep(SweepFeature { profile: Some(profile), path, ..Default::default() }))
+        });
+    }
+
+    fn cmd_draft(&mut self) {
+        if self.state.body.is_empty() {
+            self.message = Some(("Draft".into(), "There is no body to draft yet.".into()));
+            return;
+        }
+        let neutral = self.selected_plane().unwrap_or(PlaneRef::Front);
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::Draft(DraftFeature {
+            neutral,
+            faces: Vec::new(),
+            angle: Dim::Value(5.0),
+            reverse: false,
+            propagation: Propagation::None,
+        }));
+        self.open_editor(id, before, true);
+    }
+
+    fn cmd_dome(&mut self) {
+        if self.state.body.is_empty() {
+            self.message = Some(("Dome".into(), "There is no body to dome yet.".into()));
+            return;
+        }
+        let faces = match self.selection {
+            Selection::Face(f) => vec![f],
+            _ => Vec::new(),
+        };
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::Dome(DomeFeature {
+            faces,
+            height: Dim::Value(5.0),
+            reverse: false,
+            elliptical: false,
+        }));
+        self.open_editor(id, before, true);
+    }
+
     fn selected_plane(&self) -> Option<PlaneRef> {
         match self.selection {
             Selection::Plane(p) => Some(p),
@@ -805,7 +902,9 @@ impl AnvilApp {
         let Some(Editor::Feature { id, .. }) = &self.editor else { return None };
         match self.doc.feature(*id)?.kind {
             FeatureKind::Fillet(_) | FeatureKind::Chamfer(_) => Some((*id, PickKind::Edges)),
-            FeatureKind::Shell(_) => Some((*id, PickKind::Faces)),
+            FeatureKind::Shell(_) | FeatureKind::Draft(_) | FeatureKind::Dome(_) => {
+                Some((*id, PickKind::Faces))
+            }
             _ => None,
         }
     }
@@ -1119,6 +1218,9 @@ impl AnvilApp {
                         {
                             self.cmd_pattern(true);
                         }
+                        if theme::command_button(ui, Icon::Mirror, "Mirror", None).clicked() {
+                            self.cmd_mirror();
+                        }
                     });
                     theme::group_rule(ui);
                     theme::command_group(ui, "Modify", |ui| {
@@ -1133,6 +1235,15 @@ impl AnvilApp {
                         }
                         if theme::command_button(ui, Icon::Hole, "Hole", None).clicked() {
                             self.cmd_hole();
+                        }
+                        if theme::command_button(ui, Icon::Sweep, "Swept Boss/Base", None).clicked() {
+                            self.cmd_sweep();
+                        }
+                        if theme::command_button(ui, Icon::Draft, "Draft", None).clicked() {
+                            self.cmd_draft();
+                        }
+                        if theme::command_button(ui, Icon::Dome, "Dome", None).clicked() {
+                            self.cmd_dome();
                         }
                     });
                     theme::group_rule(ui);
@@ -1179,6 +1290,9 @@ impl AnvilApp {
                         }
                         if theme::command_button(ui, Icon::Check, "Check Design (DFM)", None).clicked() {
                             self.open_dfm();
+                        }
+                        if theme::command_button(ui, Icon::Measure, "Measure", None).clicked() {
+                            self.measure = Some(Vec::new());
                         }
                     });
                     theme::group_rule(ui);
@@ -1429,6 +1543,8 @@ impl AnvilApp {
     }
 
     fn property_manager(&mut self, ui: &mut egui::Ui) {
+        let sel_plane = self.selected_plane();
+        let sel_point = self.face_click.map(|(_, p)| PointRef::Model(p));
         let Some(editor) = &mut self.editor else { return };
         match editor {
             Editor::PickPlane(purpose) => {
@@ -1505,30 +1621,63 @@ impl AnvilApp {
                             "Sketch: {}",
                             sketch_names.get(&e.sketch).cloned().unwrap_or_default()
                         ));
-                        egui::ComboBox::from_label("Operation")
-                            .selected_text(if e.op == BodyOp::Boss { "Boss" } else { "Cut" })
-                            .show_ui(ui, |ui| {
-                                changed |= ui.selectable_value(&mut e.op, BodyOp::Boss, "Boss").changed();
-                                changed |= ui.selectable_value(&mut e.op, BodyOp::Cut, "Cut").changed();
-                            });
-                        egui::ComboBox::from_label("End condition").selected_text(e.end.label()).show_ui(
+                        changed |= op_combo(ui, &mut e.op);
+                        changed |= end_editor(
                             ui,
-                            |ui| {
-                                for c in EndCondition::ALL {
-                                    changed |= ui.selectable_value(&mut e.end, c, c.label()).changed();
-                                }
-                            },
+                            "Direction 1",
+                            &mut e.end,
+                            &mut e.depth,
+                            &mut e.target,
+                            &EndCondition::ALL,
+                            bufs,
+                            "depth",
+                            &vars,
+                            sel_plane,
+                            sel_point,
                         );
-                        if e.end.uses_depth() {
-                            changed |= Self::dim_field(
-                                ui,
-                                "Depth (mm)",
-                                &mut e.depth,
-                                bufs.entry("depth").or_default(),
-                                &vars,
-                            );
-                        }
                         changed |= ui.checkbox(&mut e.reverse, "Reverse direction").changed();
+                        changed |= draft_editor(ui, &mut e.draft, bufs, "draft", &vars);
+                        if !e.end.two_sided() {
+                            let mut on = e.direction2.is_some();
+                            if ui.checkbox(&mut on, "Direction 2").changed() {
+                                e.direction2 = on.then(|| EndSpec {
+                                    end: EndCondition::Blind,
+                                    depth: Dim::Value(10.0),
+                                    target: None,
+                                    draft: None,
+                                });
+                                changed = true;
+                            }
+                            if let Some(d2) = &mut e.direction2 {
+                                changed |= end_editor(
+                                    ui,
+                                    "Direction 2",
+                                    &mut d2.end,
+                                    &mut d2.depth,
+                                    &mut d2.target,
+                                    &EndCondition::SECOND,
+                                    bufs,
+                                    "depth2",
+                                    &vars,
+                                    sel_plane,
+                                    sel_point,
+                                );
+                                changed |= draft_editor(ui, &mut d2.draft, bufs, "draft2", &vars);
+                            }
+                        }
+                        changed |= thin_editor(ui, &mut e.thin, bufs, &vars, true);
+                        let mut from = e.start_offset.is_some();
+                        if ui.checkbox(&mut from, "Start offset from the sketch").changed() {
+                            e.start_offset = from.then(|| Dim::Value(5.0));
+                            changed = true;
+                        }
+                        if let Some(d) = &mut e.start_offset {
+                            changed |= dim_edit(ui, "Offset (mm)", d, bufs, "start", &vars);
+                            changed |= ui.checkbox(&mut e.start_flip, "Offset the other way").changed();
+                        }
+                        if e.op == BodyOp::Cut {
+                            changed |= ui.checkbox(&mut e.flip_side, "Flip side to cut").changed();
+                        }
                     }
                     FeatureKind::Revolve(r) => {
                         ui.label(format!(
@@ -1560,6 +1709,32 @@ impl AnvilApp {
                                 changed |= ui.selectable_value(&mut r.axis, *e, l).changed();
                             }
                         });
+                        let kinds = ["One direction", "Mid plane", "Two directions"];
+                        let cur = match r.kind {
+                            RevolveKind::OneDirection => 0,
+                            RevolveKind::MidPlane => 1,
+                            RevolveKind::TwoDirection { .. } => 2,
+                        };
+                        egui::ComboBox::from_label("Revolve type").selected_text(kinds[cur]).show_ui(
+                            ui,
+                            |ui| {
+                                for (i, k) in kinds.iter().enumerate() {
+                                    if ui.selectable_label(cur == i, *k).clicked() && cur != i {
+                                        r.kind = match i {
+                                            0 => RevolveKind::OneDirection,
+                                            1 => RevolveKind::MidPlane,
+                                            _ => RevolveKind::TwoDirection { angle2: Dim::Value(90.0) },
+                                        };
+                                        changed = true;
+                                    }
+                                }
+                            },
+                        );
+                        if let RevolveKind::TwoDirection { angle2 } = &mut r.kind {
+                            changed |= dim_edit(ui, "Direction 2 angle (deg)", angle2, bufs, "angle2", &vars);
+                        }
+                        changed |= ui.checkbox(&mut r.reverse, "Reverse direction").changed();
+                        changed |= thin_editor(ui, &mut r.thin, bufs, &vars, false);
                     }
                     FeatureKind::Plane(p) => {
                         ui.label(format!("Base: {}", p.base.label()));
@@ -1599,6 +1774,33 @@ impl AnvilApp {
                             bufs.entry("count").or_default(),
                             &vars,
                         );
+                        changed |= ui.checkbox(&mut p.reverse, "Reverse direction").changed();
+                        let mut two = p.direction2.is_some();
+                        if ui.checkbox(&mut two, "Direction 2").changed() {
+                            p.direction2 = two.then(|| PatternDirection {
+                                direction: Axis::Y,
+                                spacing: Dim::Value(20.0),
+                                count: Dim::Value(2.0),
+                                reverse: false,
+                            });
+                            changed = true;
+                        }
+                        if let Some(d2) = &mut p.direction2 {
+                            egui::ComboBox::from_label("Direction 2 axis")
+                                .selected_text(d2.direction.label())
+                                .show_ui(ui, |ui| {
+                                    for a in [Axis::X, Axis::Y, Axis::Z] {
+                                        changed |= ui
+                                            .selectable_value(&mut d2.direction, a, format!("{a:?}"))
+                                            .changed();
+                                    }
+                                });
+                            changed |=
+                                dim_edit(ui, "Spacing 2 (mm)", &mut d2.spacing, bufs, "spacing2", &vars);
+                            changed |= dim_edit(ui, "Instances 2", &mut d2.count, bufs, "count2", &vars);
+                            changed |= ui.checkbox(&mut d2.reverse, "Reverse Direction 2").changed();
+                            changed |= ui.checkbox(&mut p.seed_only, "Pattern seed only").changed();
+                        }
                     }
                     FeatureKind::CircularPattern(p) => {
                         let names: Vec<String> =
@@ -1623,6 +1825,20 @@ impl AnvilApp {
                             bufs.entry("count").or_default(),
                             &vars,
                         );
+                        changed |= ui
+                            .checkbox(&mut p.equal_spacing, "Equal spacing (the angle is the total)")
+                            .changed();
+                        changed |= ui.checkbox(&mut p.reverse, "Reverse direction").changed();
+                        let mut two = p.direction2.is_some();
+                        if ui.checkbox(&mut two, "Direction 2 (symmetric)").changed() {
+                            p.direction2 = two.then(|| CircularDirection2 {
+                                symmetric: true,
+                                angle: Dim::Value(360.0),
+                                count: Dim::Value(2.0),
+                                equal_spacing: true,
+                            });
+                            changed = true;
+                        }
                     }
                     FeatureKind::ImportedBody(ib) => {
                         ui.label(format!("Geometry imported from {}.", ib.source));
@@ -1754,7 +1970,87 @@ impl AnvilApp {
                         changed |= hole_editor(ui, h, bufs, &vars, hole_points, &mut edit_positions);
                     }
                     FeatureKind::Sketch(_) => {}
-                    _ => {}
+                    FeatureKind::Mirror(m) => {
+                        ui.label(format!("Mirror plane: {}", m.plane.label()));
+                        if let Some(p) = sel_plane {
+                            if ui.button("Use the selected plane or face").clicked() {
+                                m.plane = p;
+                                changed = true;
+                            }
+                        }
+                        changed |= ui.checkbox(&mut m.bodies, "Mirror the whole body").changed();
+                        if !m.bodies {
+                            let names: Vec<String> =
+                                m.features.iter().filter_map(|i| sketch_names.get(i).cloned()).collect();
+                            ui.label(format!("Features: {}", names.join(", ")));
+                        }
+                    }
+                    FeatureKind::Sweep(sw) => {
+                        ui.label(format!(
+                            "Profile: {}",
+                            sw.profile
+                                .and_then(|p| sketch_names.get(&p).cloned())
+                                .unwrap_or_else(|| "round".into())
+                        ));
+                        ui.label(format!(
+                            "Path: {}",
+                            sketch_names.get(&sw.path).cloned().unwrap_or_default()
+                        ));
+                        changed |= op_combo(ui, &mut sw.op);
+                        egui::ComboBox::from_label("Direction").selected_text(sw.direction.label()).show_ui(
+                            ui,
+                            |ui| {
+                                for d in SweepDirection::ALL {
+                                    changed |= ui.selectable_value(&mut sw.direction, d, d.label()).changed();
+                                }
+                            },
+                        );
+                        let mut round = sw.diameter.is_some();
+                        if ui.checkbox(&mut round, "Round profile").changed() {
+                            sw.diameter = round.then(|| Dim::Value(5.0));
+                            changed = true;
+                        }
+                        if let Some(d) = &mut sw.diameter {
+                            changed |= dim_edit(ui, "Diameter (mm)", d, bufs, "diameter", &vars);
+                        }
+                        changed |= thin_editor(ui, &mut sw.thin, bufs, &vars, false);
+                    }
+                    FeatureKind::Draft(d) => {
+                        ui.label(format!("Neutral plane: {}", d.neutral.label()));
+                        if let Some(p) = sel_plane {
+                            if ui.button("Use the selected plane or face").clicked() {
+                                d.neutral = p;
+                                changed = true;
+                            }
+                        }
+                        changed |= dim_edit(ui, "Angle (deg)", &mut d.angle, bufs, "angle", &vars);
+                        changed |= ui.checkbox(&mut d.reverse, "Reverse direction").changed();
+                        egui::ComboBox::from_label("Propagation")
+                            .selected_text(format!("{:?}", d.propagation))
+                            .show_ui(ui, |ui| {
+                                for p in [
+                                    Propagation::None,
+                                    Propagation::Outer,
+                                    Propagation::Inner,
+                                    Propagation::All,
+                                ] {
+                                    changed |= ui
+                                        .selectable_value(&mut d.propagation, p, format!("{p:?}"))
+                                        .changed();
+                                }
+                            });
+                        ui.label(format!("{} face(s) to draft.", d.faces.len()));
+                        ui.weak("Click faces in the graphics area to add or remove them.");
+                    }
+                    FeatureKind::Dome(d) => {
+                        changed |= dim_edit(ui, "Height (mm)", &mut d.height, bufs, "height", &vars);
+                        changed |= ui.checkbox(&mut d.reverse, "Reverse (cut in)").changed();
+                        ui.label(format!("{} face(s) to dome.", d.faces.len()));
+                        ui.weak("Click flat round faces to add or remove them.");
+                    }
+                    _ => {
+                        ui.weak("This feature has no options to edit here yet.");
+                    }
                 }
                 if let Some(e) = self.state.errors.get(&id) {
                     ui.colored_label(Palette::of(ui).error, e);
@@ -2104,6 +2400,22 @@ impl AnvilApp {
                 self.hover_face = hover;
                 self.scene_dirty = true;
             }
+            if let (true, Some(picks)) = (resp.clicked_by(egui::PointerButton::Primary), &self.measure) {
+                // Measure picks edges near the pointer, else the face under it.
+                let edge = resp.interact_pointer_pos().and_then(|m| self.nearest_edge(m, rect));
+                let pick = edge.map(measure::Pick::Edge).or(hover.map(measure::Pick::Face));
+                let mut picks = picks.clone();
+                match pick {
+                    Some(p) => match picks.iter().position(|q| *q == p) {
+                        Some(i) => {
+                            picks.remove(i);
+                        }
+                        None => picks.push(p),
+                    },
+                    None => picks.clear(),
+                }
+                self.measure = Some(picks);
+            }
             if resp.clicked_by(egui::PointerButton::Primary) {
                 match hover {
                     Some(f) => {
@@ -2313,12 +2625,9 @@ impl AnvilApp {
             match (&mut f.kind, edge, face) {
                 (FeatureKind::Fillet(fl), Some(e), _) => toggle(&mut fl.edges, e),
                 (FeatureKind::Chamfer(ch), Some(e), _) => toggle(&mut ch.edges, e),
-                (FeatureKind::Shell(sh), _, Some(face)) => match sh.remove.iter().position(|x| *x == face) {
-                    Some(i) => {
-                        sh.remove.remove(i);
-                    }
-                    None => sh.remove.push(face),
-                },
+                (FeatureKind::Shell(sh), _, Some(face)) => toggle_face(&mut sh.remove, face),
+                (FeatureKind::Draft(d), _, Some(face)) => toggle_face(&mut d.faces, face),
+                (FeatureKind::Dome(d), _, Some(face)) => toggle_face(&mut d.faces, face),
                 _ => {}
             }
         }
@@ -2582,7 +2891,42 @@ impl AnvilApp {
         }
     }
 
+    fn measure_window(&mut self, ctx: &egui::Context) {
+        let Some(picks) = self.measure.clone() else { return };
+        let mut open = true;
+        egui::Window::new("Measure").open(&mut open).resizable(false).show(ctx, |ui| {
+            if picks.is_empty() {
+                ui.label("Click faces or edges to measure them. Click a pick again to drop it, or empty space to start over.");
+                return;
+            }
+            match measure::measure(&self.state, &picks, &measure::MeasureOptions::default()) {
+                Ok(m) => {
+                    egui::Grid::new("measure").num_columns(2).show(ui, |ui| {
+                        for (k, v) in measure::summary_lines(&m) {
+                            ui.label(k);
+                            ui.monospace(v);
+                            ui.end_row();
+                        }
+                    });
+                    if !m.exact {
+                        ui.weak("Measured on the faceted body.");
+                    }
+                }
+                Err(e) => {
+                    ui.colored_label(Palette::of(ui).error, e);
+                }
+            }
+            if ui.button("Clear").clicked() {
+                self.measure = Some(Vec::new());
+            }
+        });
+        if !open {
+            self.measure = None;
+        }
+    }
+
     fn windows(&mut self, ctx: &egui::Context) {
+        self.measure_window(ctx);
         let mut open = self.windows.properties;
         egui::Window::new("Properties").open(&mut open).default_width(460.0).show(ctx, |ui| {
             ui.label(RichText::new("Material").strong());
@@ -3289,12 +3633,176 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Chamfer(_) => Icon::Chamfer,
         FeatureKind::Shell(_) => Icon::Shell,
         FeatureKind::Hole(_) => Icon::Hole,
-        FeatureKind::Mirror(_) => Icon::LinearPattern,
+        FeatureKind::Mirror(_) => Icon::Mirror,
         FeatureKind::SketchPattern(_) => Icon::LinearPattern,
         FeatureKind::Axis(_) | FeatureKind::Point(_) | FeatureKind::CoordSys(_) => Icon::Plane,
-        FeatureKind::Sweep(_) => Icon::Extrude,
-        FeatureKind::Draft(_) | FeatureKind::Dome(_) => Icon::Shell,
+        FeatureKind::Sweep(_) => Icon::Sweep,
+        FeatureKind::Draft(_) => Icon::Draft,
+        FeatureKind::Dome(_) => Icon::Dome,
     }
+}
+
+/// A dimension field whose text starts as the dimension's own.
+fn dim_edit(
+    ui: &mut egui::Ui,
+    label: &str,
+    dim: &mut Dim,
+    bufs: &mut HashMap<&'static str, String>,
+    key: &'static str,
+    vars: &std::collections::BTreeMap<String, f64>,
+) -> bool {
+    let text = dim.text();
+    AnvilApp::dim_field(ui, label, dim, bufs.entry(key).or_insert(text), vars)
+}
+
+fn toggle_face(list: &mut Vec<FaceId>, f: FaceId) {
+    match list.iter().position(|x| *x == f) {
+        Some(i) => {
+            list.remove(i);
+        }
+        None => list.push(f),
+    }
+}
+
+fn op_combo(ui: &mut egui::Ui, op: &mut BodyOp) -> bool {
+    let mut changed = false;
+    egui::ComboBox::from_label("Operation")
+        .selected_text(if *op == BodyOp::Boss { "Boss" } else { "Cut" })
+        .show_ui(ui, |ui| {
+            changed |= ui.selectable_value(op, BodyOp::Boss, "Boss").changed();
+            changed |= ui.selectable_value(op, BodyOp::Cut, "Cut").changed();
+        });
+    changed
+}
+
+/// One direction of an extrusion: its end condition, depth and target. A target is
+/// taken from the selected plane or face, or the point where a face was clicked.
+#[allow(clippy::too_many_arguments)]
+fn end_editor(
+    ui: &mut egui::Ui,
+    title: &str,
+    end: &mut EndCondition,
+    depth: &mut Dim,
+    target: &mut Option<EndTarget>,
+    choices: &[EndCondition],
+    bufs: &mut HashMap<&'static str, String>,
+    key: &'static str,
+    vars: &std::collections::BTreeMap<String, f64>,
+    sel_plane: Option<PlaneRef>,
+    sel_point: Option<PointRef>,
+) -> bool {
+    let mut changed = false;
+    egui::ComboBox::from_label(title).selected_text(end.label()).show_ui(ui, |ui| {
+        for c in choices {
+            changed |= ui.selectable_value(end, *c, c.label()).changed();
+        }
+    });
+    if end.uses_depth() {
+        let label = if *end == EndCondition::OffsetFromSurface { "Offset (mm)" } else { "Depth (mm)" };
+        changed |= dim_edit(ui, label, depth, bufs, key, vars);
+    }
+    if end.needs_target() {
+        ui.label(format!(
+            "Up to: {}",
+            target.as_ref().map(|t| t.label()).unwrap_or_else(|| "nothing chosen".into())
+        ));
+        let wants_point = *end == EndCondition::UpToVertex;
+        match (wants_point, sel_plane, sel_point) {
+            (true, _, Some(p)) => {
+                if ui.button("Use the point clicked on the model").clicked() {
+                    *target = Some(EndTarget::Point(p));
+                    changed = true;
+                }
+            }
+            (false, Some(p), _) => {
+                if ui.button("Use the selected plane or face").clicked() {
+                    *target = Some(EndTarget::Plane { plane: p, reverse_offset: false, translate: false });
+                    changed = true;
+                }
+            }
+            _ => {
+                ui.weak(if wants_point {
+                    "Click a point on the model first."
+                } else {
+                    "Select a plane or flat face first."
+                });
+            }
+        }
+        if let (EndCondition::OffsetFromSurface, Some(EndTarget::Plane { reverse_offset, translate, .. })) =
+            (*end, target)
+        {
+            changed |= ui.checkbox(reverse_offset, "Reverse offset").changed();
+            changed |= ui.checkbox(translate, "Translate surface").changed();
+        }
+    }
+    changed
+}
+
+fn draft_editor(
+    ui: &mut egui::Ui,
+    draft: &mut Option<Draft>,
+    bufs: &mut HashMap<&'static str, String>,
+    key: &'static str,
+    vars: &std::collections::BTreeMap<String, f64>,
+) -> bool {
+    let mut changed = false;
+    let mut on = draft.is_some();
+    if ui.checkbox(&mut on, "Draft").changed() {
+        *draft = on.then(|| Draft { angle: Dim::Value(5.0), outward: false });
+        changed = true;
+    }
+    if let Some(d) = draft {
+        changed |= dim_edit(ui, "Draft angle (deg)", &mut d.angle, bufs, key, vars);
+        changed |= ui.checkbox(&mut d.outward, "Draft outward").changed();
+    }
+    changed
+}
+
+fn thin_editor(
+    ui: &mut egui::Ui,
+    thin: &mut Option<ThinWall>,
+    bufs: &mut HashMap<&'static str, String>,
+    vars: &std::collections::BTreeMap<String, f64>,
+    caps: bool,
+) -> bool {
+    let mut changed = false;
+    let mut on = thin.is_some();
+    if ui.checkbox(&mut on, "Thin feature").changed() {
+        *thin = on.then(|| ThinWall::new(1.0));
+        changed = true;
+    }
+    let Some(w) = thin else { return changed };
+    egui::ComboBox::from_label("Wall").selected_text(w.kind.label()).show_ui(ui, |ui| {
+        for k in ThinKind::ALL {
+            changed |= ui.selectable_value(&mut w.kind, k, k.label()).changed();
+        }
+    });
+    changed |= dim_edit(ui, "Thickness (mm)", &mut w.thickness, bufs, "thick", vars);
+    if w.kind == ThinKind::TwoDirection {
+        changed |= dim_edit(ui, "Thickness 2 (mm)", &mut w.thickness2, bufs, "thick2", vars);
+    }
+    if w.kind == ThinKind::OneDirection {
+        changed |= ui.checkbox(&mut w.reverse, "Other side").changed();
+    }
+    let mut round = w.fillet.is_some();
+    if ui.checkbox(&mut round, "Round corners").changed() {
+        w.fillet = round.then(|| Dim::Value(1.0));
+        changed = true;
+    }
+    if let Some(r) = &mut w.fillet {
+        changed |= dim_edit(ui, "Inside radius (mm)", r, bufs, "round", vars);
+    }
+    if caps {
+        let mut cap = w.cap.is_some();
+        if ui.checkbox(&mut cap, "Cap ends").changed() {
+            w.cap = cap.then(|| Dim::Value(1.0));
+            changed = true;
+        }
+        if let Some(c) = &mut w.cap {
+            changed |= dim_edit(ui, "Cap thickness (mm)", c, bufs, "cap", vars);
+        }
+    }
+    changed
 }
 
 /// The hole a new Hole command makes: a through clearance hole for an M6 screw.
@@ -3431,13 +3939,12 @@ fn hole_editor(
 
     ui.add_space(4.0);
     let label = if matches!(h.kind, HoleKind::Tapped { .. }) { "Tap drill (mm)" } else { "Diameter (mm)" };
-    let field = |ui: &mut egui::Ui,
-                 label: &str,
-                 dim: &mut Dim,
-                 key: &'static str,
-                 bufs: &mut HashMap<&'static str, String>| {
-        AnvilApp::dim_field(ui, label, dim, bufs.entry(key).or_insert_with(|| dim.text()), vars)
-    };
+    let field =
+        |ui: &mut egui::Ui,
+         label: &str,
+         dim: &mut Dim,
+         key: &'static str,
+         bufs: &mut HashMap<&'static str, String>| { dim_edit(ui, label, dim, bufs, key, vars) };
     let mut typed = field(ui, label, &mut h.diameter, "diameter", bufs);
     match &mut h.kind {
         HoleKind::Simple => {}
@@ -4129,6 +4636,30 @@ mod ui_tests {
         let v = h.app.state.body.mass_properties().volume;
         let expected = 40.0 * 20.0 * 10.0 - 38.0 * 18.0 * 9.0;
         assert!((v - expected).abs() < 1e-4, "{v} vs {expected}");
+    }
+
+    #[test]
+    fn mirror_body_and_measure() {
+        let mut h = Harness::new();
+        let ex = block(&mut h);
+        // Mirror with nothing selected mirrors the body; in its own right face it doubles.
+        h.app.selection = Selection::None;
+        h.app.cmd_mirror();
+        h.step(vec![]);
+        let m = h.app.doc.features.last().unwrap().id;
+        if let Some(FeatureKind::Mirror(x)) = h.app.doc.feature_mut(m).map(|f| &mut f.kind) {
+            x.plane = PlaneRef::Face(FaceId::side(ex, 1));
+        }
+        h.app.finish_editor(true);
+        h.step(vec![]);
+        assert!(h.app.state.errors.is_empty(), "{:?}", h.app.state.errors);
+        let v = h.app.state.body.mass_properties().volume;
+        assert!((v - 2.0 * 32000.0).abs() < 1e-6, "{v}");
+        // Measure the top face: 80 x 40.
+        h.app.measure = Some(vec![measure::Pick::Face(FaceId { feature: ex, index: FaceId::END_CAP })]);
+        h.step(vec![]);
+        let m = measure::measure(&h.app.state, h.app.measure.as_ref().unwrap(), &Default::default()).unwrap();
+        assert!((m.area.unwrap() - 3200.0).abs() < 1e-6, "{:?}", m.area);
     }
 
     #[test]
