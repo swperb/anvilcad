@@ -3,13 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AnvilCAD: open-source parametric 3D CAD in Rust</title>
-  <meta name="description" content="AnvilCAD is free, open-source parametric 3D CAD written in Rust, with its own geometry kernel and a workflow that follows SOLIDWORKS conventions. Early release (0.1).">
-  <meta name="color-scheme" content="light dark">
+  <title>AnvilCAD · Open-source parametric CAD that keeps your SOLIDWORKS feature trees</title>
+  <meta name="description" content="AnvilCAD is free, open-source parametric 3D CAD written in Rust. Migrate SOLIDWORKS parts with their feature trees, verified against SOLIDWORKS' own volumes, and keep working in a workflow your engineers already know. No SOLIDWORKS required.">
+  <meta name="color-scheme" content="dark">
+  <meta property="og:title" content="AnvilCAD: leave SOLIDWORKS, keep your feature trees">
+  <meta property="og:description" content="Free, open-source parametric CAD in Rust, with migration that keeps the history.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://swperb.github.io/anvilcad/">
+  <meta property="og:image" content="https://swperb.github.io/anvilcad/media/build-poster.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://swperb.github.io/anvilcad/">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -18,296 +25,396 @@
   <header class="site-header">
     <div class="wrap header-row">
       <a class="brand" href="#top" aria-label="AnvilCAD home">
-        <svg class="mark" viewBox="0 0 48 48" width="28" height="28" aria-hidden="true" focusable="false"><path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="22" y="7.5" width="13" height="4.5" rx="1.25" fill="#C2410C"/></svg>
+        <svg class="mark" viewBox="0 0 48 48" width="26" height="26" aria-hidden="true" focusable="false"><path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="22" y="7.5" width="13" height="4.5" rx="1.25" fill="var(--accent)"/></svg>
         <span>AnvilCAD</span>
       </a>
-      <nav aria-label="Primary">
+      <button class="menu-btn" type="button" aria-expanded="false" aria-controls="nav">
+        <span>Menu</span>
+        <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+      <nav id="nav" aria-label="Primary">
         <ul class="nav-list">
-          <li><a href="#features">Features</a></li>
-          <li><a href="#kernels">Kernels</a></li>
           <li><a href="#migrate">Migration</a></li>
+          <li><a href="#bulk">Bulk</a></li>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#kernel">Kernel</a></li>
+          <li><a href="#agent">Agents</a></li>
           <li><a href="#roadmap">Roadmap</a></li>
-          <li><a href="https://github.com/swperb/anvilcad">GitHub</a></li>
+          <li><a class="nav-gh" href="https://github.com/swperb/anvilcad">GitHub ↗</a></li>
         </ul>
       </nav>
     </div>
   </header>
 
   <main id="main">
+    <!-- Hero -->
     <section class="hero" id="top" aria-labelledby="hero-title">
       <div class="wrap hero-grid">
         <div class="hero-copy">
-          <p class="label"><span class="status-dot" aria-hidden="true"></span>Status: early (0.1)</p>
-          <h1 id="hero-title">AnvilCAD</h1>
-          <p class="pitch">Free, open-source parametric 3D CAD written in Rust, with its own geometry kernel. If you know SOLIDWORKS, the workflow will feel familiar: a feature tree, sketches on planes or faces, and fully defined sketches.</p>
-          <div class="cta-row">
-            <a class="btn btn-primary" href="https://github.com/swperb/anvilcad">View on GitHub</a>
-            <a class="btn btn-secondary" href="#roadmap">Roadmap</a>
+          <p class="eyebrow">Open source · macOS / Linux / Windows</p>
+          <h1 id="hero-title">Leave SOLIDWORKS.<br><span class="accent">Keep your feature trees.</span></h1>
+          <p class="lede">AnvilCAD is free, open-source parametric CAD written in Rust. Your parts come across as editable features, each one checked against SOLIDWORKS' own volume, in a workflow your engineers already know.</p>
+          <div class="cta-col">
+            <a class="btn btn-primary" href="#migrate">
+              <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M3 10h11M10 5l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              See how migration works
+            </a>
+            <a class="btn btn-secondary" href="https://github.com/swperb/anvilcad">
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+              View the source on GitHub
+            </a>
+            <a class="text-link" href="#get">Build it from source <span aria-hidden="true">→</span></a>
           </div>
-          <p class="fine">The source is public on GitHub under MIT OR Apache-2.0. There are no prebuilt downloads yet, so build from source with <code>cargo run --release -p anvil-app</code>. The binary is called <code>anvilcad</code>.</p>
         </div>
-        <figure class="hero-art">
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" role="img" aria-labelledby="art-hero-title art-hero-desc">
-<title id="art-hero-title">Isometric drawing of a machined plate</title>
-<desc id="art-hero-desc">A rectangular plate with a through hole, a raised rectangular boss and a chamfered corner, dimensioned in millimetres on a faint drafting grid.</desc>
-<defs>
-<pattern id="art-g" width="30" height="30" patternUnits="userSpaceOnUse"><circle cx="15" cy="15" r="1" fill="currentColor"/></pattern>
-<radialGradient id="art-gf" cx="50%" cy="50%" r="55%"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
-<mask id="art-gm"><rect width="1200" height="600" fill="url(#art-gf)"/></mask>
-<clipPath id="art-hc"><ellipse cx="603" cy="190.8" rx="57.3" ry="33.1"/></clipPath>
-</defs>
-<rect width="1200" height="600" fill="url(#art-g)" opacity="0.22" mask="url(#art-gm)"/>
-<g fill="none" stroke="currentColor" stroke-width="0.75" stroke-dasharray="2 5" opacity="0.4">
-<path d="M494.9 27 L1204.2 436.5"/>
-<path d="M765.1 27 L190.9 358.5"/>
-<path d="M866.4 257.1 L1082.6 132.3"/>
-<path d="M744.8 186.9 L413.8 -4.2"/>
-</g>
-<path d="M805.6 471.6 L805.6 424.8 L724.6 424.8 L724.6 471.6 Z" fill="#C2410C" fill-opacity="0.85"/>
-<path d="M744.8 186.9 L866.4 257.1 L751.6 323.4 L630 253.2 Z" fill="currentColor" fill-opacity="0.06"/>
-<path d="M805.6 471.6 L765.1 495 L724.6 471.6" fill="none" stroke="currentColor" stroke-width="0.75" stroke-dasharray="2 3" opacity="0.6"/>
-<g fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="6 4" opacity="0.45">
-<path d="M630 105 L1035.3 339 M630 105 L359.8 261 M630 105 L630 58.2"/>
-</g>
-<g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">
-<path d="M630 58.2 L1035.3 292.2 L805.6 424.8 L724.6 424.8 L359.8 214.2 Z"/>
-<path d="M1035.3 292.2 L1035.3 339 L805.6 471.6 L724.6 471.6 L359.8 261 L359.8 214.2"/>
-<path d="M805.6 471.6 L805.6 424.8 M724.6 471.6 L724.6 424.8"/>
-<path d="M744.8 186.9 L866.4 257.1 L751.6 323.4 L630 253.2 Z"/>
-<path d="M866.4 257.1 L866.4 327.3 L751.6 393.6 L630 323.4 L630 253.2 M751.6 393.6 L751.6 323.4"/>
-<ellipse cx="603" cy="190.8" rx="57.3" ry="33.1"/>
-</g>
-<ellipse cx="603" cy="237.6" rx="57.3" ry="33.1" fill="none" stroke="currentColor" stroke-width="1.25" clip-path="url(#art-hc)" opacity="0.7"/>
-<g fill="none" stroke="#C2410C" stroke-width="1" stroke-dasharray="14 3 2 3">
-<path d="M542.2 155.7 L663.8 225.9 M663.8 155.7 L542.2 225.9"/>
-</g>
-<g fill="none" stroke="currentColor" stroke-width="1">
-<path d="M349.7 266.9 L272 311.7 M755 500.8 L677.3 545.7" stroke-width="0.75" opacity="0.6"/>
-<path d="M285.5 303.9 L690.8 537.9"/>
-<path d="M285.5 303.9 L291.8 311 L294.8 305.8 Z M690.8 537.9 L684.5 530.8 L681.5 536 Z" fill="currentColor" stroke="none"/>
-<path d="M1045.4 344.9 L1123.1 389.7 M775.2 500.8 L852.9 545.7" stroke-width="0.75" opacity="0.6"/>
-<path d="M1109.6 381.9 L839.4 537.9"/>
-<path d="M1109.6 381.9 L1100.3 383.8 L1103.3 389 Z M839.4 537.9 L848.7 536 L845.7 530.8 Z" fill="currentColor" stroke="none"/>
-</g>
-<g fill="none" stroke="currentColor" stroke-width="1">
-<path d="M870.4 327.3 H906.4 M870.4 257.1 H906.4" stroke-width="0.75" opacity="0.6"/>
-<path d="M900.4 327.3 L900.4 257.1"/><path d="M900.4 327.3 L903.4 318.3 L897.4 318.3 Z M900.4 257.1 L897.4 266.1 L903.4 266.1 Z" fill="currentColor" stroke="none"/>
-</g>
-<g fill="none" stroke="#C2410C" stroke-width="1"><path d="M545.7 190.8 L495.7 130.8 H425.7"/><path d="M545.7 190.8 L542.2 182 L537.6 185.8 Z" fill="#C2410C" stroke="none"/></g>
-<path d="M765.1 448.2 V533.6" fill="none" stroke="#C2410C" stroke-width="1"/>
-<circle cx="765.1" cy="448.2" r="2.5" fill="currentColor"/>
-<g fill="currentColor" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="15" letter-spacing="0.5">
-<text x="477.8" y="432.9" text-anchor="end">120</text>
-<text x="984.9" y="471.9" text-anchor="start">80</text>
-<text x="908.4" y="297.2">18</text>
-<text x="425.7" y="123.8" fill="#C2410C">&#216;24 THRU</text>
-<text x="765.1" y="550.6" text-anchor="middle" fill="#C2410C">C12 &#215; 45&#176;</text>
-</g>
-<g fill="none" stroke="currentColor" stroke-width="1.25" opacity="0.7" stroke-linecap="round">
-<path d="M110 520 L144.6 540"/><path d="M144.6 540 L139.8 534.3 L137.3 538.7 Z" fill="currentColor" stroke="none"/>
-<path d="M110 520 L75.4 540"/><path d="M75.4 540 L82.7 538.7 L80.2 534.3 Z" fill="currentColor" stroke="none"/>
-<path d="M110 520 L110 480"/><path d="M110 480 L107.5 487 L112.5 487 Z" fill="currentColor" stroke="none"/>
-</g>
-<g fill="currentColor" opacity="0.7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">
-<text x="156.8" y="551" text-anchor="middle">X</text>
-<text x="63.2" y="551" text-anchor="middle">Y</text>
-<text x="110" y="470" text-anchor="middle">Z</text>
-</g>
-</svg>
+
+        <figure class="player" id="hero-player">
+          <div class="player-screen">
+            <video id="hero-video" src="media/build.mp4" poster="media/build-poster.jpg" muted playsinline loop preload="metadata" aria-label="Screen recording of AnvilCAD: a rectangle and a circle are sketched on the Front plane and dimensioned, extruded 16 mm into a plate with a hole, and turned in the viewport."></video>
+          </div>
+          <figcaption class="player-bar">
+            <span id="hero-caption">Plate with a hole · recorded with anvilcad-agent · real time</span>
+            <a href="https://github.com/swperb/anvilcad/tree/main/scripts/site">How it was made ↗</a>
+          </figcaption>
+        </figure>
+      </div>
+
+      <div class="wrap">
+        <p class="meta-row">
+          <span class="status-dot" aria-hidden="true"></span><span>v0.1 early release</span>
+          <span class="sep">macOS / Linux / Windows</span>
+          <span class="sep">MIT OR Apache-2.0</span>
+          <span class="sep">No SOLIDWORKS required</span>
+        </p>
+
+        <ol class="steps" role="tablist" aria-label="Demo chapters">
+          <li><button type="button" role="tab" aria-selected="true" data-src="media/build.mp4" data-poster="media/build-poster.jpg" data-at="0" data-caption="Sketch · rectangle, circle and three dimensions on the Front plane">
+            <span class="num">01 / Sketch</span><span class="step-title">Define the sketch.</span><span class="step-body">Draw on a plane or a face, then dimension it until it is fully defined.</span>
+          </button></li>
+          <li><button type="button" role="tab" aria-selected="false" data-src="media/build.mp4" data-poster="media/build-poster.jpg" data-at="21.2" data-caption="Build · Extruded Boss/Base, blind, 16 mm">
+            <span class="num">02 / Build</span><span class="step-title">Turn it into a solid.</span><span class="step-body">Extrude or revolve the sketch, and the feature joins the tree.</span>
+          </button></li>
+          <li><button type="button" role="tab" aria-selected="false" data-src="media/refine.mp4" data-poster="media/refine-poster.jpg" data-at="0" data-caption="Refine · a 6 mm fillet on four edges, built exactly">
+            <span class="num">03 / Refine</span><span class="step-title">Round, cut and pattern.</span><span class="step-body">Fillets, chamfers, shells, holes and patterns, built on exact geometry.</span>
+          </button></li>
+          <li><button type="button" role="tab" aria-selected="false" data-src="media/evaluate.mp4" data-poster="media/evaluate-poster.jpg" data-at="0" data-caption="Measure · mass properties of the sample part in 6061 aluminium">
+            <span class="num">04 / Measure</span><span class="step-title">Check the part.</span><span class="step-body">Mass properties, measurements, section views and manufacturing checks.</span>
+          </button></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- Migration -->
+    <section class="section" id="migrate" aria-labelledby="migrate-title">
+      <div class="wrap split">
+        <div>
+          <p class="eyebrow">Migration / anvil-migrate</p>
+          <h2 id="migrate-title">Bring your feature trees.<br>Not just the shape.</h2>
+          <p class="lede">Other free CAD gets geometry out of a SOLIDWORKS file at best. <code>anvil-migrate</code> drives your own licensed SOLIDWORKS through its published API and rebuilds each part as editable AnvilCAD features: sketches with their relations and dimensions, extrudes, cuts, revolves, patterns, reference planes, global variables and equations, material and custom properties.</p>
+          <ol class="numbered">
+            <li><span class="n">01</span><div><h3>Read in tree order.</h3><p>Sketches keep their geometry, relations and driving dimensions. Sketches on faces stay attached to the matching AnvilCAD face.</p></div></li>
+            <li><span class="n">02</span><div><h3>Checked feature by feature.</h3><p>After each solid feature, SOLIDWORKS is rolled back to that point and its exact volume is compared with AnvilCAD's rebuild.</p></div></li>
+            <li><span class="n">03</span><div><h3>Nothing is lost on the way.</h3><p>A feature that cannot be rebuilt yet comes across as SOLIDWORKS' own geometry at that point in the tree, and the features after it stay parametric.</p></div></li>
+          </ol>
+          <p class="fine">Files are opened read-only and never saved. Parts only today, in their active configuration; assemblies and drawings are recorded in the report and are next on the roadmap.</p>
+        </div>
+
+        <div class="stack-col">
+          <div class="panel">
+            <div class="panel-head"><span>Every file gets a status</span><span class="mono dim">migration-report.csv</span></div>
+            <table class="status-table">
+              <tbody>
+                <tr><th><span class="pill pill-good">Parametric</span></th><td>Every geometric feature was rebuilt as an editable AnvilCAD feature.</td></tr>
+                <tr><th><span class="pill pill-mid">Hybrid</span></th><td>Some features came across as imported geometry; the report lists which and why.</td></tr>
+                <tr><th><span class="pill pill-bad">Failed</span></th><td>The file could not be read.</td></tr>
+                <tr><th><span class="pill">Skipped</span></th><td>Assemblies and drawings, not migrated yet.</td></tr>
+              </tbody>
+            </table>
+            <p class="panel-foot"><code>verified</code> means the migrated part's volume matches SOLIDWORKS within 1%.</p>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><span>The report, one row per file</span><span class="mono dim">illustrative rows, real columns</span></div>
+            <pre class="csv" tabindex="0"><code><span class="csv-h">source,status,verified,volume_error_pct,parametric_features,imported_features,skipped_features,seconds,output,notes</span>
+bracket.sldprt,Parametric,true,0.0021,14,0,1,6.2,bracket.anvprt,
+housing.sldprt,Hybrid,true,0.0870,22,1,0,11.4,housing.anvprt,"Sweep1: sweeps are not rebuilt yet"</code></pre>
+          </div>
+          <pre class="cmd" tabindex="0"><code><span class="prompt">&gt;</span> anvil-migrate -o D:\migrated D:\vault\projects</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bulk -->
+    <section class="section section-alt" id="bulk" aria-labelledby="bulk-title">
+      <div class="wrap split split-rev">
+        <div>
+          <p class="eyebrow">Whole organisations / anvil-bulk</p>
+          <h2 id="bulk-title">Move the whole archive,<br>not one file.</h2>
+          <p class="lede">Twenty years of parts across a dozen shares is a job for many machines, not one engineer. <code>anvil-bulk</code> inventories, deduplicates and converts an organisation's SOLIDWORKS files, and never writes to the originals.</p>
+          <ul class="ticks">
+            <li><strong>Deduplicated.</strong> Files are hashed, so copies of the same part become one job.</li>
+            <li><strong>Resumable on any number of machines.</strong> Each job is claimed with an atomic file creation and done exactly once. Stop a run and start it again; finished jobs are never redone.</li>
+            <li><strong>No SOLIDWORKS needed.</strong> Geometry comes from STEP exports. While your licences last, the optional <code>--with-anvil-migrate</code> plug-in recovers feature trees too.</li>
+            <li><strong>Edits are safe.</strong> Parts already in the output are kept, so nothing anyone changed is overwritten.</li>
+          </ul>
+        </div>
+        <div class="stack-col">
+          <div class="terminal" aria-label="The four anvil-bulk commands">
+            <div class="term-bar"><i></i><i></i><i></i><span>migration</span></div>
+<pre tabindex="0"><code><span class="c"># 1. Find every file, hash it, pair each part with its STEP export</span>
+<span class="prompt">&gt;</span> anvil-bulk scan   --project \\server\migration --step-root \\server\step-exports \\server\eng \\server\archive
+
+<span class="c"># 2. On each worker machine</span>
+<span class="prompt">&gt;</span> anvil-bulk run    --project \\server\migration
+
+<span class="c"># 3. Watch progress</span>
+<span class="prompt">&gt;</span> anvil-bulk status --project \\server\migration --workers 20
+
+<span class="c"># 4. One .anvprt per original part, at the same relative path</span>
+<span class="prompt">&gt;</span> anvil-bulk export --project \\server\migration --out \\server\anvilcad</code></pre>
+          </div>
+          <div class="chips" aria-label="Report files">
+            <span>files.csv</span><span>properties.csv</span><span>summary.csv</span><span>summary.json</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Familiar / parameters -->
+    <section class="section" id="familiar" aria-labelledby="familiar-title">
+      <div class="wrap split">
+        <div>
+          <p class="eyebrow">Familiar on day one</p>
+          <h2 id="familiar-title">You already know<br>how to use it.</h2>
+          <p class="lede">A feature tree, sketches on planes or faces, fully defined sketches, relations, smart dimensions, equations, configurations and custom properties. The workflow follows the conventions your team was trained on, under AnvilCAD's own names.</p>
+          <ol class="numbered">
+            <li><span class="n">01</span><div><h3>Name the numbers that matter.</h3><p>Global variables and equations, such as <code>depth = width / 2</code>. Type <code>=width</code> into any dimension to link it.</p></div></li>
+            <li><span class="n">02</span><div><h3>Change one, rebuild the rest.</h3><p>In the recording, the sample part's width goes from 80 to 110 mm, its boss from 24 to 34 mm and its base from 10 to 6 mm.</p></div></li>
+            <li><span class="n">03</span><div><h3>Keep variants in one file.</h3><p>Configurations with suppression, dimensions, variables and material per configuration, and a table that edits them all.</p></div></li>
+          </ol>
+        </div>
+        <figure class="player">
+          <div class="player-screen">
+            <video src="media/params.mp4" poster="media/params-poster.jpg" muted playsinline loop preload="none" aria-label="Screen recording: the Equations window of the sample part is opened, width is changed from 80 to 110, boss_d from 24 to 34 and thickness from 10 to 6, and the part rebuilds after each change."></video>
+          </div>
+          <figcaption class="player-bar"><span>width 80 → 110 · boss_d 24 → 34 · thickness 10 → 6 mm</span><a href="https://github.com/swperb/anvilcad/blob/main/scripts/site/demos.py">Script ↗</a></figcaption>
         </figure>
       </div>
     </section>
 
-    <section class="section" id="features" aria-labelledby="features-title">
+    <!-- Features -->
+    <section class="section section-alt" id="features" aria-labelledby="features-title">
       <div class="wrap">
-        <header class="section-head">
-          <p class="label">01 / Capabilities</p>
-          <h2 id="features-title">What works today</h2>
-          <p class="lede">Every item here is in the code now. The workflow follows SOLIDWORKS conventions: pick a plane or a face, draw a sketch, define it fully, and turn it into a feature in the tree.</p>
-        </header>
-        <ul class="feature-grid">
-          <li class="card">
-            <h3>Sketcher</h3>
-            <p>Line, centerline, rectangle, circle and centerpoint arc, plus construction geometry. Drag points and circles and the relations stay satisfied.</p>
-          </li>
-          <li class="card">
-            <h3>Relations and dimensions</h3>
-            <p>Relations including tangent, concentric and midpoint. One Dimension tool works out lengths, distances, diameters, radii, arc lengths and angles from what you pick and where you place the value. Degrees of freedom are reported as you go, and conflicting relations are highlighted.</p>
-          </li>
-          <li class="card">
-            <h3>Extrudes</h3>
-            <p>Extruded Boss and Extruded Cut with Blind, Mid Plane, Through All and Through All - Both end conditions.</p>
-          </li>
-          <li class="card">
-            <h3>Revolves and patterns</h3>
-            <p>Revolved Boss and Revolved Cut, plus Linear Pattern and Circular Pattern.</p>
-          </li>
-          <li class="card">
-            <h3>Fillet, Chamfer and Shell</h3>
-            <p>Fillets and chamfers on straight edges between flat faces, and on circular edges where a flat face meets a cylinder. Shell hollows a part to a uniform wall.</p>
-          </li>
-          <li class="card">
-            <h3>Planes and faces</h3>
-            <p>Sketch on the Front, Top or Right plane, on reference planes you add, or directly on a face of the model.</p>
-          </li>
-          <li class="card">
-            <h3>Variables and equations</h3>
-            <p>Global variables with equations. Type <code>=width</code> into any dimension to link it.</p>
-          </li>
-          <li class="card">
-            <h3>Materials and properties</h3>
-            <p>Assign a material to get mass properties. Custom properties and part templates are supported too.</p>
-          </li>
-          <li class="card">
-            <h3>Files and export</h3>
-            <p>Native <code>.anvprt</code> parts are versioned JSON, written atomically. Import STEP parts (exact solids for plane and cylinder bodies, meshes for everything else). Export to STEP AP214 with exact geometry when the part is exact, plus STL and OBJ. Every change can be undone and redone.</p>
-          </li>
+        <div class="section-head-row">
+          <div>
+            <p class="eyebrow">Modelling tools</p>
+            <h2 id="features-title">Sketch, model and check.</h2>
+          </div>
+          <a class="text-link" href="https://github.com/swperb/anvilcad#what-works-today">Everything that works today <span aria-hidden="true">→</span></a>
+        </div>
+        <ul class="tool-grid">
+          <li><span class="num">01</span><h3>Sketches and relations.</h3><p>Lines, arcs, circles, rectangles, polygons and slots, with trim, offset, fillet and sketch patterns; coincident, tangent, concentric and the rest; one Dimension tool that infers what you meant. Degrees of freedom are reported as you go.</p></li>
+          <li><span class="num">02</span><h3>Solid features.</h3><p>Extrudes and revolves with every end condition, sweeps, lofts, shells, ribs, drafts, domes, holes sized from ISO and ANSI tables, mirrors and patterns.</p></li>
+          <li><span class="num">03</span><h3>Fillets and chamfers.</h3><p>Constant radius with circular, conic or curvature-continuous profiles, tangent propagation, and exact rounds on any edge between two faces.</p></li>
+          <li><span class="num">04</span><h3>Multibody and reference geometry.</h3><p>Combine, split, move, copy and scale bodies. Reference planes, axes, points and coordinate systems.</p></li>
+          <li><span class="num">05</span><h3>Evaluate and DFM.</h3><p>Measure, section views, mass properties with 26 materials, and design checks for CNC machining and sheet metal.</p></li>
+          <li><span class="num">06</span><h3>Files you own.</h3><p>Native <code>.anvprt</code> parts are versioned JSON. STEP AP203, AP214 and AP242 in; exact STEP AP214, STL and OBJ out.</p></li>
         </ul>
       </div>
     </section>
 
-    <section class="section section-alt" id="screens" aria-labelledby="screens-title">
-      <div class="wrap">
-        <header class="section-head">
-          <p class="label">02 / Screens</p>
-          <h2 id="screens-title">The app as it is</h2>
-          <p class="lede">An unedited capture of AnvilCAD with the bundled sample part open.</p>
-        </header>
-        <figure class="shot shot-main">
-          <img src="assets/screens/sample-part.jpg" width="1400" height="880" loading="lazy" alt="AnvilCAD window with the sample part: a rectangular aluminium plate with rounded corners, four mounting holes, a row of slots cut along one side, and a filleted round boss with a bore in the middle. The feature tree on the left lists the 6061 Alloy material, the Front, Top and Right planes, and the features from Sketch1 and Boss-Extrude1 through Cut-Extrude3, LPattern1 and Fillet1 to Fillet3. The toolbar shows Extruded Boss/Base, Revolved Boss/Base, Extruded Cut, Revolved Cut, Linear Pattern, Circular Pattern, Fillet, Chamfer, Shell and Reference Plane. The status bar reads Rebuild OK.">
-          <figcaption><span class="mono">fig. 1</span> The bundled sample part: extrudes, cuts, a linear pattern and fillets, with the feature tree on the left.</figcaption>
+    <!-- Kernel -->
+    <section class="section" id="kernel" aria-labelledby="kernel-title">
+      <div class="wrap split">
+        <figure class="brep" aria-labelledby="brep-cap">
+          <svg viewBox="0 0 520 380" role="img" aria-labelledby="brep-t brep-d">
+            <title id="brep-t">Boundary representation of a plate with a hole</title>
+            <desc id="brep-d">An isometric plate with a through hole. One face, one edge and one vertex are highlighted in turn and labelled.</desc>
+            <defs>
+              <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="11" cy="11" r="1" fill="currentColor"/></pattern>
+            </defs>
+            <rect width="520" height="380" fill="url(#dots)" opacity="0.14"/>
+            <g class="brep-solid" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+              <path class="f-top" d="M260 70 L440 174 L260 278 L80 174 Z"/>
+              <path class="f-left" d="M80 174 L260 278 L260 318 L80 214 Z"/>
+              <path class="f-right" d="M260 278 L440 174 L440 214 L260 318 Z"/>
+              <ellipse cx="260" cy="174" rx="54" ry="31"/>
+              <path d="M206 174 Q206 192 222 200" opacity="0.5"/>
+            </g>
+            <path class="hl hl-face" d="M260 70 L440 174 L260 278 L80 174 Z M314 174 A54 31 0 1 0 206 174 A54 31 0 1 0 314 174 Z" fill-rule="evenodd"/>
+            <path class="hl hl-edge" d="M260 278 L440 174" fill="none"/>
+            <circle class="hl hl-vert" cx="440" cy="174" r="6"/>
+            <g class="brep-labels" font-family="IBM Plex Mono, monospace" font-size="12" letter-spacing="1.5">
+              <text class="lb lb-face" x="190" y="122">FACE · plane</text>
+              <text class="lb lb-edge" x="360" y="268">EDGE · line</text>
+              <text class="lb lb-vert" x="452" y="160">VERTEX</text>
+            </g>
+          </svg>
+          <figcaption id="brep-cap">B-rep · faces, edges and vertices bound the solid, each on an exact curve or surface. Explanatory illustration.</figcaption>
         </figure>
-      </div>
-    </section>
-
-    <section class="section" id="kernels" aria-labelledby="kernels-title">
-      <div class="wrap two-col">
-        <header class="section-head">
-          <p class="label">03 / Kernels</p>
-          <h2 id="kernels-title">Two kernels, one rebuild</h2>
-          <p class="lede">Exact geometry where it is supported, a faceted fallback everywhere else.</p>
-        </header>
-        <div class="prose">
-          <p><code>anvil-brep</code> is an exact boundary-representation kernel. It works with exact lines, circles, ellipses and B-spline curves on planes, cylinders, cones, spheres, tori and B-spline surfaces, and does exact booleans between any of them (intersection curves are found in closed form where one exists and traced to 1e-7 mm otherwise) exact revolves and shells, and exact fillets and chamfers on straight edges and on round edges and arcs such as a boss's rim or a slot's outline, with rolling-ball fillets and swept chamfers on any other edge, conic and curvature-continuous fillet profiles, and tangent propagation to the edges that run smoothly on from those selected. <code>anvil-kernel</code> is a faceted kernel that covers everything else: sealed hollows and imported meshes. A rebuild uses the exact kernel for as long as every feature so far is one it supports, and hands over to the faceted kernel at the first feature it cannot build. A feature is never built worse than it was before.</p>
-          <p>On the bundled sample part, the extrudes, cuts, linear pattern and first fillet build exactly, and the result matches the faceted-only volume to within 0.014 percent.</p>
+        <div>
+          <p class="eyebrow">anvil-brep / geometry kernel</p>
+          <h2 id="kernel-title">Its own exact kernel.<br>Written in Rust.</h2>
+          <p class="lede">AnvilCAD does not borrow a kernel. <code>anvil-brep</code> works on exact lines, circles, ellipses and B-splines on planes, cylinders, cones, spheres, tori and B-spline surfaces, with exact booleans whose intersection curves are found in closed form or traced to 1e-7 mm.</p>
+          <ul class="ticks">
+            <li><strong>Never panics on bad input.</strong> The kernel and STEP crates forbid <code>unsafe</code> and deny <code>unwrap</code>; malformed files return errors.</li>
+            <li><strong>Every solid is checked.</strong> Closed, consistently oriented, valid Euler characteristic, before it is used.</li>
+            <li><strong>Never built worse.</strong> A faceted kernel takes over at the first feature the exact one cannot build, and is never worse than building faceted alone.</li>
+          </ul>
         </div>
       </div>
     </section>
 
-    <section class="section section-alt" id="migrate" aria-labelledby="migrate-title">
-      <div class="wrap two-col">
-        <header class="section-head">
-          <p class="label">04 / Migration</p>
-          <h2 id="migrate-title">Bring your SOLIDWORKS parts</h2>
-          <p class="lede">Your feature tree comes with you, not just the shape.</p>
-        </header>
-        <div class="prose">
-          <p><code>anvil-migrate</code> converts SOLIDWORKS parts into AnvilCAD parts with their feature tree. It runs on a Windows machine with SOLIDWORKS installed and checks each translated feature by comparing its volume with what SOLIDWORKS reports. When a feature cannot be rebuilt yet, it comes across as an imported body at that point in the tree, and the features after it stay parametric.</p>
+    <!-- Agent harness -->
+    <section class="section section-alt" id="agent" aria-labelledby="agent-title">
+      <div class="wrap split split-rev">
+        <div>
+          <p class="eyebrow">Agents and scripts / anvilcad-agent</p>
+          <h2 id="agent-title">Drive the real app<br>without a window.</h2>
+          <p class="lede"><code>anvilcad-agent</code> runs the real AnvilCAD interface headlessly. An AI agent, a script or a test sends JSON commands, clicks through the app, reads its state and takes screenshots. It never takes focus or touches your mouse, and the same script gives the same pixels every run.</p>
+          <p class="fine">Every recording on this page was made this way, from the scripts in <a href="https://github.com/swperb/anvilcad/tree/main/scripts/site"><code>scripts/site</code></a>. AI is optional; AnvilCAD works without it.</p>
+          <div class="chips chips-tabs" aria-hidden="true"><span>Click</span><span>Inspect</span><span>Screenshot</span><span>Export</span></div>
+          <a class="text-link" href="https://github.com/swperb/anvilcad/blob/main/docs/AGENT_HARNESS.md">Read the harness guide <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="terminal" id="agent-term" aria-label="An anvilcad-agent session that sketches and extrudes a plate">
+          <div class="term-bar"><i></i><i></i><i></i><span>anvilcad-agent</span></div>
+<pre tabindex="0"><code><span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","label":"Front Plane"}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","label":"Rectangle"}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","sketch":[-20,-10]}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","sketch":[20,10]}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","label":"Circle"}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","sketch":[0,0]}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","sketch":[5,0]}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","label":"Exit Sketch"}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","label":"Extruded Boss/Base"}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"click","label":"OK","role":"Button"}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"state"}</span>
+<span class="t-line t-out"><span class="t-ok">&lt;</span> {"ok":true,"state":{"status":"Rebuild OK",</span>
+<span class="t-line t-out">    "features":["Sketch1","Boss-Extrude1"],</span>
+<span class="t-line t-out">    "body":{"exact":true,"volume":7215.60,...}}}</span>
+<span class="t-line"><span class="t-in">&gt;</span> {"cmd":"screenshot","path":"target/plate.png"}</span>
+<span class="t-line t-out"><span class="t-ok">&lt;</span> {"ok":true,"adapter":"Apple M5 Pro (Metal)",...}</span></code></pre>
         </div>
       </div>
     </section>
 
-    <section class="section" id="stability" aria-labelledby="stability-title">
-      <div class="wrap two-col">
-        <header class="section-head">
-          <p class="label">05 / Principles</p>
-          <h2 id="stability-title">Stability first</h2>
-          <p class="lede">A CAD tool that crashes or quietly produces a broken solid costs more than one that is slow. These rules are enforced in the code, not just written down.</p>
-        </header>
-        <ol class="rules">
-          <li>
-            <h3>Transactional edits</h3>
-            <p>An edit either applies completely or leaves the part as it was.</p>
-          </li>
-          <li>
-            <h3>Every exact solid is topology-checked</h3>
-            <p>Solids from the exact kernel are checked before they are used.</p>
-          </li>
-          <li>
-            <h3>Property-based tests on booleans</h3>
-            <p>Randomized boxes on an integer grid are combined and the results compared with exact volumes.</p>
-          </li>
-          <li>
-            <h3>UI tests on the real interface</h3>
-            <p>Tests drive the real UI with simulated mouse input, so sketching, dimensioning, dragging, face picking, extruding and undo are covered without opening a window.</p>
-          </li>
-        </ol>
-      </div>
-    </section>
-
-    <section class="section section-alt" id="architecture" aria-labelledby="architecture-title">
+    <!-- Showcase -->
+    <section class="section" id="showcase" aria-labelledby="showcase-title">
       <div class="wrap">
-        <header class="section-head">
-          <p class="label">06 / Architecture</p>
-          <h2 id="architecture-title">Eight crates, dependencies point one way</h2>
-          <p class="lede">Geometry knows nothing about the UI, and each crate can be tested on its own.</p>
-        </header>
-        <ol class="stack">
-          <li class="layer">
-            <p class="crate"><code>anvil-app</code></p>
-            <p>The desktop application, built on egui and drawn with wgpu: Metal on macOS, Vulkan or GL on Linux, DX12 or Vulkan on Windows.</p>
-          </li>
-          <li class="layer">
-            <p class="crate"><code>anvil-migrate</code></p>
-            <p>SOLIDWORKS to AnvilCAD converter. Runs on Windows with SOLIDWORKS installed.</p>
-          </li>
-          <li class="layer">
-            <p class="crate"><code>anvil-step</code></p>
-            <p>STEP reader and exact STEP export. Imports bodies as exact solids where it can, and as watertight meshes otherwise.</p>
-          </li>
-          <li class="layer">
-            <p class="crate"><code>anvil-io</code></p>
-            <p>Faceted STEP, STL and OBJ export.</p>
-          </li>
-          <li class="layer">
-            <p class="crate"><code>anvil-model</code></p>
-            <p>The parametric part: feature tree, rebuild, equations, materials, custom properties and the <code>.anvprt</code> file format.</p>
-          </li>
-          <li class="layer">
-            <p class="crate"><code>anvil-sketch</code></p>
-            <p>2D sketcher: entities, relations, the constraint solver and profile extraction.</p>
-          </li>
-          <li class="layer">
-            <p class="crate"><code>anvil-kernel</code></p>
-            <p>Faceted kernel for everything the exact kernel does not cover yet.</p>
-          </li>
-          <li class="layer">
-            <p class="crate"><code>anvil-brep</code></p>
-            <p>Exact boundary-representation kernel: exact curves and surfaces, booleans, straight-edge fillets and chamfers.</p>
-          </li>
-        </ol>
+        <div class="section-head-row">
+          <div>
+            <p class="eyebrow">Example models</p>
+            <h2 id="showcase-title">Made with AnvilCAD.</h2>
+          </div>
+          <a class="text-link" href="https://github.com/swperb/anvilcad/tree/main/docs/agent">Example scripts <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="cards">
+          <article class="card">
+            <div class="card-media">
+              <video src="media/showcase.mp4" poster="media/showcase-poster.jpg" muted playsinline loop preload="none" aria-label="The bundled sample part turning slowly in the viewport."></video>
+            </div>
+            <div class="card-body">
+              <p class="eyebrow">Bundled sample · built exactly</p>
+              <h3>Mounting plate with a boss.</h3>
+              <p>Extrudes, cuts, a linear pattern of slots and filleted boss rims, rebuilt on the exact kernel from start to finish. Its volume matches the faceted-only build to 0.013%.</p>
+            </div>
+          </article>
+          <article class="card">
+            <div class="card-media">
+              <video src="media/refine.mp4" poster="media/refine-poster.jpg" muted playsinline loop preload="none" aria-label="Four corner edges of a plate are picked and rounded with a 6 mm fillet."></video>
+            </div>
+            <div class="card-body">
+              <p class="eyebrow">Recorded script · real time</p>
+              <h3>Plate with rounded corners.</h3>
+              <p>A 60 × 36 × 16 mm plate with a Ø18 mm hole, its four corners filleted at 6 mm. 30 494 mm³ before the fillet, 29 997 mm³ after.</p>
+            </div>
+          </article>
+        </div>
       </div>
     </section>
 
+    <!-- Principles -->
+    <section class="section section-alt" id="yours" aria-labelledby="yours-title">
+      <div class="wrap">
+        <div class="section-head-row">
+          <div>
+            <p class="eyebrow">Yours to keep</p>
+            <h2 id="yours-title">No subscription. No licence server.</h2>
+          </div>
+        </div>
+        <ul class="tool-grid tool-grid-3">
+          <li><span class="num">Free</span><h3>Open source, for good.</h3><p>MIT OR Apache-2.0. No accounts, no seats, no cloud lock-in, and no feature held back for a paid tier.</p></li>
+          <li><span class="num">Local</span><h3>Your files, on your disk.</h3><p>Parts are versioned JSON written atomically, so they diff, back up and outlive any vendor.</p></li>
+          <li><span class="num">Native</span><h3>No SOLIDWORKS, ever.</h3><p>Everything works on a machine that never had SOLIDWORKS. A licence only adds fidelity while you still have one.</p></li>
+        </ul>
+        <p class="fine wide">Clean-room interoperability: SOLIDWORKS behaviour is studied from published documentation and lawfully held files, never from its binaries, and written up as <a href="https://github.com/swperb/anvilcad/tree/main/docs/re">16 public specifications</a> before any code. See <a href="https://github.com/swperb/anvilcad/blob/main/INTEROPERABILITY.md">INTEROPERABILITY.md</a>.</p>
+      </div>
+    </section>
+
+    <!-- Roadmap -->
     <section class="section" id="roadmap" aria-labelledby="roadmap-title">
-      <div class="wrap">
-        <header class="section-head">
-          <p class="label">07 / Roadmap</p>
-          <h2 id="roadmap-title">What comes next</h2>
-          <p class="lede">Roughly in order. Nothing here has a date attached.</p>
-        </header>
-        <ol class="roadmap">
-          <li><span class="mono step">next</span><div><h3>Freeform modelling in the kernel</h3><p>Surfaces of revolution, blends on B-spline faces and curved-edge fillets built exactly. Booleans already work on planes, cylinders, cones, tori, spheres and B-spline faces, including those imported from STEP.</p></div></li>
-          <li><span class="mono step">now</span><div><h3>CAM</h3><p>2.5D adaptive clearing built from published research, facing, profiling and drilling; feature recognition; a tool and feeds library; simulation with gouge and collision checks; and community post processors checked by a verifier.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>More part features</h3><p>A hole feature with standard sizes, mirror, sweep, loft, multi-body parts and sheet metal.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>Assemblies and drawings</h3><p>Parts positioned together with mates, and 2D drawings made from them.</p></div></li>
-          <li><span class="mono step">then</span><div><h3>PDM</h3><p>A versioned vault with check-in and check-out, metadata, life-cycle states and an open API.</p></div></li>
-          <li class="future"><span class="mono step">later</span><div><h3>PLM</h3><p>Bills of materials, change management, requirements and quality records, exchanging data through open standards.</p></div></li>
+      <div class="wrap split">
+        <div>
+          <p class="eyebrow">Roadmap</p>
+          <h2 id="roadmap-title">CAD now.<br>Then the whole stack.</h2>
+          <p class="lede">The goal is a complete, free engineering stack. Nothing here has a date attached.</p>
+          <a class="text-link" href="https://github.com/swperb/anvilcad/blob/main/ROADMAP.md">Read the roadmap <span aria-hidden="true">→</span></a>
+        </div>
+        <ol class="road">
+          <li class="done"><span class="mono">now</span><div><h3>Parametric parts</h3><p>Sketches, features, configurations, exact kernel, STEP, and migration of SOLIDWORKS parts.</p></div></li>
+          <li class="active"><span class="mono">now</span><div><h3>CAM</h3><p>2.5D milling exists as a library: adaptive clearing, facing, profiling, drilling, simulation and verified post processors.</p></div></li>
+          <li><span class="mono">next</span><div><h3>Assemblies and drawings</h3><p>Parts positioned with mates, 2D drawings made from them, and migration of both.</p></div></li>
+          <li><span class="mono">then</span><div><h3>PDM</h3><p>A versioned vault with check-in, check-out, metadata, life-cycle states and an open API.</p></div></li>
+          <li><span class="mono">later</span><div><h3>PLM</h3><p>Bills of materials, change management and quality records, through open standards.</p></div></li>
         </ol>
+      </div>
+    </section>
+
+    <!-- Release + contribute -->
+    <section class="section section-alt" aria-label="Release and contributing">
+      <div class="wrap duo">
+        <div class="duo-item">
+          <p class="eyebrow">Latest release</p>
+          <h2>AnvilCAD v0.1</h2>
+          <p>An early release: the core modelling loop works end to end, and large parts of a full CAD system are still ahead. There are no prebuilt downloads yet.</p>
+          <a class="text-link" href="https://github.com/swperb/anvilcad/commits/main">Recent changes <span aria-hidden="true">→</span></a>
+        </div>
+        <div class="duo-item">
+          <p class="eyebrow">Contribute</p>
+          <h2>Help build AnvilCAD.</h2>
+          <p>Report bugs, write a specification, improve the documentation or contribute code. Tests drive the real interface, so a change can be checked without opening a window.</p>
+          <a class="text-link" href="https://github.com/swperb/anvilcad/blob/main/CONTRIBUTING.md">Contribution guide <span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Get -->
+    <section class="section get" id="get" aria-labelledby="get-title">
+      <div class="wrap get-inner">
+        <p class="eyebrow">Get AnvilCAD</p>
+        <h2 id="get-title">Build it in one command.</h2>
+        <p class="lede">With a Rust toolchain on macOS, Linux or Windows:</p>
+        <div class="copy-cmd">
+          <pre tabindex="0"><code id="build-cmd">git clone https://github.com/swperb/anvilcad &amp;&amp; cd anvilcad &amp;&amp; cargo run --release -p anvil-app</code></pre>
+          <button type="button" class="copy-btn" data-copy="build-cmd">Copy</button>
+        </div>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="https://github.com/swperb/anvilcad">View on GitHub</a>
+          <a class="btn btn-secondary" href="https://github.com/swperb/anvilcad#building">Windows and other build notes</a>
+        </div>
       </div>
     </section>
   </main>
 
   <footer class="site-footer">
     <div class="wrap footer-row">
-      <p class="brand-small">
-        <svg class="mark" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true" focusable="false"><path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="22" y="7.5" width="13" height="4.5" rx="1.25" fill="#C2410C"/></svg>
+      <p class="brand brand-small">
+        <svg class="mark" viewBox="0 0 48 48" width="20" height="20" aria-hidden="true" focusable="false"><path d="M3 13 H45 V20 H35 Q31 22 31 30 L38 36 V41 H12 V36 L19 30 Q19 23 15 21.5 Q8 19 3 13 Z" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="22" y="7.5" width="13" height="4.5" rx="1.25" fill="var(--accent)"/></svg>
         <span>AnvilCAD</span>
       </p>
-      <p>Licensed under MIT OR Apache-2.0.</p>
+      <p>Free and open source under MIT OR Apache-2.0 · <a href="https://github.com/swperb/anvilcad">github.com/swperb/anvilcad</a></p>
       <p class="fine">SOLIDWORKS is a trademark of Dassault Systèmes. AnvilCAD is an independent project, not affiliated with or endorsed by Dassault Systèmes, and works without SOLIDWORKS installed.</p>
-      <p><a href="https://github.com/swperb/anvilcad">github.com/swperb/anvilcad</a></p>
     </div>
   </footer>
+
+  <script src="site.js" defer></script>
 </body>
 </html>
