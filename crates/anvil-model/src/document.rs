@@ -307,6 +307,37 @@ pub struct ImportedFace {
 pub struct FilletFeature {
     pub edges: Vec<EdgeRef>,
     pub radius: Dim,
+    /// The round's cross-section (circular in parts saved before there was a choice).
+    #[serde(default)]
+    pub profile: FilletProfile,
+}
+
+/// The cross-section of a fillet's round, between where a ball of its radius touches the
+/// faces (see `docs/re/fillet-curved-edges.md`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum FilletProfile {
+    /// The ball's circular arc.
+    #[default]
+    Circular,
+    /// A conic weighted by rho, from 0.5 (a parabola) to 0.95.
+    ConicRho { rho: Dim },
+    /// A conic with this radius of curvature at its shoulder point.
+    ConicRadius { radius: Dim },
+    /// A curve that meets each face with the face's own curvature.
+    CurvatureContinuous,
+}
+
+impl FilletProfile {
+    pub const LABELS: [&'static str; 4] = ["Circular", "Conic rho", "Conic radius", "Curvature continuous"];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            FilletProfile::Circular => Self::LABELS[0],
+            FilletProfile::ConicRho { .. } => Self::LABELS[1],
+            FilletProfile::ConicRadius { .. } => Self::LABELS[2],
+            FilletProfile::CurvatureContinuous => Self::LABELS[3],
+        }
+    }
 }
 
 /// Chamfer on edges.

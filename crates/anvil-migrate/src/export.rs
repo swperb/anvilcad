@@ -788,9 +788,24 @@ impl Ctx<'_> {
                 if data.bool("AsymmetricFillet", &[]).unwrap_or(false) {
                     return Err("asymmetric fillets are not supported yet".into());
                 }
-                if data.i64("ConicTypeForCrossSectionProfile", &[]).unwrap_or(0) != 0 {
-                    return Err("conic and curvature-continuous fillets are not supported yet".into());
-                }
+                // The profile (docs/re/fillet-curved-edges.md): swFeatureFilletProfileType_e
+                // gives 0 circular, 1 conic rho, 2 conic radius, 3 a chamfer's section; the
+                // curvature-continuous option is a separate flag.
+                let conic = data.i64("ConicTypeForCrossSectionProfile", &[]).unwrap_or(0);
+                let continuous = data.bool("CurvatureContinuous", &[]).unwrap_or(false);
+                let rho_or_radius = || data.f64("DefaultConicRhoOrRadius", &[]).map_err(err);
+                let profile = match (conic, continuous) {
+                    (0, false) => FilletProfile::Circular,
+                    (0, true) => FilletProfile::CurvatureContinuous,
+                    (1, false) => FilletProfile::ConicRho { rho: Dim::Value(rho_or_radius()?) },
+                    (2, false) => {
+                        FilletProfile::ConicRadius { radius: Dim::Value(rho_or_radius()? * M_TO_MM) }
+                    }
+                    (3, _) => {
+                        return Err("fillets with a chamfer's cross-section are not supported yet".into())
+                    }
+                    _ => return Err("this fillet's cross-section profile is not supported yet".into()),
+                };
                 let radius = data.f64("DefaultRadius", &[]).map_err(err)? * M_TO_MM;
                 // FilletItemsCount is -1 when the selection is a plain edge list.
                 let n = data.i64("FilletItemsCount", &[]).unwrap_or(-1);
@@ -801,7 +816,7 @@ impl Ctx<'_> {
                     items = data.call("Edges", &[]).map(|v| v.objects()).unwrap_or_default();
                 }
                 let edges = self.map_edges(&items)?;
-                Ok(vec![FeatureKind::Fillet(FilletFeature { edges, radius: Dim::Value(radius) })])
+                Ok(vec![FeatureKind::Fillet(FilletFeature { edges, radius: Dim::Value(radius), profile })])
             }),
             "Chamfer" => with_selections(&data, &self.model, || {
                 let kind = data.i64("Type", &[]).unwrap_or(0);

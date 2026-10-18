@@ -8,7 +8,7 @@ when they are in the code and tested.
 
 ## CAD
 
-1. Kernel: conic and curvature-continuous profiles, tangent propagation to unselected edges, overflow choices and round corners,
+1. Kernel: tangent propagation to unselected edges, overflow choices and round corners,
    spherical corner blends, variable-radius fillets, draft; shells of freeform faces,
    sealed hollows (a second shell inside a solid), and walls thick enough to change a
    part's shape; freeform faces that touch other surfaces without crossing them, and

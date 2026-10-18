@@ -17,7 +17,7 @@
 use crate::geom::{Curve, Surface};
 use crate::patch::{SplineSurface, Wrap};
 use crate::spline::Spline;
-use crate::{KernelError, Result};
+use crate::{KernelError, Result, tol};
 use glam::{DVec2, DVec3};
 use std::sync::Arc;
 
@@ -94,13 +94,37 @@ pub fn intersect(p: &SplineSurface, q: &Surface) -> Result<Vec<Curve>> {
             continue;
         }
         let Some((points, closed)) = tracer.trace(seed)? else { continue };
-        if points.len() < 2 {
+        // A trace that goes nowhere is a point where the surfaces only touch (two rounds
+        // tangent to the same face where they meet at a corner), which divides no face.
+        let length: f64 = points.windows(2).map(|w| (w[1].1 - w[0].1).length()).sum();
+        if points.len() < 2 || length <= tol::DEGENERATE {
             continue;
         }
         curves.push(tracer.fit(&points, closed)?);
         traced.push(points.iter().map(|q| q.1).collect());
     }
     Ok(curves)
+}
+
+/// Where `f` changes sign near `u0` in `[a, b]` (`f0` is its value at `u0`): bracketed by
+/// widening from `u0`, then bisected.
+fn bisect_near(f: &dyn Fn(f64) -> f64, f0: f64, u0: f64, a: f64, b: f64) -> Option<f64> {
+    let mut w = (b - a) * 1e-5;
+    let mut other = None;
+    while w <= 0.1 * (b - a) && other.is_none() {
+        other = [(u0 - w).max(a), (u0 + w).min(b)].into_iter().find(|u| f(*u).signum() != f0.signum());
+        w *= 2.0;
+    }
+    let (mut l, mut r) = (u0, other?);
+    for _ in 0..80 {
+        let m = 0.5 * (l + r);
+        if f(m).signum() == f0.signum() {
+            l = m;
+        } else {
+            r = m;
+        }
+    }
+    Some(0.5 * (l + r))
 }
 
 fn near_polyline(l: &[DVec3], x: DVec3, tol: f64) -> bool {
@@ -346,6 +370,13 @@ impl<'a> Tracer<'a> {
         let Some(t) = self.tangent(seed, x0) else { return Ok(None) };
         let Some(start) = self.settle(seed, x0, t) else { return Ok(None) };
         let Some(t0) = self.tangent(start.0, start.1) else { return Ok(None) };
+        // A start at a single point where the surfaces touch, on an edge (the corner where
+        // two rounds tangent to one face meet): the curves through it are traced from
+        // other starts, and the point itself divides nothing.
+        if self.touches(start) && self.touch_end(start).is_some_and(|e| (e.1 - start.1).length() < self.near)
+        {
+            return Ok(None);
+        }
         self.check_crossing(start)?;
         let (forward, closed) = self.march(start, t0)?;
         if closed {
@@ -358,12 +389,71 @@ impl<'a> Tracer<'a> {
         Ok(Some((back, false)))
     }
 
-    /// Refuses a point where the surfaces touch rather than cross (see [`TOUCH`]).
+    /// Whether the surfaces touch rather than cross at `n` (see [`TOUCH`]).
+    fn touches(&self, n: Node) -> bool {
+        self.p.normal_st(n.0).cross(self.q.normal_at(n.1)).length() < TOUCH
+    }
+
+    /// Refuses a point where the surfaces touch rather than cross.
     fn check_crossing(&self, n: Node) -> Result<()> {
-        if self.p.normal_st(n.0).cross(self.q.normal_at(n.1)).length() < TOUCH {
+        if self.touches(n) {
             return Err(KernelError::Unsupported("the surfaces touch along their intersection".into()));
         }
         Ok(())
+    }
+
+    /// The point near `n` on one of this patch's edges where the other surface touches it:
+    /// where the other surface's signed distance along the edge has a double root (it
+    /// reaches zero without changing sign), or where the edge leaves the other surface,
+    /// when that is a patch whose own edge passes there (the contact edges of two rounds
+    /// meeting at a corner). Kept only where the distance is zero, the surfaces touch,
+    /// and they touch at that point alone.
+    fn touch_end(&self, n: Node) -> Option<Node> {
+        let ((s0, s1), (t0, t1)) = self.p.domain();
+        let mut best: Option<(f64, Node)> = None;
+        for (k, lo, hi, closed) in [(0usize, s0, s1, self.p.closed.0), (1, t0, t1, self.p.closed.1)] {
+            if closed {
+                continue;
+            }
+            let (a, b) = if k == 0 { (t0, t1) } else { (s0, s1) };
+            for v in [lo, hi] {
+                let along = |u: f64| if k == 0 { DVec2::new(v, u) } else { DVec2::new(u, v) };
+                let u0 = if k == 0 { n.0.y } else { n.0.x };
+                // Only an edge that passes close by.
+                if (self.p.eval_st(along(u0)) - n.1).length() > self.max_step {
+                    continue;
+                }
+                let h = (b - a) * 1e-7;
+                let rate = |u: f64| self.f(along(u + h)) - self.f(along(u - h));
+                let leaves = |u: f64| self.outside_other(self.p.eval_st(along(u)));
+                let mut candidates = Vec::new();
+                for (test, at0) in [
+                    (&rate as &dyn Fn(f64) -> f64, rate(u0)),
+                    (&|u: f64| if leaves(u) { 1.0 } else { -1.0 }, if leaves(u0) { 1.0 } else { -1.0 }),
+                ] {
+                    if let Some(u) = bisect_near(test, at0, u0, a, b) {
+                        candidates.push(u);
+                    }
+                }
+                for u in candidates {
+                    let st = along(u);
+                    let x = self.p.eval_st(st);
+                    let off = self.f(st).abs();
+                    // Touching at this one point, not along the edge: away from it either
+                    // way the distance is not zero, or the edge has left the other patch.
+                    let scale = 1e-9 * (1.0 + x.length());
+                    let d = (b - a) * 1e-3;
+                    let isolated = [u - d, u + d]
+                        .iter()
+                        .filter(|v| **v >= a && **v <= b)
+                        .all(|v| self.f(along(*v)).abs() > scale || leaves(*v));
+                    if off < scale && isolated && self.touches((st, x)) && best.is_none_or(|b| off < b.0) {
+                        best = Some((off, (st, x)));
+                    }
+                }
+            }
+        }
+        best.map(|b| b.1)
     }
 
     /// Marches from `start` along `dir`. Returns the points (beginning with `start`) and
@@ -414,7 +504,17 @@ impl<'a> Tracer<'a> {
             if out.len() > 3 && travelled > 4.0 * h && (n.1 - start.1).length() < 0.75 * h.max(step) {
                 return Ok((out, true));
             }
-            self.check_crossing(n)?;
+            // Running into a point where the surfaces touch (two rounds tangent to the
+            // same face where they meet at a corner): the curve ends there, on an edge.
+            if self.touches(n) {
+                let Some(end) = self.touch_end(n) else {
+                    return Err(KernelError::Unsupported(
+                        "the surfaces touch along their intersection".into(),
+                    ));
+                };
+                out.push(end);
+                break;
+            }
             out.push(n);
             cur = n;
             tan = t;

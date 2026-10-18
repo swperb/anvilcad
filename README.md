@@ -36,7 +36,8 @@ system are still ahead; see the roadmap.
   reverse direction
 - Revolved Boss and Revolved Cut about any sketch line
 - Linear Pattern and Circular Pattern (about any axis)
-- Fillet (constant radius) and Chamfer (equal distance, angle and distance, or offset
+- Fillet (constant radius, with a circular, conic rho, conic radius or
+  curvature-continuous profile) and Chamfer (equal distance, angle and distance, or offset
   face) on any edge between two faces, built exactly: straight and round edges in closed
   form, any other edge with a rolling-ball round or a swept bevel; edges that run smoothly
   into each other are blended as one; convex edges are rounded off, concave edges are
@@ -316,7 +317,9 @@ Kernel design notes:
   outline, are blended together so their rounds join; any other edge between two faces
   gets a rolling-ball round, a B-spline surface fitted to exact ball sections, one round
   along a whole smooth run of such edges; chamfers there are swept the same way, set out
-  by equal distance, angle and distance, or offset faces). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
+  by equal distance, angle and distance, or offset faces; conic and curvature-continuous
+  fillets are swept the same way on any edge, the latter meeting each face with its own
+  curvature). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
   and tori exactly, with pointed cones and sphere poles where it meets the axis. A round
   edge is filleted with a torus (chamfered with a cone) by a boolean with the corner's
   cross-section revolved about the axis. A shell is the part less its cavity: every

@@ -626,28 +626,49 @@ fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -
     };
     let ts: Vec<f64> = (0..=n).map(|i| lo + span * i as f64 / n as f64).collect();
     let fs: Vec<f64> = ts.iter().map(|t| f(*t)).collect();
-    let mut roots = Vec::new();
-    for i in 0..n {
-        let (t0, t1, f0, f1) = (ts[i], ts[i + 1], fs[i], fs[i + 1]);
-        if f0.abs() < tol {
-            roots.push(t0);
-        } else if f0.signum() != f1.signum() && f1.abs() >= tol {
-            let (mut a, mut b, mut fa) = (t0, t1, f0);
-            for _ in 0..80 {
-                let m = 0.5 * (a + b);
-                let fm = f(m);
-                if fm.signum() == fa.signum() {
-                    a = m;
-                    fa = fm;
-                } else {
-                    b = m;
-                }
+    let bisect = |t0: f64, t1: f64, f0: f64| {
+        let (mut a, mut b, mut fa) = (t0, t1, f0);
+        for _ in 0..80 {
+            let m = 0.5 * (a + b);
+            let fm = f(m);
+            if fm.signum() == fa.signum() {
+                a = m;
+                fa = fm;
+            } else {
+                b = m;
             }
-            roots.push(0.5 * (a + b));
         }
-    }
-    if fs[n].abs() < tol {
-        roots.push(ts[n]);
+        0.5 * (a + b)
+    };
+    let mut roots = Vec::new();
+    let mut i = 0;
+    while i <= n {
+        if fs[i].abs() < tol {
+            // A run of samples within `tol` of the surface is one meeting: where the curve
+            // crosses inside it, or else where it comes closest. (A curve leaving a
+            // surface it touches with no curvature to spare, as a curvature-continuous
+            // round's edge does, stays within `tol` of it for a while.)
+            let mut j = i;
+            while j < n && fs[j + 1].abs() < tol {
+                j += 1;
+            }
+            // A run reaching an end of the piece is the curve touching at that end (where
+            // it meets the face it leaves).
+            let crossing =
+                (i..j).find(|&k| fs[k] != 0.0 && fs[k + 1] != 0.0 && fs[k].signum() != fs[k + 1].signum());
+            roots.push(match crossing {
+                _ if i == 0 => ts[0],
+                _ if j == n => ts[n],
+                Some(k) => bisect(ts[k], ts[k + 1], fs[k]),
+                None => (i..=j).min_by(|&a, &b| fs[a].abs().total_cmp(&fs[b].abs())).map_or(ts[i], |k| ts[k]),
+            });
+            i = j + 1;
+            continue;
+        }
+        if i < n && fs[i].signum() != fs[i + 1].signum() && fs[i + 1].abs() >= tol {
+            roots.push(bisect(ts[i], ts[i + 1], fs[i]));
+        }
+        i += 1;
     }
     roots
 }
