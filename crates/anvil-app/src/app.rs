@@ -3269,6 +3269,8 @@ fn kind_name(k: &FeatureKind) -> &'static str {
         FeatureKind::Point(_) => "Point",
         FeatureKind::CoordSys(_) => "CoordinateSystem",
         FeatureKind::Sweep(_) => "Sweep",
+        FeatureKind::Draft(_) => "Draft",
+        FeatureKind::Dome(_) => "Dome",
     }
 }
 
@@ -3291,6 +3293,7 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::SketchPattern(_) => Icon::LinearPattern,
         FeatureKind::Axis(_) | FeatureKind::Point(_) | FeatureKind::CoordSys(_) => Icon::Plane,
         FeatureKind::Sweep(_) => Icon::Extrude,
+        FeatureKind::Draft(_) | FeatureKind::Dome(_) => Icon::Shell,
     }
 }
 

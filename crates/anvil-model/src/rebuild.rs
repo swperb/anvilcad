@@ -331,6 +331,8 @@ impl Document {
                 }
                 st.tools.insert(id, (tool, ef.op));
             }
+            FeatureKind::Draft(d) => self.rebuild_draft(id, &d, st)?,
+            FeatureKind::Dome(d) => self.rebuild_dome(id, &d, st)?,
             FeatureKind::Sweep(sw) => {
                 let plan = self.plan_sweep(&sw, st)?;
                 let tool = plan.faceted(id)?;

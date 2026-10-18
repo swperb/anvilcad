@@ -823,6 +823,8 @@ pub enum FeatureKind {
     Point(crate::refgeom::PointFeature),
     CoordSys(crate::refgeom::CoordSysFeature),
     Sweep(crate::sweep::SweepFeature),
+    Draft(crate::modify::DraftFeature),
+    Dome(crate::modify::DomeFeature),
 }
 
 impl FeatureKind {
@@ -848,6 +850,8 @@ impl FeatureKind {
             FeatureKind::Mirror(_) => "Mirror",
             FeatureKind::Sweep(s) if s.op == BodyOp::Cut => "Cut-Sweep",
             FeatureKind::Sweep(_) => "Sweep",
+            FeatureKind::Draft(_) => "Draft",
+            FeatureKind::Dome(_) => "Dome",
             FeatureKind::Axis(_) => "Axis",
             FeatureKind::Point(_) => "Point",
             FeatureKind::CoordSys(_) => "Coordinate System",
@@ -876,6 +880,8 @@ impl FeatureKind {
             }
             FeatureKind::Axis(a) => a.kind.dependencies(),
             FeatureKind::Sweep(s) => s.dependencies(),
+            FeatureKind::Draft(d) => d.dependencies(),
+            FeatureKind::Dome(d) => d.dependencies(),
             FeatureKind::Point(p) => p.dependencies(),
             FeatureKind::CoordSys(c) => c.dependencies(),
             FeatureKind::LinearPattern(p) => p.features.clone(),

@@ -13,6 +13,7 @@ pub mod exact;
 mod extrude;
 pub mod hole;
 pub mod material;
+pub mod modify;
 mod pattern;
 pub mod rebuild;
 pub mod refgeom;
@@ -25,6 +26,7 @@ pub use config::{ConfigError, ConfigParam, ConfigValue, Configuration, Configure
 pub use document::*;
 pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};
 pub use material::{Material, MaterialClass};
+pub use modify::{DomeFeature, DraftFeature, Propagation};
 pub use rebuild::{BuildState, MassReport};
 pub use refgeom::{
     AlongMode, ArcRef, AxisFeature, AxisKind, CoordSysFeature, DirRef, IntersectWith, LineRef, PlaneKind,
