@@ -756,6 +756,7 @@ mod tests {
             depth: Dim::Value(10.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         (doc, ex)
     }
@@ -788,6 +789,7 @@ mod tests {
             depth: Dim::Value(0.0),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }))
     }
 

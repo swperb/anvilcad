@@ -912,6 +912,7 @@ mod fillet_profiles {
             depth: Dim::Value(10.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let top = FaceId { feature: base, index: FaceId::END_CAP };
         let edge = EdgeRef::new(top, FaceId::side(base, sides[0] as u32));
@@ -1038,6 +1039,7 @@ mod tangent_propagation {
             depth: Dim::Value(5.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let top = FaceId { feature: base, index: FaceId::END_CAP };
         (doc, entities.iter().map(|&e| EdgeRef::new(top, FaceId::side(base, e as u32))).collect())
@@ -1106,6 +1108,7 @@ mod tangent_propagation {
             depth: Dim::Value(10.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let top = FaceId { feature: base, index: FaceId::END_CAP };
         let edge = |k: usize| EdgeRef::new(top, FaceId::side(base, sides[k] as u32));
