@@ -275,6 +275,21 @@ pub fn anchor(sk: &Sketch, c: &Constraint) -> Option<Vec2> {
             let a0 = ra.angle();
             Some(vertex + Vec2::from_angle(a0 + ccw_angle(ra, rb) * 0.5) * r)
         }
+        // Between the offset curve and its base: square across from the offset line's
+        // middle, or between the two rims of concentric circles.
+        Offset { base, entity, .. } => match (line_points(sk, base), line_points(sk, entity)) {
+            (Some(_), Some(_)) => {
+                let m = mid(entity)?;
+                let (a, b) = line_points(sk, base)?;
+                let (pa, pb) = (pos(a)?, pos(b)?);
+                let d = (pb - pa).normalized();
+                let f = pa + d * (m - pa).dot(d);
+                Some((m + f) * 0.5)
+            }
+            _ => Some(
+                center(base)? + Vec2::from_angle(FRAC_PI_4) * 0.5 * (sk.radius(base) + sk.radius(entity)),
+            ),
+        },
         _ => None,
     }
 }
@@ -400,6 +415,27 @@ fn graphic_inner(sk: &Sketch, c: &Constraint, label: Vec2) -> Option<Graphic> {
             g.arrows.push((ea, -Vec2::from_angle(a0).perp()));
             g.arrows.push((eb, Vec2::from_angle(a0 + sweep).perp()));
         }
+        Offset { base, entity, .. } => match (line_points(sk, base), line_points(sk, entity)) {
+            (Some((a, b)), Some((p, q))) => {
+                let (pa, pb) = (pos(a)?, pos(b)?);
+                let m = (pos(p)? + pos(q)?) * 0.5;
+                let d = (pb - pa).normalized();
+                let f = pa + d * (m - pa).dot(d);
+                let n = (m - f).normalized();
+                if n.length() < 0.5 {
+                    return None;
+                }
+                linear(&mut g, f, m, n);
+            }
+            _ => {
+                let cc = pos(center_of(sk, base)?)?;
+                let mut d = (label - cc).normalized();
+                if d.length() < 0.5 {
+                    d = Vec2::from_angle(FRAC_PI_4);
+                }
+                g.dim_line(cc + d * sk.radius(base), cc + d * sk.radius(entity));
+            }
+        },
         RayAngle { a, b, flip_a, flip_b, .. } => {
             let (x, ra, rb) = rays(sk, a, b, flip_a, flip_b)?;
             let r = label.distance(x).max(1e-9);

@@ -10,6 +10,8 @@ pub mod entities;
 pub mod regions;
 pub mod sketch;
 pub mod solver;
+pub mod tools;
+pub mod transform;
 
 pub use dimension::Pick;
 pub use regions::ProfileError;
