@@ -21,6 +21,7 @@ mod pattern;
 pub mod rebuild;
 pub mod refgeom;
 mod revolve;
+pub mod rib;
 pub mod step;
 pub mod sweep;
 pub mod thin;
@@ -40,6 +41,7 @@ pub use refgeom::{
     AlongMode, ArcRef, AxisFeature, AxisKind, CoordSysFeature, DirRef, IntersectWith, LineRef, PlaneKind,
     PointFeature,
 };
+pub use rib::{RibFeature, RibSides};
 pub use sweep::{SweepDirection, SweepFeature};
 
 #[cfg(test)]

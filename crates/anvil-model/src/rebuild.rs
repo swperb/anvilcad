@@ -345,6 +345,7 @@ impl Document {
             FeatureKind::Dome(d) => self.rebuild_dome(id, &d, st)?,
             FeatureKind::Loft(l) => self.rebuild_loft(id, &l, st)?,
             FeatureKind::Combine(c) => self.rebuild_combine(id, &c, st)?,
+            FeatureKind::Rib(r) => self.rebuild_rib(id, &r, st)?,
             FeatureKind::MoveCopy(m) => self.rebuild_move_copy(id, &m, st)?,
             FeatureKind::DeleteBody(d) => self.rebuild_delete_body(id, &d, st)?,
             FeatureKind::Split(sp) => self.rebuild_split(id, &sp, st)?,

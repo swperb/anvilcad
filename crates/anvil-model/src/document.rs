@@ -836,6 +836,7 @@ pub enum FeatureKind {
     DeleteBody(crate::bodies::DeleteBodyFeature),
     Split(crate::bodies::SplitFeature),
     Scale(crate::bodies::ScaleFeature),
+    Rib(crate::rib::RibFeature),
 }
 
 impl FeatureKind {
@@ -865,6 +866,7 @@ impl FeatureKind {
             FeatureKind::Loft(l) if l.op == BodyOp::Cut => "Cut-Loft",
             FeatureKind::Loft(_) => "Loft",
             FeatureKind::Combine(_) => "Combine",
+            FeatureKind::Rib(_) => "Rib",
             FeatureKind::MoveCopy(_) => "Body-Move/Copy",
             FeatureKind::DeleteBody(d) if d.keep => "Keep Body",
             FeatureKind::DeleteBody(_) => "Delete Body",
@@ -901,6 +903,7 @@ impl FeatureKind {
             FeatureKind::Sweep(s) => s.dependencies(),
             FeatureKind::Draft(d) => d.dependencies(),
             FeatureKind::Loft(l) => l.profiles.clone(),
+            FeatureKind::Rib(r) => vec![r.sketch],
             FeatureKind::Combine(c) => c.bodies.iter().chain(c.main.iter()).map(|b| b.feature).collect(),
             FeatureKind::MoveCopy(m) => m.bodies.iter().map(|b| b.feature).collect(),
             FeatureKind::DeleteBody(d) => d.bodies.iter().map(|b| b.feature).collect(),

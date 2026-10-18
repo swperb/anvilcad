@@ -223,6 +223,7 @@ pub enum Icon {
     Draft,
     Dome,
     Loft,
+    Rib,
     Bodies,
     Measure,
     Imported,
@@ -458,6 +459,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             poly(&[(5.5, 3.0), (10.5, 3.0), (10.5, 6.0), (5.5, 6.0)], Color32::TRANSPARENT, ln);
             line((1.5, 14.0), (5.5, 6.0), hi);
             line((14.5, 14.0), (10.5, 6.0), hi);
+        }
+        Icon::Rib => {
+            // A thin web standing between two walls.
+            path(&[(1.5, 2.0), (1.5, 14.0), (14.5, 14.0), (14.5, 2.0)], ln);
+            poly(&[(1.5, 6.5), (14.5, 6.5), (14.5, 8.5), (1.5, 8.5)], tint, hi);
         }
         Icon::Bodies => {
             // Two overlapping blocks.
