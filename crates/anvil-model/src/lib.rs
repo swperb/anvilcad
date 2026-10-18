@@ -15,6 +15,7 @@ pub mod hole;
 pub mod material;
 mod pattern;
 pub mod rebuild;
+pub mod refgeom;
 mod revolve;
 pub mod step;
 pub mod thin;
@@ -24,6 +25,10 @@ pub use document::*;
 pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};
 pub use material::{Material, MaterialClass};
 pub use rebuild::{BuildState, MassReport};
+pub use refgeom::{
+    AlongMode, ArcRef, AxisFeature, AxisKind, CoordSysFeature, DirRef, IntersectWith, LineRef, PlaneKind,
+    PointFeature,
+};
 
 #[cfg(test)]
 mod tests {

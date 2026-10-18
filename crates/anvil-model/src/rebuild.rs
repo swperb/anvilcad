@@ -39,6 +39,10 @@ pub struct BuildState {
     pub faceted_from: Option<(u32, String)>,
     /// The exact tool bodies each solid feature contributed, used by patterns.
     pub(crate) exact_tools: HashMap<u32, (Vec<anvil_brep::Solid>, BodyOp)>,
+    /// Reference axes (a point and a unit direction), keyed by feature id.
+    pub axes: HashMap<u32, (Vec3, Vec3)>,
+    /// Reference points, keyed by feature id.
+    pub points: HashMap<u32, Vec3>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -301,15 +305,10 @@ impl Document {
                 }
                 st.frames.insert(id, frame);
             }
-            FeatureKind::Plane(pf) => {
-                let base = self.resolve_plane(&pf.base, st)?;
-                let off = num(&pf.offset, "offset")?;
-                let mut f = base.offset(if pf.flip { -off } else { off });
-                if pf.flip {
-                    f = Frame { z: -f.z, x: -f.x, ..f };
-                }
-                st.frames.insert(id, f);
-            }
+            FeatureKind::Plane(pf) => self.rebuild_plane(id, &pf, st)?,
+            FeatureKind::Axis(a) => self.rebuild_axis(id, &a, st)?,
+            FeatureKind::Point(p) => self.rebuild_point(id, &p, st)?,
+            FeatureKind::CoordSys(c) => self.rebuild_coordsys(id, &c, st)?,
             FeatureKind::Extrude(ef) => {
                 let plan = self.plan_extrude(&ef, st)?;
                 let tool = plan.faceted(id)?;

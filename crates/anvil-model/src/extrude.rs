@@ -95,6 +95,9 @@ impl Document {
     pub(crate) fn resolve_point(&self, p: &PointRef, st: &BuildState) -> Result<Vec3, String> {
         match *p {
             PointRef::Model(v) => Ok(v),
+            PointRef::Feature(id) => {
+                st.points.get(&id).copied().ok_or_else(|| "the reference point failed or is missing".into())
+            }
             PointRef::SketchPoint { sketch, point } => {
                 let frame =
                     st.frames.get(&sketch).ok_or("the sketch holding the point failed or is missing")?;
@@ -623,6 +626,7 @@ mod tests {
             base: PlaneRef::Front,
             offset: Dim::Value(10.0),
             flip: false,
+            ..Default::default()
         }));
         let s = rect_sketch(&mut doc, PlaneRef::Feature(mid), (0.0, 0.0), (20.0, 10.0));
         extrude(
@@ -642,6 +646,7 @@ mod tests {
             base: PlaneRef::Front,
             offset: Dim::Value(-5.0),
             flip: false,
+            ..Default::default()
         }));
         let s = rect_sketch(&mut doc, PlaneRef::Feature(below), (0.0, 0.0), (20.0, 10.0));
         let e = extrude(&mut doc, s, ExtrudeFeature { end: EndCondition::ThroughAll, ..blind(1.0) });
@@ -808,6 +813,7 @@ mod tests {
                 base: PlaneRef::Front,
                 offset: Dim::Value(20.0),
                 flip: false,
+                ..Default::default()
             }));
             let b = rect_sketch(&mut doc, PlaneRef::Feature(up), (x0, -10.0), (30.0, 30.0));
             extrude(&mut doc, b, blind(5.0));

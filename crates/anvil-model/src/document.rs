@@ -191,6 +191,19 @@ pub enum PointRef {
     /// A fixed position in model space, such as a model vertex picked in the graphics
     /// area. It does not follow later edits of the geometry it was picked on.
     Model(Vec3),
+    /// A reference point feature.
+    Feature(u32),
+}
+
+impl PointRef {
+    /// The feature this point comes from, if any.
+    pub fn dependency(&self) -> Option<u32> {
+        match *self {
+            PointRef::SketchPoint { sketch, .. } => Some(sketch),
+            PointRef::Feature(id) => Some(id),
+            PointRef::Model(_) => None,
+        }
+    }
 }
 
 /// What an Up To Vertex, Up To Surface or Offset From Surface end refers to.
@@ -216,14 +229,14 @@ impl EndTarget {
                 format!("Point {} of feature #{sketch}", point + 1)
             }
             EndTarget::Point(PointRef::Model(p)) => format!("Point ({:.3}, {:.3}, {:.3})", p.x, p.y, p.z),
+            EndTarget::Point(PointRef::Feature(id)) => format!("Point #{id}"),
             EndTarget::Plane { plane, .. } => plane.label(),
         }
     }
 
     fn dependencies(&self) -> Vec<u32> {
         match *self {
-            EndTarget::Point(PointRef::SketchPoint { sketch, .. }) => vec![sketch],
-            EndTarget::Point(PointRef::Model(_)) => vec![],
+            EndTarget::Point(p) => p.dependency().into_iter().collect(),
             EndTarget::Plane { plane, .. } => plane.dependency().into_iter().collect(),
         }
     }
@@ -320,6 +333,8 @@ pub enum Axis {
         origin: Vec3,
         dir: Vec3,
     },
+    /// A reference axis feature.
+    Feature(u32),
 }
 
 impl Axis {
@@ -329,6 +344,7 @@ impl Axis {
             Axis::Y => Vec3::Y,
             Axis::Z => Vec3::Z,
             Axis::Line { dir, .. } => dir.normalized(),
+            Axis::Feature(_) => Vec3::Z,
         }
     }
 
@@ -343,6 +359,7 @@ impl Axis {
     pub fn label(&self) -> String {
         match self {
             Axis::Line { .. } => "Custom axis".into(),
+            Axis::Feature(id) => format!("Axis #{id}"),
             other => format!("{other:?}"),
         }
     }
@@ -515,12 +532,34 @@ impl Default for RevolveFeature {
     }
 }
 
+/// A reference plane. See `docs/re/reference-geometry.md`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlaneFeature {
+    /// The plane it is parallel to, turned from or halfway from.
     pub base: PlaneRef,
+    /// The distance of an offset plane.
     pub offset: Dim,
+    /// Offset planes: put the plane on the other side, turned over (as it always has
+    /// been). At angle planes: turn the other way.
     #[serde(default)]
     pub flip: bool,
+    #[serde(default)]
+    pub kind: crate::refgeom::PlaneKind,
+    /// Turns the plane over (its normal and x axis reverse) without moving it.
+    #[serde(default)]
+    pub flip_normal: bool,
+}
+
+impl Default for PlaneFeature {
+    fn default() -> Self {
+        PlaneFeature {
+            base: PlaneRef::Front,
+            offset: Dim::Value(10.0),
+            flip: false,
+            kind: crate::refgeom::PlaneKind::Offset,
+            flip_normal: false,
+        }
+    }
 }
 
 /// A linear pattern: copies of its seed features along one or two directions. See
@@ -780,6 +819,9 @@ pub enum FeatureKind {
     Hole(crate::hole::HoleFeature),
     Mirror(MirrorFeature),
     SketchPattern(SketchPatternFeature),
+    Axis(crate::refgeom::AxisFeature),
+    Point(crate::refgeom::PointFeature),
+    CoordSys(crate::refgeom::CoordSysFeature),
 }
 
 impl FeatureKind {
@@ -803,6 +845,9 @@ impl FeatureKind {
             FeatureKind::Shell(_) => "Shell",
             FeatureKind::Hole(_) => "Hole",
             FeatureKind::Mirror(_) => "Mirror",
+            FeatureKind::Axis(_) => "Axis",
+            FeatureKind::Point(_) => "Point",
+            FeatureKind::CoordSys(_) => "Coordinate System",
             FeatureKind::SketchPattern(_) => "Sketch-Pattern",
         }
     }
@@ -819,7 +864,16 @@ impl FeatureKind {
             FeatureKind::Extrude(e) => e.dependencies(),
             FeatureKind::Revolve(r) => vec![r.sketch],
             FeatureKind::Hole(h) => vec![h.sketch],
-            FeatureKind::Plane(p) => plane_dep(&p.base),
+            FeatureKind::Plane(p) => {
+                let mut v = plane_dep(&p.base);
+                v.extend(p.kind.dependencies());
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
+            FeatureKind::Axis(a) => a.kind.dependencies(),
+            FeatureKind::Point(p) => p.dependencies(),
+            FeatureKind::CoordSys(c) => c.dependencies(),
             FeatureKind::LinearPattern(p) => p.features.clone(),
             FeatureKind::CircularPattern(p) => p.features.clone(),
             FeatureKind::Mirror(m) => {
@@ -833,9 +887,7 @@ impl FeatureKind {
             FeatureKind::SketchPattern(p) => {
                 let mut v = p.features.clone();
                 v.push(p.sketch);
-                if let Some(PointRef::SketchPoint { sketch, .. }) = p.reference {
-                    v.push(sketch);
-                }
+                v.extend(p.reference.and_then(|r| r.dependency()));
                 v.sort_unstable();
                 v.dedup();
                 v

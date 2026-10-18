@@ -912,6 +912,7 @@ impl AnvilApp {
             base,
             offset: Dim::Value(10.0),
             flip: false,
+            ..Default::default()
         }));
         self.open_editor(id, before, true);
     }
@@ -3264,6 +3265,9 @@ fn kind_name(k: &FeatureKind) -> &'static str {
         FeatureKind::Hole(_) => "Hole",
         FeatureKind::Mirror(_) => "Mirror",
         FeatureKind::SketchPattern(_) => "SketchPattern",
+        FeatureKind::Axis(_) => "Axis",
+        FeatureKind::Point(_) => "Point",
+        FeatureKind::CoordSys(_) => "CoordinateSystem",
     }
 }
 
@@ -3284,6 +3288,7 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Hole(_) => Icon::Hole,
         FeatureKind::Mirror(_) => Icon::LinearPattern,
         FeatureKind::SketchPattern(_) => Icon::LinearPattern,
+        FeatureKind::Axis(_) | FeatureKind::Point(_) | FeatureKind::CoordSys(_) => Icon::Plane,
     }
 }
 

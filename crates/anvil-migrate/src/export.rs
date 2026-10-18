@@ -399,6 +399,7 @@ impl Ctx<'_> {
             base: PlaneRef::Fixed(frame),
             offset: Dim::Value(0.0),
             flip: false,
+            ..Default::default()
         }));
         self.name_feature(
             id,

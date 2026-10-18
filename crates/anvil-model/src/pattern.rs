@@ -143,11 +143,11 @@ impl Document {
             }
             Ok(s)
         };
-        let d1 = pf.direction.dir() * if pf.reverse { -1.0 } else { 1.0 };
+        let d1 = self.resolve_axis(&pf.direction, st)?.1 * if pf.reverse { -1.0 } else { 1.0 };
         let (n1, s1) = (count(&pf.count)?, spacing(&pf.spacing)?);
         let (d2, n2, s2) = match &pf.direction2 {
             Some(p) => {
-                let d2 = p.direction.dir() * if p.reverse { -1.0 } else { 1.0 };
+                let d2 = self.resolve_axis(&p.direction, st)?.1 * if p.reverse { -1.0 } else { 1.0 };
                 if d2.cross(d1).length() < 1e-9 {
                     return Err("Direction 2 runs the same way as Direction 1".into());
                 }
@@ -211,11 +211,11 @@ impl Document {
             let s2 = -sense * step(a2, n2, eq);
             angles.extend((2..=n2).map(|k| (2, k, s2 * (k - 1) as f64)));
         }
-        let axis = pf.axis.dir();
+        let (origin, axis) = self.resolve_axis(&pf.axis, st)?;
         let places: Vec<Place> = angles
             .into_iter()
             .filter(|(dir, k, _)| !pf.skip.contains(&[*dir, *k as u32]))
-            .map(|(_, _, a)| Place::Move(rotation_frame(pf.axis.origin(), axis, a.to_radians())))
+            .map(|(_, _, a)| Place::Move(rotation_frame(origin, axis, a.to_radians())))
             .collect();
         st.place_copies(id, &pf.features, &places)
     }
