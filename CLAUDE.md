@@ -4,6 +4,9 @@ Guidance for Claude Code when working in this repository. AnvilCAD is free and o
 parametric 3D CAD written in Rust, with its own geometry kernels. The workspace crates are in
 `crates/`; see [README.md](README.md), [ROADMAP.md](ROADMAP.md),
 [CONTRIBUTING.md](CONTRIBUTING.md) and [INTEROPERABILITY.md](INTEROPERABILITY.md).
+Before writing the README, landing page (`docs/index.html`) or announcements, read
+[docs/POSITIONING.md](docs/POSITIONING.md) for the audience, the claims that are true
+today and the competitive landscape.
 
 ## Features that adapt to SOLIDWORKS: always use REA
 
