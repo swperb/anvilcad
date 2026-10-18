@@ -2,8 +2,10 @@
 //!
 //! A [`Document`] is an ordered feature tree (sketches, extrudes, revolves, reference
 //! planes, patterns) plus global variables, a material and custom properties.
-//! [`Document::rebuild`] regenerates the solid.
+//! [`Document::rebuild`] regenerates the solid. A part can have several configurations
+//! (see [`config`]).
 
+pub mod config;
 pub mod dfm;
 pub mod document;
 pub mod equations;
@@ -13,6 +15,7 @@ pub mod material;
 pub mod rebuild;
 pub mod step;
 
+pub use config::{ConfigError, ConfigParam, ConfigValue, Configuration, ConfiguredParam, DimSlot};
 pub use document::*;
 pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};
 pub use material::{Material, MaterialClass};
