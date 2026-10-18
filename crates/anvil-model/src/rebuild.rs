@@ -223,6 +223,11 @@ impl BuildState {
         }
     }
 
+    /// Moves the part to the faceted kernel for good, from feature `id`.
+    pub(crate) fn leave_exact_for(&mut self, id: u32, reason: &str) {
+        self.leave_exact(id, reason.into());
+    }
+
     fn leave_exact(&mut self, id: u32, reason: String) {
         if self.exact.take().is_some() {
             self.faceted_from = Some((id, reason));

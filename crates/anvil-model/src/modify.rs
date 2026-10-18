@@ -138,29 +138,97 @@ impl Document {
         if d.faces.is_empty() {
             return Err("choose a flat round face to dome".into());
         }
-        let mut bodies = st.exact.clone().ok_or(EXACT_ONLY)?;
-        for f in &d.faces {
-            let bi = bodies
-                .iter()
-                .position(|b| b.faces.iter().any(|x| exact::face_id(x) == *f))
-                .ok_or("a face to dome no longer exists")?;
-            let fi = bodies[bi].faces.iter().position(|x| exact::face_id(x) == *f).ok_or("face missing")?;
-            let mut result = anvil_brep::dome::dome(&bodies[bi], fi, h, d.elliptical, d.reverse)
-                .map_err(|e| e.to_string())?;
-            for s in &mut result {
-                for face in &mut s.faces {
-                    if face.owner == 0 {
-                        face.owner = id;
+        // Exactly, when the part is exact and the dome is a spherical cap.
+        let exact_bodies = st.exact.clone();
+        let done = st.exact_step(id, |_| {
+            let mut bodies = exact_bodies.ok_or(EXACT_ONLY)?;
+            for f in &d.faces {
+                let bi = bodies
+                    .iter()
+                    .position(|b| b.faces.iter().any(|x| exact::face_id(x) == *f))
+                    .ok_or("a face to dome no longer exists")?;
+                let fi =
+                    bodies[bi].faces.iter().position(|x| exact::face_id(x) == *f).ok_or("face missing")?;
+                let mut result = anvil_brep::dome::dome(&bodies[bi], fi, h, d.elliptical, d.reverse)
+                    .map_err(|e| e.to_string())?;
+                for s in &mut result {
+                    for face in &mut s.faces {
+                        if face.owner == 0 {
+                            face.owner = id;
+                        }
                     }
                 }
+                bodies.splice(bi..=bi, result);
             }
-            bodies.splice(bi..=bi, result);
+            Ok(bodies)
+        });
+        if done {
+            return Ok(());
         }
-        if !st.exact_step(id, |_| Ok(bodies)) {
-            return Err(st.faceted_from.as_ref().map(|f| f.1.clone()).unwrap_or_else(|| EXACT_ONLY.into()));
+        // Otherwise (a half spheroid, which the exact kernel has no surface for, or a
+        // faceted part) on the faceted kernel.
+        for f in &d.faces {
+            let tool = faceted_dome(&st.body, *f, h, d.elliptical, d.reverse, id)?;
+            st.body = if d.reverse { st.body.subtract(&tool) } else { st.body.union(&tool) };
         }
         Ok(())
     }
+}
+
+/// A dome as a faceted solid on a flat round face: its section (the cap's outline from
+/// the rim to the axis) turned about the face's axis, standing on the face (or hanging
+/// below it, to be cut away, when reversed).
+fn faceted_dome(
+    body: &anvil_kernel::Solid,
+    f: FaceId,
+    h: f64,
+    elliptical: bool,
+    reverse: bool,
+    id: u32,
+) -> Result<anvil_kernel::Solid, String> {
+    use anvil_kernel::{v2, Frame, Loop2, Profile};
+    let frame = body.planar_face_frame(f).ok_or("a dome needs a flat face")?;
+    let (mut area, mut c) = (0.0, anvil_kernel::Vec3::ZERO);
+    let mut verts = Vec::new();
+    for p in body.face_polygons(f) {
+        let a = p.area();
+        area += a;
+        c += p.verts.iter().fold(anvil_kernel::Vec3::ZERO, |s, v| s + *v) * (a / p.verts.len() as f64);
+        verts.extend(p.verts.iter().copied());
+    }
+    if area <= 0.0 {
+        return Err("a face to dome no longer exists".into());
+    }
+    let c = c * (1.0 / area);
+    let r = verts.iter().map(|v| (*v - c).length()).fold(0.0, f64::max);
+    if r <= 0.0 {
+        return Err("the face to dome has no size".into());
+    }
+    // Height 0 is the dome tangent to the cylinder below: a hemisphere.
+    let h = if h == 0.0 { r } else { h };
+    let up = if reverse { -frame.z } else { frame.z };
+    let u = frame.x;
+    // The section in a plane through the axis: x out from the axis, y up the axis.
+    let sec = Frame { origin: c, x: u, y: up, z: u.cross(up) };
+    let n = 96;
+    let mut pts = vec![v2(0.0, 0.0), v2(r, 0.0)];
+    for k in 1..n {
+        let t = std::f64::consts::FRAC_PI_2 * k as f64 / n as f64;
+        let p = if elliptical {
+            v2(r * t.cos(), h * t.sin())
+        } else {
+            // On the sphere through the rim with its top at height h.
+            let big = (r * r + h * h) / (2.0 * h);
+            let a0 = ((h - big) / big).asin();
+            let a = a0 + (std::f64::consts::FRAC_PI_2 - a0) * k as f64 / n as f64;
+            v2(big * a.cos(), (h - big) + big * a.sin())
+        };
+        pts.push(p);
+    }
+    pts.push(v2(0.0, h));
+    let profile = Profile::new(Loop2::polygon(&pts, 0), vec![]);
+    anvil_kernel::build::revolve(&[profile], &sec, v2(0.0, 0.0), v2(0.0, 1.0), std::f64::consts::TAU, id)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -235,6 +303,32 @@ mod tests {
             x.neutral = PlaneRef::Front;
         }
         assert!(doc.rebuild().errors.contains_key(&d));
+    }
+
+    #[test]
+    fn elliptical_dome_on_the_faceted_kernel() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        sf.sketch.add_circle(c, 10.0);
+        let s = doc.add_feature(FeatureKind::Sketch(sf));
+        let e = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: s,
+            depth: Dim::Value(20.0),
+            ..Default::default()
+        }));
+        doc.add_feature(FeatureKind::Dome(DomeFeature {
+            faces: vec![FaceId { feature: e, index: FaceId::END_CAP }],
+            height: Dim::Value(5.0),
+            reverse: false,
+            elliptical: true,
+        }));
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        // Statement 22: 2000 pi + 2/3 pi 100 5 = 7330.382858, faceted.
+        let v = st.body.mass_properties().volume;
+        assert!((v - 7330.382858).abs() < 2e-3 * 7330.0, "{v}");
+        assert!(st.exact.is_none());
     }
 
     #[test]
