@@ -36,7 +36,9 @@ system are still ahead; see the roadmap.
   reverse direction
 - Revolved Boss and Revolved Cut about any sketch line
 - Linear Pattern and Circular Pattern (about any axis)
-- Fillet (constant radius) and Chamfer (equal distance, angle and distance, or offset
+- Fillet (constant radius, with a circular, conic rho, conic radius or
+  curvature-continuous profile, and tangent propagation to the edges that run smoothly on
+  from those selected) and Chamfer (equal distance, angle and distance, or offset
   face) on any edge between two faces, built exactly: straight and round edges in closed
   form, any other edge with a rolling-ball round or a swept bevel; edges that run smoothly
   into each other are blended as one; convex edges are rounded off, concave edges are
@@ -52,6 +54,11 @@ system are still ahead; see the roadmap.
 **Parameters and properties**
 - Global variables with equations (`width = 80`, `depth = width / 2`, functions like
   `sqrt`, `sin` in degrees, `min`, `max`); type `=width` into any dimension to link it
+- Configurations: variants of a part in one file, with feature suppression, feature
+  dimensions, global variables and material set per configuration; derived configurations
+  that inherit from a parent; configuration-specific properties; a configuration manager
+  tab and a configuration table that edits every configuration and rebuilds them all
+  ([spec](docs/re/configurations.md))
 - Material library (26 metals and plastics: carbon and alloy steels such as A36, 1018 and
   4140; 304, 316 and 17-4 stainless; 5052, 6061 and 7075 aluminum; brass, copper,
   titanium; Delrin, UHMW, HDPE, PTFE, nylon, PEEK, polycarbonate, acrylic, ABS, PLA, PVC)
@@ -316,7 +323,9 @@ Kernel design notes:
   outline, are blended together so their rounds join; any other edge between two faces
   gets a rolling-ball round, a B-spline surface fitted to exact ball sections, one round
   along a whole smooth run of such edges; chamfers there are swept the same way, set out
-  by equal distance, angle and distance, or offset faces). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
+  by equal distance, angle and distance, or offset faces; conic and curvature-continuous
+  fillets are swept the same way on any edge, the latter meeting each face with its own
+  curvature). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
   and tori exactly, with pointed cones and sphere poles where it meets the axis. A round
   edge is filleted with a torus (chamfered with a cone) by a boolean with the corner's
   cross-section revolved about the axis. A shell is the part less its cavity: every

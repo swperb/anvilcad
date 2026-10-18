@@ -227,7 +227,8 @@ fn find_edges(bodies: &[brep::Solid], e: &EdgeRef) -> Vec<(usize, brep::EdgeId)>
     out
 }
 
-/// Fillets or chamfers the named edges. Every run of an edge is blended.
+/// Fillets or chamfers the named edges. Every run of an edge is blended, and with
+/// `propagate` every crease running smoothly on from them too (tangent propagation).
 /// A blend as a feature gives it. An angle-distance chamfer's distance runs along one of
 /// each edge's two named faces: the first, or the second when flipped.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -240,6 +241,7 @@ pub fn blend(
     bodies: &[brep::Solid],
     edges: &[EdgeRef],
     treatment: Treatment,
+    propagate: bool,
     feature: u32,
 ) -> Result<Vec<brep::Solid>, String> {
     if edges.is_empty() {
@@ -278,11 +280,18 @@ pub fn blend(
                 brep::blend::Blend::ChamferAngle { distance, angle, along }
             }
         };
-        let candidates: Vec<brep::EdgeId> = found.iter().filter(|f| f.0 == b).map(|f| f.1).collect();
+        let mut candidates: Vec<brep::EdgeId> = found.iter().filter(|f| f.0 == b).map(|f| f.1).collect();
+        if propagate {
+            candidates = brep::blend::tangent_edges(&bodies[b], &candidates);
+        }
         let run = brep::blend::smooth_run(&bodies[b], first, &candidates);
+        // An edge reached by propagation is named after the selected edge it runs on from.
         let tagged: Vec<(brep::EdgeId, u32)> = run
             .iter()
-            .filter_map(|id| found.iter().find(|f| f.0 == b && f.1 == *id).map(|f| (*id, 8 * f.2 as u32)))
+            .map(|id| {
+                let k = found.iter().find(|f| f.0 == b && f.1 == *id).map_or(k, |f| f.2);
+                (*id, 8 * k as u32)
+            })
             .collect();
         let result =
             brep::blend::blend_chain(&bodies[b], &tagged, kind, feature).map_err(|err| err.to_string())?;

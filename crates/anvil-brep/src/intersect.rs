@@ -264,14 +264,25 @@ fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) ->
         return Ok(Ssi::Curves(vec![Curve::Circle { frame: cone.with_origin(center), radius }]));
     }
     let apex = crate::geom::cone_apex(cone, r, half_angle);
-    if cos.abs() < PARALLEL && (apex - plane.origin).dot(n).abs() < tol {
-        // A plane through the axis: the two generators in it.
-        let side = n.cross(axis).normalize();
+    if (apex - plane.origin).dot(n).abs() < tol {
+        // A plane through the apex: the generators in it, where n . g = 0 for the
+        // generator g = axis cos(a) + (x cos(t) + y sin(t)) sin(a). Two where the plane
+        // cuts into the cone, one where it touches it along a generator (the bevel plane
+        // of a straight edge's chamfer running on into an arc's), none where it misses.
         let (c, s) = (half_angle.cos(), half_angle.sin());
-        return Ok(Ssi::Curves(vec![
-            Curve::Line { origin: apex, dir: axis * c + side * s },
-            Curve::Line { origin: apex, dir: axis * c - side * s },
-        ]));
+        let (ca, cb, cc) = (n.dot(cone.x) * s, n.dot(cone.y) * s, -cos * c);
+        let len = (ca * ca + cb * cb).sqrt();
+        let generator = |t: f64| axis * c + (cone.x * t.cos() + cone.y * t.sin()) * s;
+        if len < PARALLEL || len < cc.abs() * (1.0 - 1e-9) {
+            return Ok(Ssi::None);
+        }
+        let phase = cb.atan2(ca);
+        let spread = (cc / len).clamp(-1.0, 1.0).acos();
+        let mut curves = vec![Curve::Line { origin: apex, dir: generator(phase + spread) }];
+        if spread > 1e-9 {
+            curves.push(Curve::Line { origin: apex, dir: generator(phase - spread) });
+        }
+        return Ok(Ssi::Curves(curves));
     }
     // At an angle: an ellipse when the plane cuts every generator, traced in general.
     Ok(Ssi::Curves(crate::ssi::intersect(
@@ -626,28 +637,49 @@ fn numeric_roots(curve: &Curve, lo: f64, hi: f64, surface: &Surface, tol: f64) -
     };
     let ts: Vec<f64> = (0..=n).map(|i| lo + span * i as f64 / n as f64).collect();
     let fs: Vec<f64> = ts.iter().map(|t| f(*t)).collect();
-    let mut roots = Vec::new();
-    for i in 0..n {
-        let (t0, t1, f0, f1) = (ts[i], ts[i + 1], fs[i], fs[i + 1]);
-        if f0.abs() < tol {
-            roots.push(t0);
-        } else if f0.signum() != f1.signum() && f1.abs() >= tol {
-            let (mut a, mut b, mut fa) = (t0, t1, f0);
-            for _ in 0..80 {
-                let m = 0.5 * (a + b);
-                let fm = f(m);
-                if fm.signum() == fa.signum() {
-                    a = m;
-                    fa = fm;
-                } else {
-                    b = m;
-                }
+    let bisect = |t0: f64, t1: f64, f0: f64| {
+        let (mut a, mut b, mut fa) = (t0, t1, f0);
+        for _ in 0..80 {
+            let m = 0.5 * (a + b);
+            let fm = f(m);
+            if fm.signum() == fa.signum() {
+                a = m;
+                fa = fm;
+            } else {
+                b = m;
             }
-            roots.push(0.5 * (a + b));
         }
-    }
-    if fs[n].abs() < tol {
-        roots.push(ts[n]);
+        0.5 * (a + b)
+    };
+    let mut roots = Vec::new();
+    let mut i = 0;
+    while i <= n {
+        if fs[i].abs() < tol {
+            // A run of samples within `tol` of the surface is one meeting: where the curve
+            // crosses inside it, or else where it comes closest. (A curve leaving a
+            // surface it touches with no curvature to spare, as a curvature-continuous
+            // round's edge does, stays within `tol` of it for a while.)
+            let mut j = i;
+            while j < n && fs[j + 1].abs() < tol {
+                j += 1;
+            }
+            // A run reaching an end of the piece is the curve touching at that end (where
+            // it meets the face it leaves).
+            let crossing =
+                (i..j).find(|&k| fs[k] != 0.0 && fs[k + 1] != 0.0 && fs[k].signum() != fs[k + 1].signum());
+            roots.push(match crossing {
+                _ if i == 0 => ts[0],
+                _ if j == n => ts[n],
+                Some(k) => bisect(ts[k], ts[k + 1], fs[k]),
+                None => (i..=j).min_by(|&a, &b| fs[a].abs().total_cmp(&fs[b].abs())).map_or(ts[i], |k| ts[k]),
+            });
+            i = j + 1;
+            continue;
+        }
+        if i < n && fs[i].signum() != fs[i + 1].signum() && fs[i + 1].abs() >= tol {
+            roots.push(bisect(ts[i], ts[i + 1], fs[i]));
+        }
+        i += 1;
     }
     roots
 }

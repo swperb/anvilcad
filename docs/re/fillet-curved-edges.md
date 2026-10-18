@@ -36,6 +36,15 @@ with a scenario of the form
 | Conic Fillets, What's New in SOLIDWORKS, <https://help.solidworks.com/2014/english/WhatsNew/c_conic_fillets.htm> | SOLIDWORKS 2014 | `ev_d16710332fae420f094cc76fdd00da1b21d5a1311f327043551391d0798bf72c`, capture complete |
 | Chamfer PropertyManager, SOLIDWORKS Design Help, <https://help.solidworks.com/2021/English/SolidWorks/sldworks/r_chamfer_pm.htm> | SOLIDWORKS 2021 | `ev_a1506bf3486d15f9c128bc75f847876d2899a172ced50eecdb46808171c20969`, capture complete |
 | Chamfer Enhancements, What's New in SOLIDWORKS, <https://help.solidworks.com/2017/english/WhatsNew/c_chamfer_enhancements.htm> | SOLIDWORKS 2017 | `ev_2fd007313bc314c69549dd49f721615d298a00c695e3e57becf47db9ead0bc1c`, capture complete |
+| swFeatureFilletProfileType_e Enumeration, SOLIDWORKS API Help, <https://help.solidworks.com/2022/english/api/swconst/SOLIDWORKS.Interop.swconst~SOLIDWORKS.Interop.swconst.swFeatureFilletProfileType_e.html> | API Help 2022 SP05 (page footer) | `ev_239e1c12fa4aca1d046ebd8dc6705f7b0c15b9c68d45e3e2e545d8b79f815712`, capture complete |
+| ConicTypeForCrossSectionProfile Property (ISimpleFilletFeatureData2), SOLIDWORKS API Help, <https://help.solidworks.com/2022/english/api/sldworksapi/SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISimpleFilletFeatureData2~ConicTypeForCrossSectionProfile.html> | API Help 2022; property since SOLIDWORKS 2014 FCS | `ev_84cbc022e0483b05714c1fdd92538229abc786a810cd444b393c7e322a3a3d5d`, capture complete |
+| CurvatureContinuous Property (ISimpleFilletFeatureData2), SOLIDWORKS API Help, <https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISimpleFilletFeatureData2~CurvatureContinuous.html> | API Help 2022; property since SOLIDWORKS 2001Plus FCS | `ev_a7b3c9b7e9562cba4fe41b8a890e5ea151f3c4015c21091a5bea27daef3db4d9`, capture complete |
+| ISimpleFilletFeatureData2 Interface Members, SOLIDWORKS API Help, <https://help.solidworks.com/2022/english/api/sldworksapi/SolidWorks.Interop.sldworks~SolidWorks.Interop.sldworks.ISimpleFilletFeatureData2_members.html> | API Help 2022 | `ev_f4ab1471d1c700cef30aeeedd5795caaf6814abdbfd3d3cced10a0b46fc0b7fe`, capture complete |
+
+Two further API pages were tried and not found at the 2022 help (the server reported the
+file does not exist): the swConicTypeForCrossSectionProfile_e enumeration and the
+ConicRhoOrRadius property. The type property's page links to swFeatureFilletProfileType_e
+instead, which was captured.
 
 The findings below paraphrase those pages; no text was copied.
 
@@ -61,6 +70,16 @@ Observed (stated on the pages):
   Rho value (Face Fillets, Conic Fillets). Face fillets can instead follow a hold line,
   and fillets can be made curvature continuous at their boundaries (Face Fillets).
 
+- The API names four cross-section profile types (swFeatureFilletProfileType_e): 0
+  circular (elliptical for asymmetric fillets), 1 conic rho, which takes a ratio from 0.5
+  to 0.95 giving the weight of the cross-section, 2 conic radius, which takes the radius
+  of curvature at the shoulder point of the cross-section, and 3 a chamfer's cross-section.
+  A fillet's data carries the type, one value for the conic's rho or radius
+  (DefaultConicRhoOrRadius, "the conic rho, conic radius, or circular radius"), and a
+  separate on/off curvature-continuous setting, smoother because there is no jump in
+  curvature at the boundary (ISimpleFilletFeatureData2 pages). The 2014 page's example
+  conic is a hyperbola.
+
 - Chamfers come in several kinds: angle and distance, two distances (equal when
   symmetric), offset face, face face (with hold lines or a chord width) and vertex
   chamfers (Chamfer PropertyManager). An offset face chamfer is found by offsetting the
@@ -79,6 +98,19 @@ Silent or ambiguous:
 - How an edge's run is chosen when tangent propagation meets a branch (three or more
   tangent edges at a vertex) is not described.
 - The default overflow choice is not described beyond "the software picks".
+- Where a conic or curvature-continuous profile meets the faces is not given: whether its
+  contacts are those of a circular fillet of the radius, or set some other way. Rho's
+  meaning is described only as the cross-section's weight; "shoulder point" is not
+  defined. AnvilCAD uses the usual definitions (general practice, not from these pages):
+  the conic is tangent to both faces at the contacts, with the corner where those tangents
+  meet as its middle control point, and rho is the fraction of the way the shoulder point
+  (the conic's middle) lies from the chord's middle to that corner. A rational quadratic
+  weighted w there has rho = w / (1 + w): 0.5 is a parabola, above it a hyperbola, which
+  agrees with the published range and the 2014 example.
+- The shape of the curvature-continuous profile is not given, only that the curvature
+  does not jump at the boundary. Nor is it said how it combines with a conic type.
+- The units of the conic radius in the API are not stated on these pages; the API gives
+  lengths in metres elsewhere, and the migrator reads it so.
 
 ## What AnvilCAD does
 
@@ -86,9 +118,9 @@ Silent or ambiguous:
   round about the circle's axis (a flat face square to it, a cylinder or cone on it), are
   filleted (and chamfered) exactly.
 - Edges selected together that run smoothly one into the next (the outline of a slot or a
-  rounded rectangle) are blended as one run, so the rounds join without a step, as with
-  tangent propagation. AnvilCAD rounds the edges selected; it does not yet add tangent
-  edges that were not selected.
+  rounded rectangle) are blended as one run, so the rounds join without a step. With
+  tangent propagation the edges that run on from them are added even when not selected
+  (see [tangent-propagation.md](tangent-propagation.md)).
 - An arc that does not run on into another edge is rounded past its end only where
   nothing lies beyond it, so the round ends cleanly on the faces there.
 - Any other edge between two faces (a hole slanting through a plate, a hole drilled across
@@ -117,6 +149,29 @@ Silent or ambiguous:
   d sin(a) / sin(phi + a) on the other face.
 - Offset face and angle and distance chamfers need the exact kernel; a part already
   handed to the faceted kernel reports that rather than building them.
-- Runs mixing convex and concave edges, conic and curvature-continuous profiles, hold lines,
-  overflow choices and round corners are not offered yet; those fall back to the faceted
-  kernel or are refused.
+- A fillet's profile can be circular (the ball's arc), conic by rho, conic by its radius at
+  the shoulder point, or curvature continuous. Every profile touches the faces where the
+  ball of the fillet's radius would, so its set-back is the circular fillet's.
+  - Conic rho: in each section the rational quadratic from contact to contact with its
+    middle control point at the corner where the tangents meet and weight rho / (1 - rho).
+    Rho must be from 0.5 to 0.95, as published.
+  - Conic radius: the same conic, its weight in each section chosen so the radius of
+    curvature at its middle is the one given. A radius no conic between the contacts can
+    have is refused.
+  - Curvature continuous: in each section a quartic from contact to contact, leaving each
+    along the face's tangent, its second and fourth control points half way to the corner
+    and its middle one placed so that its curvature at each contact is the face's own in
+    that direction. Between flat faces it leaves them with no curvature, and its middle
+    control point is the corner. The half-way legs are AnvilCAD's choice; the published
+    pages do not give the shape.
+  - These profiles are swept along any edge, straight ones included, like a rolling-ball
+    round, and need the exact kernel; a part already handed to the faceted kernel reports
+    that rather than building them. The migrator reads the profile type, the curvature
+    continuous setting and the conic's value; a fillet with a chamfer's cross-section, or
+    a conic type with curvature continuous both set, is refused.
+- Where a swept round's edge runs into another round at a corner (both tangent to the
+  face they share at one point), the rounds meet there. Without tangent propagation a
+  round whose edge runs smoothly on into the earlier round's edge stops at that end; with
+  it, the round carries on round the earlier one.
+- Runs mixing convex and concave edges, hold lines, overflow choices and round corners are
+  not offered yet; those fall back to the faceted kernel or are refused.

@@ -1,5 +1,6 @@
 //! The part document: feature tree, global variables, material and custom properties.
 
+use crate::config::{Configuration, ConfiguredParam, DEFAULT_CONFIGURATION};
 use crate::equations::{eval, eval_all, EvalError};
 use crate::material::Material;
 use anvil_kernel::{v3, EdgeRef, FaceId, Frame, Vec3};
@@ -10,7 +11,11 @@ use std::collections::BTreeMap;
 pub const PART_FORMAT: &str = "anvil-part";
 /// Format ids written by earlier builds that are still read.
 pub const LEGACY_PART_FORMATS: &[&str] = &["ferrocad-part"];
-pub const PART_FORMAT_VERSION: u32 = 1;
+/// The newest part format version this build reads and writes.
+pub const PART_FORMAT_VERSION: u32 = 2;
+/// The version written for parts that use nothing newer: one configuration and nothing
+/// configured. Builds from before configurations read it.
+pub const PART_FORMAT_VERSION_BASE: u32 = 1;
 /// Native part file extension (".anvprt"); templates use ".anvprtdot".
 pub const PART_EXT: &str = "anvprt";
 pub const PART_TEMPLATE_EXT: &str = "anvprtdot";
@@ -568,6 +573,41 @@ pub struct ImportedFace {
 pub struct FilletFeature {
     pub edges: Vec<EdgeRef>,
     pub radius: Dim,
+    /// The round's cross-section (circular in parts saved before there was a choice).
+    #[serde(default)]
+    pub profile: FilletProfile,
+    /// Also round every edge running smoothly on from the selected ones (off in parts
+    /// saved before there was a choice, so they rebuild as they did).
+    #[serde(default)]
+    pub tangent_propagation: bool,
+}
+
+/// The cross-section of a fillet's round, between where a ball of its radius touches the
+/// faces (see `docs/re/fillet-curved-edges.md`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum FilletProfile {
+    /// The ball's circular arc.
+    #[default]
+    Circular,
+    /// A conic weighted by rho, from 0.5 (a parabola) to 0.95.
+    ConicRho { rho: Dim },
+    /// A conic with this radius of curvature at its shoulder point.
+    ConicRadius { radius: Dim },
+    /// A curve that meets each face with the face's own curvature.
+    CurvatureContinuous,
+}
+
+impl FilletProfile {
+    pub const LABELS: [&'static str; 4] = ["Circular", "Conic rho", "Conic radius", "Curvature continuous"];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            FilletProfile::Circular => Self::LABELS[0],
+            FilletProfile::ConicRho { .. } => Self::LABELS[1],
+            FilletProfile::ConicRadius { .. } => Self::LABELS[2],
+            FilletProfile::CurvatureContinuous => Self::LABELS[3],
+        }
+    }
 }
 
 /// Chamfer on edges.
@@ -578,6 +618,10 @@ pub struct ChamferFeature {
     /// How the bevel is set out (equal distance in parts saved before there was a choice).
     #[serde(default)]
     pub kind: ChamferKind,
+    /// Also bevel every edge running smoothly on from the selected ones (off in parts
+    /// saved before there was a choice).
+    #[serde(default)]
+    pub tangent_propagation: bool,
 }
 
 /// How a chamfer's bevel is set out from its edges.
@@ -751,6 +795,15 @@ pub struct Document {
     /// Features at or after this index are rolled back (not rebuilt).
     #[serde(default)]
     pub rollback: Option<usize>,
+    /// The part's configurations (see `config.rs`). Never empty once normalized.
+    #[serde(default)]
+    pub configurations: Vec<Configuration>,
+    /// The configuration whose values the feature tree holds.
+    #[serde(default)]
+    pub active_configuration: u32,
+    /// Parameters with a value per configuration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configured: Vec<ConfiguredParam>,
 }
 
 impl Default for Document {
@@ -800,7 +853,7 @@ impl Document {
             |n: &str| CustomProperty { name: n.into(), kind: PropertyKind::Text, value: String::new() };
         Document {
             format: PART_FORMAT.into(),
-            format_version: PART_FORMAT_VERSION,
+            format_version: PART_FORMAT_VERSION_BASE,
             material: None,
             custom_properties: vec![
                 prop("Description"),
@@ -813,6 +866,9 @@ impl Document {
             features: Vec::new(),
             next_id: 1,
             rollback: None,
+            configurations: vec![Configuration::new(1, DEFAULT_CONFIGURATION)],
+            active_configuration: 1,
+            configured: Vec::new(),
         }
     }
 
@@ -821,11 +877,18 @@ impl Document {
     pub fn from_template(template: &Document) -> Document {
         let mut d = template.clone();
         d.rollback = None;
+        d.normalize_configurations();
         d
     }
 
+    /// The part as saved: with the tree's values recorded into the active configuration,
+    /// and the oldest format version that holds everything it uses.
     pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).expect("document serializes")
+        let mut d = self.clone();
+        d.capture_configuration();
+        d.format_version =
+            if d.uses_configurations() { PART_FORMAT_VERSION } else { PART_FORMAT_VERSION_BASE };
+        serde_json::to_string_pretty(&d).expect("document serializes")
     }
 
     pub fn from_json(s: &str) -> Result<Document, FileError> {
@@ -838,7 +901,11 @@ impl Document {
         if ver > PART_FORMAT_VERSION {
             return Err(FileError::TooNew(ver));
         }
-        Ok(serde_json::from_value(v)?)
+        let mut d: Document = serde_json::from_value(v)?;
+        // The version is worked out again on saving, from what the part uses.
+        d.format_version = PART_FORMAT_VERSION_BASE;
+        d.normalize_configurations();
+        Ok(d)
     }
 
     pub fn save(&self, path: &std::path::Path) -> Result<(), FileError> {
@@ -896,6 +963,7 @@ impl Document {
             }
             _ => self.features.push(f),
         }
+        self.feature_added(id);
         id
     }
 
@@ -923,6 +991,7 @@ impl Document {
             self.rollback = Some(rb - removed_before);
         }
         self.features.retain(|f| !gone.contains(&f.id));
+        self.features_deleted(&gone);
         gone
     }
 

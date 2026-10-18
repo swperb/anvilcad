@@ -2,8 +2,10 @@
 //!
 //! A [`Document`] is an ordered feature tree (sketches, extrudes, revolves, reference
 //! planes, patterns) plus global variables, a material and custom properties.
-//! [`Document::rebuild`] regenerates the solid.
+//! [`Document::rebuild`] regenerates the solid. A part can have several configurations
+//! (see [`config`]).
 
+pub mod config;
 pub mod dfm;
 pub mod document;
 pub mod equations;
@@ -15,6 +17,7 @@ pub mod rebuild;
 pub mod step;
 pub mod thin;
 
+pub use config::{ConfigError, ConfigParam, ConfigValue, Configuration, ConfiguredParam, DimSlot};
 pub use document::*;
 pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};
 pub use material::{Material, MaterialClass};
@@ -377,7 +380,12 @@ mod exact_shell {
         }));
         let side = |e: u32| FaceId::side(base, e);
         let corners = (0..4).map(|i| EdgeRef::new(side(i), side((i + 1) % 4))).collect();
-        doc.add_feature(FeatureKind::Fillet(FilletFeature { edges: corners, radius: Dim::Value(5.0) }));
+        doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: corners,
+            radius: Dim::Value(5.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
         let top = FaceId { feature: base, index: FaceId::END_CAP };
         let shell = doc
             .add_feature(FeatureKind::Shell(ShellFeature { remove: vec![top], thickness: Dim::Value(2.0) }));
@@ -439,7 +447,12 @@ mod exact_round_fillets {
         }));
         let top = FaceId { feature: base, index: FaceId::END_CAP };
         let edges = entities.iter().map(|&e| EdgeRef::new(top, FaceId::side(base, e as u32))).collect();
-        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature { edges, radius: Dim::Value(1.0) }));
+        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges,
+            radius: Dim::Value(1.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
         assert_eq!(st.faceted_from, None);
@@ -501,8 +514,12 @@ mod exact_rolling_fillets {
         let before = doc.rebuild().body.mass_properties().volume;
         let rim =
             EdgeRef::new(FaceId::side(boss, boss_circle as u32), FaceId::side(hole, hole_circle as u32));
-        let fillet =
-            doc.add_feature(FeatureKind::Fillet(FilletFeature { edges: vec![rim], radius: Dim::Value(1.0) }));
+        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![rim],
+            radius: Dim::Value(1.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
         let st = doc.rebuild();
         assert_eq!(st.faceted_from, None);
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -572,6 +589,7 @@ mod exact_freeform_chamfers {
             edges: vec![rim],
             distance: Dim::Value(1.0),
             kind: ChamferKind::EqualDistance,
+            tangent_propagation: false,
         }));
         let st = doc.rebuild();
         assert_eq!(st.faceted_from, None);
@@ -610,6 +628,7 @@ mod chamfer_kinds {
             edges: vec![edge],
             distance: Dim::Value(distance),
             kind,
+            tangent_propagation: false,
         }));
         (doc, id)
     }
@@ -780,7 +799,12 @@ mod exact_rolling_runs {
         let shaft_face = FaceId::side(shaft, shaft_circle as u32);
         let edges =
             entities.iter().map(|&e| EdgeRef::new(shaft_face, FaceId::side(boss, e as u32))).collect();
-        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature { edges, radius: Dim::Value(1.0) }));
+        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges,
+            radius: Dim::Value(1.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
         let st = doc.rebuild();
         assert_eq!(st.faceted_from, None);
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -868,5 +892,265 @@ mod probe_imported {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod fillet_profiles {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A 20 x 10 x 10 block with its front top edge filleted, radius 2.
+    fn block(profile: FilletProfile) -> (Document, u32) {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let sides = sf.sketch.add_rectangle(v2(0.0, 0.0), v2(20.0, 10.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let top = FaceId { feature: base, index: FaceId::END_CAP };
+        let edge = EdgeRef::new(top, FaceId::side(base, sides[0] as u32));
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![edge],
+            radius: Dim::Value(2.0),
+            profile,
+            tangent_propagation: false,
+        }));
+        (doc, id)
+    }
+
+    fn exact_volume(st: &BuildState) -> f64 {
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        st.exact
+            .as_ref()
+            .expect("exact")
+            .iter()
+            .map(|b| {
+                anvil_brep::mass::properties(&anvil_brep::tess::tessellate(b, &fine).expect("tess")).volume
+            })
+            .sum()
+    }
+
+    /// The area a profile cuts from the right-angled corner, the corner at the origin and
+    /// the contacts at (2, 0) and (0, 2): Green's theorem on many points of the curve.
+    fn corner_area(curve: impl Fn(f64) -> (f64, f64)) -> f64 {
+        let n = 200_000;
+        let mut pts = vec![(0.0, 0.0)];
+        pts.extend((0..=n).map(|k| curve(k as f64 / n as f64)));
+        let m = pts.len();
+        (0..m).map(|k| pts[k].0 * pts[(k + 1) % m].1 - pts[(k + 1) % m].0 * pts[k].1).sum::<f64>().abs() / 2.0
+    }
+
+    #[test]
+    fn conic_and_curvature_continuous_fillets_stay_exact() {
+        // Rho 0.7: the conic of weight 7/3 from (2, 0) to (0, 2) about the corner.
+        let w = 0.7 / 0.3;
+        let conic = |t: f64| {
+            let (b0, b1, b2) = ((1.0 - t) * (1.0 - t), 2.0 * t * (1.0 - t) * w, t * t);
+            let s = b0 + b1 + b2;
+            (2.0 * b0 / s, 2.0 * b2 / s)
+        };
+        // The quartic with its second and fourth control points half way to the corner and
+        // its middle one on it (the faces are flat, so it leaves them with no curvature).
+        let quartic = |t: f64| {
+            let u = 1.0 - t;
+            (2.0 * u.powi(4) + 4.0 * t * u.powi(3), 2.0 * t.powi(4) + 4.0 * t.powi(3) * u)
+        };
+        let circular = 4.0 - std::f64::consts::PI;
+        for (profile, area) in [
+            (FilletProfile::Circular, circular),
+            (FilletProfile::ConicRho { rho: Dim::Value(0.7) }, corner_area(conic)),
+            (FilletProfile::CurvatureContinuous, corner_area(quartic)),
+        ] {
+            let (mut doc, id) = block(profile.clone());
+            let st = doc.rebuild();
+            assert!(st.errors.is_empty(), "{:?}", st.errors);
+            assert_eq!(st.faceted_from, None);
+            assert!(st.exact_features.contains(&id));
+            let want = 2000.0 - 20.0 * area;
+            let v = exact_volume(&st);
+            assert!((v - want).abs() / want < 1e-6, "{profile:?}: {v} vs {want}");
+        }
+    }
+
+    #[test]
+    fn a_rho_out_of_range_reports_why() {
+        let (mut doc, id) = block(FilletProfile::ConicRho { rho: Dim::Value(0.3) });
+        let st = doc.rebuild();
+        let err = st.errors.get(&id).expect("error");
+        assert!(err.contains("rho"), "{err}");
+    }
+
+    #[test]
+    fn older_parts_load_as_circular() {
+        let (doc, id) = block(FilletProfile::CurvatureContinuous);
+        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json()).expect("json");
+        // Remove the profile, as a part saved before it existed would have none.
+        fn strip(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    if m.contains_key("radius") && m.contains_key("edges") {
+                        m.remove("profile");
+                    }
+                    m.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        strip(&mut json);
+        let back = Document::from_json(&json.to_string()).expect("load");
+        let f = back.features.iter().find(|f| f.id == id).expect("fillet");
+        assert!(matches!(&f.kind, FeatureKind::Fillet(f) if f.profile == FilletProfile::Circular));
+    }
+}
+
+#[cfg(test)]
+mod tangent_propagation {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A slot (half circles of radius 4, 10 apart) extruded 5 tall, and its top edges.
+    fn slot() -> (Document, Vec<EdgeRef>) {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let s = &mut sf.sketch;
+        let p: Vec<usize> = [v2(0.0, -4.0), v2(10.0, -4.0), v2(10.0, 4.0), v2(0.0, 4.0)]
+            .iter()
+            .map(|&q| s.add_point(q))
+            .collect();
+        let (c1, c0) = (s.add_point(v2(10.0, 0.0)), s.add_point(v2(0.0, 0.0)));
+        let entities = [
+            s.add_line(p[0], p[1]),
+            s.add_arc(c1, p[1], p[2]),
+            s.add_line(p[2], p[3]),
+            s.add_arc(c0, p[3], p[0]),
+        ];
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(5.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let top = FaceId { feature: base, index: FaceId::END_CAP };
+        (doc, entities.iter().map(|&e| EdgeRef::new(top, FaceId::side(base, e as u32))).collect())
+    }
+
+    fn exact_volume(st: &BuildState) -> f64 {
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        st.exact
+            .as_ref()
+            .expect("exact")
+            .iter()
+            .map(|b| {
+                anvil_brep::mass::properties(&anvil_brep::tess::tessellate(b, &fine).expect("tess")).volume
+            })
+            .sum()
+    }
+
+    #[test]
+    fn one_edge_of_a_slot_blends_the_whole_outline() {
+        // One straight top edge selected, with propagation: the same as all four.
+        let blends = |all: bool, propagate: bool, chamfer: bool| {
+            let (mut doc, edges) = slot();
+            let edges = if all { edges } else { vec![edges[0]] };
+            let id = doc.add_feature(if chamfer {
+                FeatureKind::Chamfer(ChamferFeature {
+                    edges,
+                    distance: Dim::Value(1.0),
+                    kind: ChamferKind::EqualDistance,
+                    tangent_propagation: propagate,
+                })
+            } else {
+                FeatureKind::Fillet(FilletFeature {
+                    edges,
+                    radius: Dim::Value(1.0),
+                    profile: FilletProfile::Circular,
+                    tangent_propagation: propagate,
+                })
+            });
+            let st = doc.rebuild();
+            assert!(st.errors.is_empty(), "{:?}", st.errors);
+            assert!(st.exact_features.contains(&id), "{all} {propagate} {chamfer}: {:?}", st.faceted_from);
+            exact_volume(&st)
+        };
+        for chamfer in [false, true] {
+            let all = blends(true, false, chamfer);
+            let one = blends(false, true, chamfer);
+            let alone = blends(false, false, chamfer);
+            assert!((one - all).abs() < 1e-9 * all, "{one} vs {all}");
+            // Without propagation the one edge alone is blended: 10 long.
+            assert!(alone > one + 1.0, "{alone} {one}");
+        }
+    }
+
+    #[test]
+    fn a_later_round_carries_on_round_an_earlier_one() {
+        // A 10 cube: its front top edge rounded 3, then its right top edge rounded 1 with
+        // propagation, which carries the round on round the first one's end and down the
+        // front right edge (see the kernel's tests for the closed form).
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let sides = sf.sketch.add_rectangle(v2(0.0, 0.0), v2(10.0, 10.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let top = FaceId { feature: base, index: FaceId::END_CAP };
+        let edge = |k: usize| EdgeRef::new(top, FaceId::side(base, sides[k] as u32));
+        for (k, r) in [(0, 3.0), (1, 1.0)] {
+            doc.add_feature(FeatureKind::Fillet(FilletFeature {
+                edges: vec![edge(k)],
+                radius: Dim::Value(r),
+                profile: FilletProfile::Circular,
+                tangent_propagation: true,
+            }));
+        }
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert_eq!(st.faceted_from, None);
+        let pi = std::f64::consts::PI;
+        let area = |s: f64| s * s * (1.0 - pi / 4.0);
+        let inset = |s: f64| s * (10.0 - 3.0 * pi) / (3.0 * (4.0 - pi));
+        let want = 1000.0 - 10.0 * area(3.0) - 14.0 * area(1.0) - 0.5 * pi * area(1.0) * (3.0 - inset(1.0));
+        let v = exact_volume(&st);
+        assert!((v - want).abs() / want < 3e-6, "{v} vs {want}");
+    }
+
+    #[test]
+    fn older_parts_load_without_propagation() {
+        let (mut doc, edges) = slot();
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges,
+            radius: Dim::Value(1.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: true,
+        }));
+        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json()).expect("json");
+        fn strip(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    m.remove("tangent_propagation");
+                    m.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        strip(&mut json);
+        let back = Document::from_json(&json.to_string()).expect("load");
+        let f = back.features.iter().find(|f| f.id == id).expect("fillet");
+        assert!(matches!(&f.kind, FeatureKind::Fillet(f) if !f.tangent_propagation));
     }
 }
