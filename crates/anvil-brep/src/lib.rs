@@ -20,6 +20,7 @@ pub mod extrude;
 pub mod freeform;
 pub mod geom;
 pub mod intersect;
+pub mod loft;
 pub mod mass;
 pub mod mirror;
 pub mod offset;

@@ -568,6 +568,14 @@ impl SplineSurface {
                 k = k.max(bend(at(i, j - 1), at(i, j), at(i, j + 1)));
             }
         }
+        // A doubly ruled patch (a twisted bilinear one, say) has straight rows and
+        // columns; its bend shows only across them, along the grid's diagonals.
+        for i in 1..ns {
+            for j in 1..nt {
+                k = k.max(bend(at(i - 1, j - 1), at(i, j), at(i + 1, j + 1)));
+                k = k.max(bend(at(i - 1, j + 1), at(i, j), at(i + 1, j - 1)));
+            }
+        }
         k
     }
 }
