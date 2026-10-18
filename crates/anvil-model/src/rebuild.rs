@@ -464,17 +464,32 @@ impl Document {
             FeatureKind::Fillet(f) => {
                 let radius = num(&f.radius, "radius")?;
                 let fillet = anvil_brep::blend::Blend::Fillet(radius);
-                if st.exact_step(id, |b| exact::blend(b, &f.edges, fillet, id)) {
+                if st.exact_step(id, |b| exact::blend(b, &f.edges, exact::Treatment::Plain(fillet), id)) {
                     return Ok(());
                 }
                 st.body = blend_edges(&st.body, &f.edges, EdgeTreatment::Fillet { radius }, id)
                     .map_err(|e| e.to_string())?;
             }
             FeatureKind::Chamfer(c) => {
+                use anvil_brep::blend::Blend;
                 let distance = num(&c.distance, "distance")?;
-                let chamfer = anvil_brep::blend::Blend::Chamfer(distance);
-                if st.exact_step(id, |b| exact::blend(b, &c.edges, chamfer, id)) {
+                let treatment = match &c.kind {
+                    ChamferKind::EqualDistance => exact::Treatment::Plain(Blend::Chamfer(distance)),
+                    ChamferKind::OffsetFace => exact::Treatment::Plain(Blend::ChamferOffset(distance)),
+                    ChamferKind::AngleDistance { angle, flip } => exact::Treatment::AngleChamfer {
+                        distance,
+                        angle: num(angle, "angle")?.to_radians(),
+                        flip: *flip,
+                    },
+                };
+                if st.exact_step(id, |b| exact::blend(b, &c.edges, treatment, id)) {
                     return Ok(());
+                }
+                if c.kind != ChamferKind::EqualDistance {
+                    return Err(format!(
+                        "{} chamfers need the exact kernel, and this part is faceted from an earlier feature on",
+                        c.kind.label().to_lowercase()
+                    ));
                 }
                 st.body = blend_edges(&st.body, &c.edges, EdgeTreatment::Chamfer { distance }, id)
                     .map_err(|e| e.to_string())?;

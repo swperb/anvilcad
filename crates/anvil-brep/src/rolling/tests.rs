@@ -442,3 +442,102 @@ fn chamfer_a_slot_boss_root_on_a_shaft() {
         1
     );
 }
+
+/// The swept tool for any blend, applied directly.
+fn swept(solid: &Solid, edge: EdgeId, blend: Blend) -> Vec<Solid> {
+    let (tool, convex, contacts) = rolling_tool(solid, edge, blend, 0).expect("tool");
+    let op = if convex { BoolOp::Subtract } else { BoolOp::Union };
+    boolean_with_contacts(solid, &tool, op, &contacts).expect("boolean")
+}
+
+/// The face of `s` with a plane through `p` square to `n`.
+fn plane_face(s: &Solid, p: DVec3, n: DVec3) -> usize {
+    s.faces
+        .iter()
+        .position(|f| matches!(f.surface, Surface::Plane { frame } if frame.z.cross(n).length() < 1e-9 && (p - frame.origin).dot(frame.z).abs() < 1e-9))
+        .expect("plane face")
+}
+
+#[test]
+fn angle_and_offset_chamfers_on_flat_faces() {
+    // A cube's top edge, 3 along the top at 30 degrees: down the side 3 tan 30.
+    let cube = prism(&[square(10.0)], &Frame::world(), 0.0, 10.0);
+    let e = edge_near(&cube, DVec3::new(5.0, 0.0, 10.0), 1e-6).expect("edge");
+    let top = plane_face(&cube, DVec3::new(0.0, 0.0, 10.0), DVec3::Z);
+    let angle = Blend::ChamferAngle { distance: 3.0, angle: PI / 6.0, along: top };
+    let want = 1000.0 - 0.5 * 3.0 * 3.0 * (PI / 6.0).tan() * 10.0;
+    for out in [blend_edge(&cube, e, angle, 1, 0).expect("closed form"), swept(&cube, e, angle)] {
+        assert!((volume(&out) - want).abs() / want < 1e-9, "{} vs {want}", volume(&out));
+    }
+    // At right angles an offset face chamfer is the equal-distance one.
+    let want = 1000.0 - 4.5 * 10.0;
+    for out in [
+        blend_edge(&cube, e, Blend::ChamferOffset(3.0), 1, 0).expect("closed form"),
+        swept(&cube, e, Blend::ChamferOffset(3.0)),
+    ] {
+        assert!((volume(&out) - want).abs() / want < 1e-9, "{} vs {want}", volume(&out));
+    }
+    // A wedge's edge where its side and sloping top meet at 120 degrees: both kinds the
+    // same from the prism tool and the sweep.
+    let wedge = Loop2::new(vec![
+        Segment::Line { a: DVec2::ZERO, b: DVec2::new(10.0, 0.0) },
+        Segment::Line { a: DVec2::new(10.0, 0.0), b: DVec2::new(10.0, 4.0) },
+        Segment::Line { a: DVec2::new(10.0, 4.0), b: DVec2::new(0.0, 4.0 + 10.0 * (PI / 6.0).tan()) },
+        Segment::Line { a: DVec2::new(0.0, 4.0 + 10.0 * (PI / 6.0).tan()), b: DVec2::ZERO },
+    ]);
+    let w = prism(&[wedge], &Frame::world(), 0.0, 8.0);
+    let e = edge_near(&w, DVec3::new(10.0, 4.0, 4.0), 1e-6).expect("edge");
+    let side = plane_face(&w, DVec3::new(10.0, 0.0, 0.0), DVec3::X);
+    // On faces meeting at 120 degrees an offset face chamfer of 1 sets back cot 60.
+    let offset = Blend::ChamferOffset(1.0);
+    let equal = Blend::Chamfer(1.0 / (PI / 3.0).tan());
+    let want = volume(&blend_edge(&w, e, equal, 1, 0).expect("equal"));
+    for blend in [offset, Blend::ChamferAngle { distance: 1.5, angle: 0.5, along: side }] {
+        let closed = volume(&blend_edge(&w, e, blend, 1, 0).expect("closed form"));
+        let sweep = volume(&swept(&w, e, blend));
+        assert!((sweep - closed).abs() / closed < 1e-9, "{blend:?}: {sweep} vs {closed}");
+        if blend == offset {
+            assert!((closed - want).abs() / want < 1e-9, "{closed} vs {want}");
+        }
+    }
+}
+
+#[test]
+fn angle_and_offset_chamfers_on_a_slanted_hole() {
+    // The slanted hole's rim: an angle-distance bevel starts 1 from the rim on the plate
+    // and leaves it at exactly the angle; an offset face bevel's ends are where a ball of
+    // the distance rolling round the rim touches the plate and the hole.
+    let plate = prism(&[square(40.0)], &Frame::world(), 0.0, 6.0);
+    let axis = DVec3::new((PI / 6.0).sin(), 0.0, (PI / 6.0).cos());
+    let f = Frame::new(DVec3::new(20.0, 20.0, 3.0), axis, DVec3::Y).expect("frame");
+    let hole = prism(&[Loop2::new(vec![Segment::circle(DVec2::ZERO, 4.0)])], &f, -20.0, 20.0);
+    let holed = crate::boolean::boolean(&plate, &hole, BoolOp::Subtract).expect("hole").remove(0);
+    let rim_id = holed
+        .edges
+        .iter()
+        .position(|e| matches!(e.curve, Curve::Ellipse { frame, .. } if (frame.origin.z - 6.0).abs() < 1e-9))
+        .map(|i| EdgeId(i as u32))
+        .expect("rim");
+    let rim = holed.edges[rim_id.index()].clone();
+    let top = plane_face(&holed, DVec3::new(0.0, 0.0, 6.0), DVec3::Z);
+    let angle = 0.4;
+    let out = blend_edge(&holed, rim_id, Blend::ChamferAngle { distance: 1.0, angle, along: top }, 1, 0)
+        .expect("angle");
+    let bevel = out[0]
+        .faces
+        .iter()
+        .find(|f| f.owner == 1 && matches!(f.surface, Surface::BSpline(_)))
+        .expect("bevel");
+    let Surface::BSpline(sp) = &bevel.surface else { unreachable!() };
+    let ((s0, s1), _) = sp.domain();
+    for k in 0..20 {
+        let s = s0 + (s1 - s0) * (k as f64 + 0.5) / 20.0;
+        let (a, b) = (sp.eval_st(glam::DVec2::new(s, 0.0)), sp.eval_st(glam::DVec2::new(s, 1.0)));
+        assert!((a.z - 6.0).abs() < 1e-6, "side A is the plate");
+        assert!((rim.curve.distance_to(a, rim.t0, rim.t1) - 1.0).abs() < 1e-6);
+        let leaving = ((b - a).normalize().z.abs()).asin();
+        assert!((leaving - angle).abs() < 1e-6, "{leaving} vs {angle}");
+    }
+    let out = blend_edge(&holed, rim_id, Blend::ChamferOffset(1.0), 1, 0).expect("offset");
+    assert!(rough_volume(&out) < rough_volume(std::slice::from_ref(&holed)));
+}

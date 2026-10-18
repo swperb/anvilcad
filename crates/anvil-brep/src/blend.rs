@@ -31,6 +31,53 @@ pub enum Blend {
     Fillet(f64),
     /// Equal-distance bevel, set back this far along each face.
     Chamfer(f64),
+    /// Bevel set back `distance` along face `along` (an index into the solid's faces)
+    /// and leaving that face at `angle` radians.
+    ChamferAngle { distance: f64, angle: f64, along: usize },
+    /// Offset face bevel: the two faces offset `distance` into the part (out of it at a
+    /// concave edge) meet where the bevel's ends are dropped back square to each face, as
+    /// a fillet of that radius would touch them.
+    ChamferOffset(f64),
+}
+
+impl Blend {
+    /// The size the user gave: radius or distance.
+    fn size(&self) -> f64 {
+        match *self {
+            Blend::Fillet(r) | Blend::Chamfer(r) | Blend::ChamferOffset(r) => r,
+            Blend::ChamferAngle { distance, .. } => distance,
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        if matches!(self, Blend::Fillet(_)) { "fillet" } else { "chamfer" }
+    }
+
+    /// How far the blend sets back along faces `fa` and `fb` where they meet at the angle
+    /// `phi` (on the corner's side), as on flat faces.
+    fn setbacks(&self, phi: f64, fa: usize, fb: usize) -> Result<(f64, f64)> {
+        Ok(match *self {
+            Blend::Fillet(r) | Blend::ChamferOffset(r) => (r / (phi / 2.0).tan(), r / (phi / 2.0).tan()),
+            Blend::Chamfer(c) => (c, c),
+            Blend::ChamferAngle { distance, angle, along } => {
+                if !(angle > 0.0 && angle + phi < PI) {
+                    return invalid(
+                        "the chamfer's angle must be more than 0 and leave the corner's other face",
+                    );
+                }
+                // The triangle of the edge and the bevel's ends: angle phi at the edge,
+                // `angle` at the end on face `along` (law of sines).
+                let other = distance * angle.sin() / (phi + angle).sin();
+                if along == fa {
+                    (distance, other)
+                } else if along == fb {
+                    (other, distance)
+                } else {
+                    return invalid("the face the chamfer's distance is measured along is not at this edge");
+                }
+            }
+        })
+    }
 }
 
 fn invalid<T>(msg: impl Into<String>) -> Result<T> {
@@ -127,9 +174,7 @@ fn joined_smoothly(solid: &Solid, a: EdgeId, b: EdgeId) -> bool {
 /// The tool for a blend in closed form: a prism along a straight edge, the corner
 /// revolved round a circular one.
 fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Result<(Solid, bool)> {
-    let size = match blend {
-        Blend::Fillet(r) | Blend::Chamfer(r) => r,
-    };
+    let size = blend.size();
     if !(size.is_finite() && size > 0.0) {
         return invalid("the size must be a positive number");
     }
@@ -176,21 +221,16 @@ fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Re
     }
     let convex = bend < 0.0;
     let phi = wa.dot(wb).clamp(-1.0, 1.0).acos();
-    let setback = match blend {
-        Blend::Fillet(r) => r / (phi / 2.0).tan(),
-        Blend::Chamfer(c) => c,
-    };
+    let (sa, sb) = blend.setbacks(phi, fa, fb)?;
+    let setback = sa.max(sb);
 
     // The blend must fit on both faces.
     let mid = (p0 + p1) * 0.5;
-    for (f, w) in [(fa, wa), (fb, wb)] {
-        if !boolean::face_contains(solid, f, mid + w * setback * 0.999) {
+    for (f, w, s) in [(fa, wa, sa), (fb, wb, sb)] {
+        if !boolean::face_contains(solid, f, mid + w * s * 0.999) {
             return invalid(format!(
                 "a {} of {size} does not fit on the faces next to this edge",
-                match blend {
-                    Blend::Fillet(_) => "fillet",
-                    Blend::Chamfer(_) => "chamfer",
-                }
+                blend.name()
             ));
         }
     }
@@ -198,8 +238,8 @@ fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Re
     // Cross-section in a frame with z along the edge and x into face A.
     let frame = Frame::new(p0, d, wa)?;
     let to2 = |v: DVec3| DVec2::new(v.dot(frame.x), v.dot(frame.y));
-    let a = to2(wa * setback);
-    let b = to2(wb * setback);
+    let a = to2(wa * sa);
+    let b = to2(wb * sb);
     let round = match blend {
         Blend::Fillet(r) => {
             let center = to2((wa + wb).normalize() * (r / (phi / 2.0).sin()));
@@ -209,7 +249,7 @@ fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Re
                 .find(|s| matches!(s, Segment::Arc { sweep, .. } if sweep.abs() < PI))
                 .ok_or_else(|| KernelError::InvalidInput("degenerate fillet".into()))?
         }
-        Blend::Chamfer(_) => Segment::Line { a, b },
+        _ => Segment::Line { a, b },
     };
     let regions = build_regions(&[pushed_section(
         round,
@@ -361,30 +401,19 @@ fn round_edge_tool(
             ));
         }
     }
-    let size = match blend {
-        Blend::Fillet(r) | Blend::Chamfer(r) => r,
-    };
+    let size = blend.size();
     let bend = wa.dot(nb);
     if bend.abs() < 1e-9 {
         return invalid("the faces at this edge are tangent; there is nothing to blend");
     }
     let convex = bend < 0.0;
     let phi = wa.dot(wb).clamp(-1.0, 1.0).acos();
-    let setback = match blend {
-        Blend::Fillet(r) => r / (phi / 2.0).tan(),
-        Blend::Chamfer(c) => c,
-    };
-    let too_big = || {
-        invalid(format!(
-            "a {} of {size} does not fit on the faces next to this edge",
-            match blend {
-                Blend::Fillet(_) => "fillet",
-                Blend::Chamfer(_) => "chamfer",
-            }
-        ))
-    };
-    for (f, w) in [(fa, wa), (fb, wb)] {
-        if !boolean::face_contains(solid, f, p + w * setback * 0.999) {
+    let (sa, sb) = blend.setbacks(phi, fa, fb)?;
+    let setback = sa.max(sb);
+    let too_big =
+        || invalid(format!("a {} of {size} does not fit on the faces next to this edge", blend.name()));
+    for (f, w, s) in [(fa, wa, sa), (fb, wb, sb)] {
+        if !boolean::face_contains(solid, f, p + w * s * 0.999) {
             return too_big();
         }
     }
@@ -395,8 +424,8 @@ fn round_edge_tool(
     let to2 = |v: DVec3| DVec2::new(v.dot(radial), v.dot(a));
     let c = DVec2::new(radius, 0.0);
     let (wa2, wb2, na2, nb2) = (to2(wa), to2(wb), to2(na), to2(nb));
-    let pa = c + wa2 * setback;
-    let pb = c + wb2 * setback;
+    let pa = c + wa2 * sa;
+    let pb = c + wb2 * sb;
     let round = match blend {
         Blend::Fillet(r) => {
             let center = c + (wa2 + wb2).normalize() * (r / (phi / 2.0).sin());
@@ -406,7 +435,7 @@ fn round_edge_tool(
                 .find(|s| matches!(s, Segment::Arc { sweep, .. } if sweep.abs() < PI))
                 .ok_or_else(|| KernelError::InvalidInput("degenerate fillet".into()))?
         }
-        Blend::Chamfer(_) => Segment::Line { a: pa, b: pb },
+        _ => Segment::Line { a: pa, b: pb },
     };
     let regions = build_regions(&[pushed_section(round, pa, pb, c, na2, nb2, setback, convex, tag_base)])?;
     let region = regions.first().ok_or_else(|| KernelError::InvalidInput("degenerate blend".into()))?;

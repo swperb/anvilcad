@@ -309,11 +309,40 @@ pub struct FilletFeature {
     pub radius: Dim,
 }
 
-/// Equal-distance chamfer on edges.
+/// Chamfer on edges.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChamferFeature {
     pub edges: Vec<EdgeRef>,
     pub distance: Dim,
+    /// How the bevel is set out (equal distance in parts saved before there was a choice).
+    #[serde(default)]
+    pub kind: ChamferKind,
+}
+
+/// How a chamfer's bevel is set out from its edges.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum ChamferKind {
+    /// Set back the distance along both faces.
+    #[default]
+    EqualDistance,
+    /// Set back the distance along one face (each edge's first face, or its second when
+    /// flipped), leaving it at the angle (degrees).
+    AngleDistance { angle: Dim, flip: bool },
+    /// Where the faces, offset by the distance, meet, dropped back square to each face:
+    /// the bevel joins the points a fillet of that radius would touch.
+    OffsetFace,
+}
+
+impl ChamferKind {
+    pub const LABELS: [&'static str; 3] = ["Equal distance", "Angle and distance", "Offset face"];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ChamferKind::EqualDistance => Self::LABELS[0],
+            ChamferKind::AngleDistance { .. } => Self::LABELS[1],
+            ChamferKind::OffsetFace => Self::LABELS[2],
+        }
+    }
 }
 
 /// Hollows the body to a wall thickness, opening the listed faces.

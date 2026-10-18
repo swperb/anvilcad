@@ -553,6 +553,7 @@ mod exact_freeform_chamfers {
         let chamfer = doc.add_feature(FeatureKind::Chamfer(ChamferFeature {
             edges: vec![rim],
             distance: Dim::Value(1.0),
+            kind: ChamferKind::EqualDistance,
         }));
         let st = doc.rebuild();
         assert_eq!(st.faceted_from, None);
@@ -563,6 +564,147 @@ mod exact_freeform_chamfers {
         let taken = before - st.body.mass_properties().volume;
         assert!(taken > 2.0 * 0.5 * 26.0 * 0.8 && taken < 2.0 * 0.5 * 26.0 * 2.0, "{taken}");
         assert_eq!(st.body.open_edges(), 0);
+    }
+}
+
+#[cfg(test)]
+mod chamfer_kinds {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A 20 x 10 x 10 block with its front top edge chamfered.
+    fn block(kind: ChamferKind, distance: f64) -> (Document, u32) {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let sides = sf.sketch.add_rectangle(v2(0.0, 0.0), v2(20.0, 10.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let top = FaceId { feature: base, index: FaceId::END_CAP };
+        let edge = EdgeRef::new(top, FaceId::side(base, sides[0] as u32));
+        let id = doc.add_feature(FeatureKind::Chamfer(ChamferFeature {
+            edges: vec![edge],
+            distance: Dim::Value(distance),
+            kind,
+        }));
+        (doc, id)
+    }
+
+    fn exact_volume(st: &BuildState) -> f64 {
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        st.exact
+            .as_ref()
+            .expect("exact")
+            .iter()
+            .map(|b| {
+                anvil_brep::mass::properties(&anvil_brep::tess::tessellate(b, &fine).expect("tess")).volume
+            })
+            .sum()
+    }
+
+    /// How far the bevel sets back on the block's top and front faces: the nearest corner
+    /// on each face's plane to the line where the two planes meet (the edge it replaced).
+    fn setbacks(st: &BuildState, doc: &Document) -> (f64, f64) {
+        let base = doc.features.iter().find(|f| matches!(f.kind, FeatureKind::Extrude(_))).expect("base").id;
+        let sides = match &doc.features[0].kind {
+            FeatureKind::Sketch(sf) => sf.sketch.entities.iter().position(|e| !e.construction).expect("side"),
+            _ => unreachable!(),
+        };
+        let body = &st.exact.as_ref().expect("exact")[0];
+        let plane = |name: FaceId| {
+            let f = body.faces.iter().find(|f| exact::face_id(f) == name).expect("face");
+            match f.surface {
+                anvil_brep::Surface::Plane { frame } => frame,
+                _ => panic!("not flat"),
+            }
+        };
+        let (top, front) = (
+            plane(FaceId { feature: base, index: FaceId::END_CAP }),
+            plane(FaceId::side(base, sides as u32)),
+        );
+        let dir = top.z.cross(front.z).normalize();
+        let off = |p: glam::DVec3| {
+            // The point of the line where both planes hold, then the distance square to it.
+            let q = p - dir * (p - top.origin).dot(dir);
+            let (a, b) = (top.z, front.z);
+            let (ha, hb) = (top.origin.dot(a), front.origin.dot(b));
+            let ab = a.dot(b);
+            let det = 1.0 - ab * ab;
+            let ca = (ha - hb * ab) / det;
+            let cb = (hb - ha * ab) / det;
+            let line = a * ca + b * cb;
+            let r = q - line;
+            (r - dir * r.dot(dir)).length()
+        };
+        let on = |frame: &anvil_brep::Frame, p: glam::DVec3| (p - frame.origin).dot(frame.z).abs() < 1e-9;
+        let near = |frame: &anvil_brep::Frame| {
+            body.vertices.iter().filter(|v| on(frame, v.point)).map(|v| off(v.point)).fold(f64::MAX, f64::min)
+        };
+        (near(&top), near(&front))
+    }
+
+    #[test]
+    fn angle_distance_measures_along_the_chosen_face() {
+        // 3 along one face at 30 degrees: 3 tan 30 along the other. Flipped, the 3 runs
+        // along the other face.
+        let pi = std::f64::consts::PI;
+        let short = 3.0 * (pi / 6.0).tan();
+        let mut seen = Vec::new();
+        for flip in [false, true] {
+            let kind = ChamferKind::AngleDistance { angle: Dim::Value(30.0), flip };
+            let (mut doc, id) = block(kind, 3.0);
+            let st = doc.rebuild();
+            assert!(st.errors.is_empty(), "{:?}", st.errors);
+            assert_eq!(st.faceted_from, None);
+            assert!(st.exact_features.contains(&id));
+            let want = 2000.0 - 0.5 * 3.0 * short * 20.0;
+            assert!((exact_volume(&st) - want).abs() / want < 1e-9, "{}", exact_volume(&st));
+            let (top, front) = setbacks(&st, &doc);
+            assert!(
+                ((top - 3.0).abs() < 1e-9 && (front - short).abs() < 1e-9)
+                    || ((top - short).abs() < 1e-9 && (front - 3.0).abs() < 1e-9),
+                "{top} {front}"
+            );
+            seen.push(top);
+        }
+        // Flipping moves the 3 to the other face.
+        assert!((seen[0] - seen[1]).abs() > 1.0, "{seen:?}");
+    }
+
+    #[test]
+    fn offset_face_on_a_square_edge_is_equal_distance() {
+        let (mut a, _) = block(ChamferKind::OffsetFace, 2.0);
+        let (mut b, _) = block(ChamferKind::EqualDistance, 2.0);
+        let (va, vb) = (exact_volume(&a.rebuild()), exact_volume(&b.rebuild()));
+        assert!((va - vb).abs() < 1e-9 && (va - (2000.0 - 2.0 * 20.0)).abs() < 1e-9, "{va} {vb}");
+    }
+
+    #[test]
+    fn older_parts_load_as_equal_distance() {
+        let (doc, id) = block(ChamferKind::OffsetFace, 2.0);
+        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json()).expect("json");
+        // Remove the kind, as a part saved before it existed would have none.
+        fn strip(v: &mut serde_json::Value) {
+            match v {
+                serde_json::Value::Object(m) => {
+                    if m.contains_key("distance") && m.contains_key("edges") {
+                        m.remove("kind");
+                    }
+                    m.values_mut().for_each(strip);
+                }
+                serde_json::Value::Array(a) => a.iter_mut().for_each(strip),
+                _ => {}
+            }
+        }
+        strip(&mut json);
+        let back = Document::from_json(&json.to_string()).expect("load");
+        let f = back.features.iter().find(|f| f.id == id).expect("chamfer");
+        assert!(matches!(&f.kind, FeatureKind::Chamfer(c) if c.kind == ChamferKind::EqualDistance));
     }
 }
 

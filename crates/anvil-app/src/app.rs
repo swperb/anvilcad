@@ -661,6 +661,9 @@ impl AnvilApp {
                 }
                 FeatureKind::Chamfer(c) => {
                     bufs.insert("distance", c.distance.text());
+                    if let ChamferKind::AngleDistance { angle, .. } = &c.kind {
+                        bufs.insert("angle", angle.text());
+                    }
                 }
                 FeatureKind::Shell(s) => {
                     bufs.insert("thickness", s.thickness.text());
@@ -793,7 +796,11 @@ impl AnvilApp {
         }
         let before = self.doc.clone();
         let kind = if chamfer {
-            FeatureKind::Chamfer(ChamferFeature { edges: Vec::new(), distance: Dim::Value(1.0) })
+            FeatureKind::Chamfer(ChamferFeature {
+                edges: Vec::new(),
+                distance: Dim::Value(1.0),
+                kind: ChamferKind::EqualDistance,
+            })
         } else {
             FeatureKind::Fillet(FilletFeature { edges: Vec::new(), radius: Dim::Value(2.0) })
         };
@@ -1532,6 +1539,24 @@ impl AnvilApp {
                         }
                     }
                     FeatureKind::Chamfer(ch) => {
+                        let current = ch.kind.label();
+                        egui::ComboBox::from_label("Type").selected_text(current).show_ui(ui, |ui| {
+                            for (i, label) in ChamferKind::LABELS.iter().enumerate() {
+                                if ui.selectable_label(current == *label, *label).clicked()
+                                    && current != *label
+                                {
+                                    ch.kind = match i {
+                                        0 => ChamferKind::EqualDistance,
+                                        1 => ChamferKind::AngleDistance {
+                                            angle: Dim::Value(45.0),
+                                            flip: false,
+                                        },
+                                        _ => ChamferKind::OffsetFace,
+                                    };
+                                    changed = true;
+                                }
+                            }
+                        });
                         changed |= Self::dim_field(
                             ui,
                             "Distance (mm)",
@@ -1539,6 +1564,16 @@ impl AnvilApp {
                             bufs.entry("distance").or_default(),
                             &vars,
                         );
+                        if let ChamferKind::AngleDistance { angle, flip } = &mut ch.kind {
+                            changed |= Self::dim_field(
+                                ui,
+                                "Angle (degrees)",
+                                angle,
+                                bufs.entry("angle").or_default(),
+                                &vars,
+                            );
+                            changed |= ui.checkbox(flip, "Measure along the other face").changed();
+                        }
                         ui.label(format!("{} edge(s) selected.", ch.edges.len()));
                         ui.weak("Click edges in the graphics area to add or remove them.");
                         if !ch.edges.is_empty() && ui.button("Clear selection").clicked() {

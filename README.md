@@ -36,9 +36,11 @@ system are still ahead; see the roadmap.
   reverse direction
 - Revolved Boss and Revolved Cut about any sketch line
 - Linear Pattern and Circular Pattern (about any axis)
-- Fillet (constant radius) and Chamfer (equal distance) on straight edges between flat
-  faces (built exactly) and on circular edges where a flat face meets a cylinder (boss
-  tops, hole rims, boss roots); convex edges are rounded off, concave edges are filled in
+- Fillet (constant radius) and Chamfer (equal distance, angle and distance, or offset
+  face) on any edge between two faces, built exactly: straight and round edges in closed
+  form, any other edge with a rolling-ball round or a swept bevel; edges that run smoothly
+  into each other are blended as one; convex edges are rounded off, concave edges are
+  filled in
 - Shell to a uniform wall thickness, with any faces opened
 - Reference planes offset from planes or faces
 - Sketch on Front/Top/Right planes, reference planes, or any planar model face
@@ -310,7 +312,8 @@ Kernel design notes:
   same axis; selected edges that run smoothly one into the next, such as a slot's
   outline, are blended together so their rounds join; any other edge between two faces
   gets a rolling-ball round, a B-spline surface fitted to exact ball sections, one round
-  along a whole smooth run of such edges; chamfers there are swept the same way). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
+  along a whole smooth run of such edges; chamfers there are swept the same way, set out
+  by equal distance, angle and distance, or offset faces). A revolved profile of lines and arcs sweeps planes, cylinders, cones, spheres
   and tori exactly, with pointed cones and sphere poles where it meets the axis. A round
   edge is filleted with a torus (chamfered with a cone) by a boolean with the corner's
   cross-section revolved about the axis. A shell is the part less its cavity: every
