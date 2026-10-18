@@ -43,6 +43,8 @@ pub struct BuildState {
     pub axes: HashMap<u32, (Vec3, Vec3)>,
     /// Reference points, keyed by feature id.
     pub points: HashMap<u32, Vec3>,
+    /// The name of each exact body, in the same order as `exact`.
+    pub body_names: Vec<crate::bodies::BodyRef>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -199,6 +201,7 @@ impl BuildState {
         });
         match result {
             Ok((new, body)) => {
+                self.body_names = crate::bodies::rename(&self.body_names, bodies, &new, id);
                 self.exact = Some(new);
                 self.body = body;
                 self.exact_features.insert(id);
@@ -218,6 +221,11 @@ impl BuildState {
             Some((from, reason)) if *from == id => reason.clone(),
             _ => format!("{what} need the exact kernel, and this part is faceted from an earlier feature on"),
         }
+    }
+
+    /// Moves the part to the faceted kernel for good, from feature `id`.
+    pub(crate) fn leave_exact_for(&mut self, id: u32, reason: &str) {
+        self.leave_exact(id, reason.into());
     }
 
     fn leave_exact(&mut self, id: u32, reason: String) {
@@ -313,11 +321,16 @@ impl Document {
                 let plan = self.plan_extrude(&ef, st)?;
                 let tool = plan.faceted(id)?;
                 let mut exact_tools = None;
+                let separate = ef.op == BodyOp::Boss && !ef.merge;
                 let done = st.exact_step(id, |bodies| {
                     let tools = plan.exact(id)?;
                     let mut out = bodies.to_vec();
                     for t in &tools {
-                        out = exact::combine(&out, t, ef.op)?;
+                        if separate {
+                            out.push(t.clone());
+                        } else {
+                            out = exact::combine(&out, t, ef.op)?;
+                        }
                     }
                     exact_tools = Some(tools);
                     Ok(out)
@@ -326,6 +339,8 @@ impl Document {
                     if let Some(t) = exact_tools {
                         st.exact_tools.insert(id, (t, ef.op));
                     }
+                } else if separate {
+                    st.body = Solid::new(st.body.polygons.iter().chain(&tool.polygons).cloned().collect());
                 } else {
                     apply(&mut st.body, &tool, ef.op)?;
                 }
@@ -334,6 +349,12 @@ impl Document {
             FeatureKind::Draft(d) => self.rebuild_draft(id, &d, st)?,
             FeatureKind::Dome(d) => self.rebuild_dome(id, &d, st)?,
             FeatureKind::Loft(l) => self.rebuild_loft(id, &l, st)?,
+            FeatureKind::Combine(c) => self.rebuild_combine(id, &c, st)?,
+            FeatureKind::Rib(r) => self.rebuild_rib(id, &r, st)?,
+            FeatureKind::MoveCopy(m) => self.rebuild_move_copy(id, &m, st)?,
+            FeatureKind::DeleteBody(d) => self.rebuild_delete_body(id, &d, st)?,
+            FeatureKind::Split(sp) => self.rebuild_split(id, &sp, st)?,
+            FeatureKind::Scale(sc) => self.rebuild_scale(id, &sc, st)?,
             FeatureKind::Sweep(sw) => {
                 let plan = self.plan_sweep(&sw, st)?;
                 let tool = plan.faceted(id)?;

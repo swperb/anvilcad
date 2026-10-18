@@ -223,6 +223,13 @@ pub enum Icon {
     Draft,
     Dome,
     Loft,
+    Rib,
+    Bodies,
+    Section,
+    Convert,
+    Axis,
+    RefPoint,
+    CoordSys,
     Measure,
     Imported,
     Select,
@@ -457,6 +464,49 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             poly(&[(5.5, 3.0), (10.5, 3.0), (10.5, 6.0), (5.5, 6.0)], Color32::TRANSPARENT, ln);
             line((1.5, 14.0), (5.5, 6.0), hi);
             line((14.5, 14.0), (10.5, 6.0), hi);
+        }
+        Icon::Rib => {
+            // A thin web standing between two walls.
+            path(&[(1.5, 2.0), (1.5, 14.0), (14.5, 14.0), (14.5, 2.0)], ln);
+            poly(&[(1.5, 6.5), (14.5, 6.5), (14.5, 8.5), (1.5, 8.5)], tint, hi);
+        }
+        Icon::Bodies => {
+            // Two overlapping blocks.
+            poly(&[(1.5, 6.0), (9.5, 6.0), (9.5, 14.0), (1.5, 14.0)], tint, ln);
+            poly(&[(6.5, 2.0), (14.5, 2.0), (14.5, 10.0), (6.5, 10.0)], Color32::TRANSPARENT, hi);
+        }
+        Icon::Section => {
+            // A block cut open, with its cap shaded.
+            path(
+                &[(2.0, 6.0), (8.0, 3.0), (14.0, 6.0), (14.0, 12.0), (8.0, 15.0), (2.0, 12.0), (2.0, 6.0)],
+                ln,
+            );
+            poly(&[(8.0, 3.0), (14.0, 6.0), (14.0, 12.0), (8.0, 9.0)], tint, hi);
+        }
+        Icon::Convert => {
+            // A face's edge carried down into the sketch.
+            poly(&[(3.0, 2.0), (13.0, 2.0), (13.0, 7.0), (3.0, 7.0)], tint, ln);
+            path(&[(3.0, 10.0), (13.0, 10.0), (13.0, 14.5), (3.0, 14.5), (3.0, 10.0)], hi);
+            line((8.0, 7.0), (8.0, 9.0), ln);
+        }
+        Icon::Axis => {
+            // A dashed line through a ring.
+            for i in 0..5 {
+                let y = 1.0 + i as f32 * 3.0;
+                line((8.0, y), (8.0, y + 1.8), hi);
+            }
+            arc((8.0, 8.0), 5.0, 0.0, 360.0, ln);
+        }
+        Icon::RefPoint => {
+            line((3.0, 8.0), (13.0, 8.0), ln);
+            line((8.0, 3.0), (8.0, 13.0), ln);
+            arc((8.0, 8.0), 2.2, 0.0, 360.0, hi);
+        }
+        Icon::CoordSys => {
+            // Three axes from an origin.
+            line((5.0, 11.0), (14.0, 11.0), hi);
+            line((5.0, 11.0), (5.0, 2.0), ln);
+            line((5.0, 11.0), (1.5, 14.5), ln);
         }
         Icon::Measure => {
             // A rule with ticks.
