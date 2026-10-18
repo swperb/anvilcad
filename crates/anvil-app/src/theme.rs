@@ -241,6 +241,33 @@ pub enum Icon {
     Undo,
     Redo,
     Rebuild,
+    // Sketch entity and editing tools.
+    CenterRectangle,
+    Rectangle3Corner,
+    Rectangle3Center,
+    Parallelogram,
+    StraightSlot,
+    CenterSlot,
+    ArcSlot3,
+    CenterArcSlot,
+    Polygon,
+    PerimeterCircle,
+    TangentArc,
+    Arc3,
+    SketchFillet,
+    SketchChamfer,
+    Trim,
+    Extend,
+    Split,
+    Offset,
+    Mirror,
+    SketchLinearPattern,
+    SketchCircularPattern,
+    Move,
+    Copy,
+    Rotate,
+    Scale,
+    Construction,
 }
 
 /// Paints `icon` filling the square `rect`: `ink` for lines, `accent` for the highlight.
@@ -283,6 +310,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
         painter.add(egui::Shape::line(v, st));
     };
     let dot = |x: f32, y: f32, c: Color32| painter.circle_filled(p(x, y), 1.3 * s, c);
+    // A thin dashed line, as construction geometry is drawn.
+    let dashed = |a: (f32, f32), b: (f32, f32)| {
+        let thin = Stroke::new(w * 0.7, ink.gamma_multiply(0.6));
+        painter.extend(egui::Shape::dashed_line(&[p(a.0, a.1), p(b.0, b.1)], thin, 2.0 * s, 1.5 * s));
+    };
     // An isometric box; `face` picks the face filled with the accent tint (0 none, 1 front,
     // 2 top, 3 right, 4 all).
     let cube = |face: u8| {
@@ -506,6 +538,183 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
                 accent,
                 Stroke::NONE,
             ));
+        }
+        Icon::CenterRectangle => {
+            poly(&[(2.0, 4.0), (14.0, 4.0), (14.0, 12.0), (2.0, 12.0)], Color32::TRANSPARENT, ln);
+            dashed((2.0, 4.0), (14.0, 12.0));
+            dashed((14.0, 4.0), (2.0, 12.0));
+            dot(8.0, 8.0, accent);
+            dot(14.0, 12.0, accent);
+        }
+        Icon::Rectangle3Corner => {
+            poly(&[(2.0, 10.0), (9.0, 3.0), (14.0, 8.0), (7.0, 15.0)], Color32::TRANSPARENT, ln);
+            dot(2.0, 10.0, accent);
+            dot(9.0, 3.0, accent);
+            dot(14.0, 8.0, accent);
+        }
+        Icon::Rectangle3Center => {
+            poly(&[(2.0, 10.0), (9.0, 3.0), (14.0, 8.0), (7.0, 15.0)], Color32::TRANSPARENT, ln);
+            dashed((2.0, 10.0), (14.0, 8.0));
+            dot(8.0, 9.0, accent);
+            dot(11.5, 5.5, accent);
+        }
+        Icon::Parallelogram => {
+            poly(&[(1.5, 12.0), (10.0, 12.0), (14.5, 4.0), (6.0, 4.0)], Color32::TRANSPARENT, ln);
+            dot(1.5, 12.0, accent);
+            dot(10.0, 12.0, accent);
+            dot(14.5, 4.0, accent);
+        }
+        Icon::StraightSlot | Icon::CenterSlot => {
+            line((5.0, 5.0), (11.0, 5.0), ln);
+            line((5.0, 11.0), (11.0, 11.0), ln);
+            arc((5.0, 8.0), 3.0, 90.0, 270.0, ln);
+            arc((11.0, 8.0), 3.0, -90.0, 90.0, ln);
+            if icon == Icon::StraightSlot {
+                dot(5.0, 8.0, accent);
+                dot(11.0, 8.0, accent);
+            } else {
+                dashed((5.0, 8.0), (11.0, 8.0));
+                dot(8.0, 8.0, accent);
+            }
+        }
+        Icon::ArcSlot3 | Icon::CenterArcSlot => {
+            arc((8.0, 13.0), 9.5, 30.0, 150.0, ln);
+            arc((8.0, 13.0), 5.5, 30.0, 150.0, ln);
+            let end = |deg: f32| {
+                let a = deg.to_radians();
+                (8.0 + 7.5 * a.cos(), 13.0 - 7.5 * a.sin())
+            };
+            let (r, l) = (end(30.0), end(150.0));
+            arc(r, 2.0, 210.0, 390.0, ln);
+            arc(l, 2.0, 150.0, 330.0, ln);
+            if icon == Icon::ArcSlot3 {
+                dot(r.0, r.1, accent);
+                dot(l.0, l.1, accent);
+                dot(8.0, 5.5, accent);
+            } else {
+                dot(8.0, 13.0, accent);
+            }
+        }
+        Icon::Polygon => {
+            let v: Vec<(f32, f32)> = (0..6)
+                .map(|k| {
+                    let a = (k as f32 * 60.0).to_radians();
+                    (8.0 + 6.2 * a.cos(), 8.0 - 6.2 * a.sin())
+                })
+                .collect();
+            poly(&v, Color32::TRANSPARENT, ln);
+            painter.circle_stroke(p(8.0, 8.0), 5.4 * s, Stroke::new(w * 0.6, ink.gamma_multiply(0.45)));
+            dot(8.0, 8.0, accent);
+        }
+        Icon::PerimeterCircle => {
+            painter.circle_stroke(p(8.0, 8.0), 5.8 * s, ln);
+            for deg in [100.0_f32, 220.0, 340.0] {
+                let a = deg.to_radians();
+                dot(8.0 + 5.8 * a.cos(), 8.0 - 5.8 * a.sin(), accent);
+            }
+        }
+        Icon::TangentArc => {
+            line((1.5, 12.0), (8.0, 12.0), ln);
+            arc((8.0, 7.0), 5.0, -90.0, 90.0, hi);
+            dot(8.0, 12.0, accent);
+        }
+        Icon::Arc3 => {
+            arc((8.0, 12.0), 6.0, 0.0, 180.0, ln);
+            dot(2.0, 12.0, accent);
+            dot(14.0, 12.0, accent);
+            dot(8.0, 6.0, accent);
+        }
+        Icon::SketchFillet => {
+            path(&[(3.0, 14.0), (3.0, 9.0)], ln);
+            path(&[(8.0, 4.0), (14.0, 4.0)], ln);
+            arc((8.0, 9.0), 5.0, 90.0, 180.0, hi);
+            dashed((3.0, 9.0), (3.0, 4.0));
+            dashed((3.0, 4.0), (8.0, 4.0));
+        }
+        Icon::SketchChamfer => {
+            path(&[(3.0, 14.0), (3.0, 9.0)], ln);
+            path(&[(8.0, 4.0), (14.0, 4.0)], ln);
+            line((3.0, 9.0), (8.0, 4.0), hi);
+            dashed((3.0, 9.0), (3.0, 4.0));
+            dashed((3.0, 4.0), (8.0, 4.0));
+        }
+        Icon::Trim => {
+            line((8.0, 2.0), (8.0, 14.0), ln);
+            line((2.0, 8.0), (8.0, 8.0), ln);
+            dashed((8.0, 8.0), (14.5, 8.0));
+            line((10.5, 5.5), (13.5, 10.5), hi);
+            line((10.5, 10.5), (13.5, 5.5), hi);
+        }
+        Icon::Extend => {
+            line((13.5, 2.0), (13.5, 14.0), ln);
+            line((2.0, 8.0), (7.0, 8.0), ln);
+            line((7.0, 8.0), (12.5, 8.0), hi);
+            path(&[(10.5, 6.3), (12.5, 8.0), (10.5, 9.7)], hi);
+        }
+        Icon::Split => {
+            line((2.0, 11.0), (7.0, 7.0), ln);
+            line((9.0, 5.5), (14.0, 1.5), ln);
+            dot(8.0, 6.2, accent);
+            line((6.0, 4.0), (10.0, 8.5), Stroke::new(w * 0.7, accent));
+        }
+        Icon::Offset => {
+            path(&[(2.0, 14.0), (2.0, 6.0)], ln);
+            arc((6.0, 6.0), 4.0, 90.0, 180.0, ln);
+            path(&[(6.0, 2.0), (14.0, 2.0)], ln);
+            path(&[(5.0, 14.0), (5.0, 7.0)], hi);
+            arc((7.0, 7.0), 2.0, 90.0, 180.0, hi);
+            path(&[(7.0, 5.0), (14.0, 5.0)], hi);
+        }
+        Icon::Mirror => {
+            dashed((8.0, 1.5), (8.0, 14.5));
+            poly(&[(2.0, 12.0), (6.0, 12.0), (6.0, 4.0)], Color32::TRANSPARENT, ln);
+            poly(&[(14.0, 12.0), (10.0, 4.0), (10.0, 12.0)], tint, hi);
+        }
+        Icon::SketchLinearPattern => {
+            for (i, x) in [3.0_f32, 8.0, 13.0].into_iter().enumerate() {
+                painter.circle_stroke(p(x, 7.0), 1.9 * s, if i == 0 { hi } else { ln });
+            }
+            line((1.5, 12.5), (14.5, 12.5), ln);
+            path(&[(12.5, 11.0), (14.5, 12.5), (12.5, 14.0)], ln);
+        }
+        Icon::SketchCircularPattern => {
+            arc((8.0, 8.0), 5.5, 0.0, 300.0, Stroke::new(w * 0.6, ink.gamma_multiply(0.5)));
+            for i in 0..5 {
+                let a = (i as f32 * 72.0 + 90.0).to_radians();
+                let c = p(8.0 + 5.5 * a.cos(), 8.0 - 5.5 * a.sin());
+                painter.circle_stroke(c, 1.5 * s, if i == 0 { hi } else { ln });
+            }
+            dot(8.0, 8.0, accent);
+        }
+        Icon::Move => {
+            line((8.0, 2.0), (8.0, 14.0), ln);
+            line((2.0, 8.0), (14.0, 8.0), ln);
+            path(&[(6.3, 3.8), (8.0, 2.0), (9.7, 3.8)], hi);
+            path(&[(6.3, 12.2), (8.0, 14.0), (9.7, 12.2)], hi);
+            path(&[(3.8, 6.3), (2.0, 8.0), (3.8, 9.7)], hi);
+            path(&[(12.2, 6.3), (14.0, 8.0), (12.2, 9.7)], hi);
+        }
+        Icon::Copy => {
+            poly(&[(2.0, 6.0), (10.0, 6.0), (10.0, 14.0), (2.0, 14.0)], Color32::TRANSPARENT, ln);
+            poly(&[(6.0, 2.0), (14.0, 2.0), (14.0, 10.0), (6.0, 10.0)], tint, hi);
+        }
+        Icon::Rotate => {
+            poly(&[(5.0, 6.0), (11.0, 6.0), (11.0, 12.0), (5.0, 12.0)], Color32::TRANSPARENT, ln);
+            arc((8.0, 9.0), 6.5, 20.0, 160.0, hi);
+            let a = 20f32.to_radians();
+            let tip = (8.0 + 6.5 * a.cos(), 9.0 - 6.5 * a.sin());
+            path(&[(tip.0 - 2.2, tip.1 - 0.6), tip, (tip.0 + 0.4, tip.1 - 2.3)], hi);
+        }
+        Icon::Scale => {
+            poly(&[(2.0, 9.0), (7.0, 9.0), (7.0, 14.0), (2.0, 14.0)], tint, hi);
+            poly(&[(2.0, 2.0), (14.0, 2.0), (14.0, 14.0), (2.0, 14.0)], Color32::TRANSPARENT, ln);
+            line((7.0, 9.0), (12.0, 4.0), ln);
+            path(&[(9.5, 4.0), (12.0, 4.0), (12.0, 6.5)], ln);
+        }
+        Icon::Construction => {
+            dashed((2.5, 13.5), (13.5, 2.5));
+            dot(2.5, 13.5, accent);
+            dot(13.5, 2.5, accent);
         }
     }
 }
