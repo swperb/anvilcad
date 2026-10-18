@@ -18,7 +18,7 @@
 //!
 //! The behaviour is specified in `docs/re/fillet-curved-edges.md`.
 
-use crate::blend::Blend;
+use crate::blend::{Blend, Profile};
 use crate::geom::{Curve, Frame, Surface};
 use crate::patch::SplineSurface;
 use crate::spline::Spline;
@@ -69,6 +69,81 @@ fn foot(face: &Face, x: DVec3) -> (DVec3, DVec3) {
     }
 }
 
+/// The curvature at the shoulder point (the middle, t = 1/2) of the rational quadratic
+/// from `a` to `b` with corner `c` weighted `w`.
+fn shoulder_curvature(a: DVec3, c: DVec3, b: DVec3, w: f64) -> f64 {
+    // At t = 1/2 the weight's rate of change is zero, so x' = N'/W and x'' = (N'' - x W'')/W
+    // for the homogeneous numerator N and weight W.
+    let wm = 0.5 * (1.0 + w);
+    let x = (a + c * (2.0 * w) + b) / (4.0 * wm);
+    let d1 = (b - a) / wm;
+    let d2 = ((a - c * (2.0 * w) + b) * 2.0 - x * (4.0 * (1.0 - w))) / wm;
+    d1.cross(d2).length() / d1.length().powi(3)
+}
+
+/// The weight of the conic from `a` to `b` about corner `c` whose radius of curvature at
+/// its shoulder point is `radius`, or `None` when no conic has it. The shoulder's
+/// curvature grows with the weight, from nothing (the chord) to without bound (the
+/// corner), so the weight is found by bisection on rho = w / (1 + w).
+fn conic_weight_for(a: DVec3, c: DVec3, b: DVec3, radius: f64) -> Option<f64> {
+    let want = 1.0 / radius;
+    let k = |rho: f64| shoulder_curvature(a, c, b, rho / (1.0 - rho));
+    let (mut lo, mut hi) = (1e-6, 1.0 - 1e-6);
+    if !(k(lo) < want && k(hi) > want) {
+        return None;
+    }
+    for _ in 0..100 {
+        let mid = 0.5 * (lo + hi);
+        if k(mid) < want {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if hi - lo < 1e-15 {
+            break;
+        }
+    }
+    let rho = 0.5 * (lo + hi);
+    Some(rho / (1.0 - rho))
+}
+
+/// The curvature of `face` at `p` (on it) along the unit tangent `d`, signed so that the
+/// face bends towards its outward normal times the result: the normal's turn along `d`.
+fn normal_curvature(face: &Face, p: DVec3, d: DVec3, size: f64) -> f64 {
+    let h = 1e-4 * size;
+    let (n0, n1) = (foot(face, p - d * h).1, foot(face, p + d * h).1);
+    -(n1 - n0).dot(d) / (2.0 * h)
+}
+
+/// How far the quartic's first and last control legs run towards the corner, as a
+/// fraction of the way from the contact.
+const QUARTIC_REACH: f64 = 0.5;
+
+/// The inner control points of the curvature-continuous round from `a` (on `fa`) to `b`
+/// (on `fb`), whose tangents meet at `corner`: a quartic leaving each contact along the
+/// tangent, its second and fourth control points half way to the corner, and its middle
+/// one placed so that the curvature at each end is the face's own there.
+fn continuous_quartic(a: DVec3, corner: DVec3, b: DVec3, fa: &Face, fb: &Face) -> Option<[DVec3; 3]> {
+    let (la, lb) = ((corner - a).length() * QUARTIC_REACH, (corner - b).length() * QUARTIC_REACH);
+    let (ta, tb) = ((corner - a).normalize_or_zero(), (corner - b).normalize_or_zero());
+    let (na, nb) = (foot(fa, a).1, foot(fb, b).1);
+    let size = la.max(lb);
+    // A quartic's curvature at its start is 3/4 of its middle control point's offset
+    // from the start tangent over the first leg squared.
+    let (alpha, beta) = (
+        4.0 / 3.0 * la * la * normal_curvature(fa, a, ta, size),
+        4.0 / 3.0 * lb * lb * normal_curvature(fb, b, tb, size),
+    );
+    // The middle point is the corner moved along the tangents: along B's tangent to set
+    // its offset from A's, and along A's to set its offset from B's.
+    let (sa, sb) = (tb.dot(na), ta.dot(nb));
+    if sa.abs() < 1e-9 || sb.abs() < 1e-9 {
+        return None;
+    }
+    let mid = corner + tb * (alpha / sa) + ta * (beta / sb);
+    Some([a + (corner - a) * QUARTIC_REACH, mid, b + (corner - b) * QUARTIC_REACH])
+}
+
 /// One cross-section of the tool: the ball's centre, its contact points on face A and B,
 /// the corner where the round's end tangents meet (with the arc's middle weight), and
 /// the corners of the sides pushed off the faces.
@@ -84,20 +159,43 @@ struct Section {
     a_off: DVec3,
     b_off: DVec3,
     corner_off: DVec3,
+    /// A curvature-continuous round's inner control points (a quartic from A to B), when
+    /// the round is not a conic.
+    quartic: Option<[DVec3; 3]>,
 }
+
+/// A section's rows: the round's control points from A to B, then B pushed, the corner
+/// pushed and A pushed (the last row repeated to fill).
+type Rows = [(DVec3, f64); 8];
 
 impl Section {
     /// The section's rows in homogeneous form (point times weight, weight), in profile
-    /// order: contact A, the arc's corner, contact B, then the pushed sides.
-    fn rows(&self) -> [(DVec3, f64); 6] {
-        [
-            (self.a, 1.0),
-            (self.corner * self.weight, self.weight),
-            (self.b, 1.0),
-            (self.b_off, 1.0),
-            (self.corner_off, 1.0),
-            (self.a_off, 1.0),
-        ]
+    /// order: contact A, the round's inner control points (the conic's corner, weighted,
+    /// or a quartic's three), contact B, then the pushed sides.
+    fn rows(&self) -> Rows {
+        let a_off = (self.a_off, 1.0);
+        match self.quartic {
+            None => [
+                (self.a, 1.0),
+                (self.corner * self.weight, self.weight),
+                (self.b, 1.0),
+                (self.b_off, 1.0),
+                (self.corner_off, 1.0),
+                a_off,
+                a_off,
+                a_off,
+            ],
+            Some([q1, q2, q3]) => [
+                (self.a, 1.0),
+                (q1, 1.0),
+                (q2, 1.0),
+                (q3, 1.0),
+                (self.b, 1.0),
+                (self.b_off, 1.0),
+                (self.corner_off, 1.0),
+                a_off,
+            ],
+        }
     }
 }
 
@@ -126,7 +224,7 @@ enum BevelKind {
 }
 
 /// Rates of change of a section's rows along the run.
-type Rates = [(DVec3, f64); 6];
+type Rates = Rows;
 
 struct Roller<'a> {
     solid: &'a Solid,
@@ -137,6 +235,8 @@ struct Roller<'a> {
     radius: f64,
     /// A chamfer's straight bevel rather than a fillet's round.
     bevel: bool,
+    /// A round's profile, when it is not the ball's circular arc.
+    profile: Option<Profile>,
     /// Which bevel.
     kind: BevelKind,
     /// Whether the run is convex (the tool is cut away).
@@ -154,6 +254,11 @@ struct Roller<'a> {
 impl Roller<'_> {
     fn span(&self) -> f64 {
         self.legs.len() as f64
+    }
+
+    /// The degree of the round (or bevel) across the section: the row of contact B.
+    fn degree(&self) -> usize {
+        if self.profile == Some(Profile::CurvatureContinuous) { 4 } else { 2 }
     }
 
     /// The leg at `t` within the run, and the point and direction of travel (per unit of
@@ -243,6 +348,7 @@ impl Roller<'_> {
             a_off: a + da * self.push,
             b_off: b + db * self.push,
             corner_off: e + (da + db) * self.push,
+            quartic: None,
         }
     }
 
@@ -324,16 +430,23 @@ impl Roller<'_> {
         }
         let bis = (da + db).normalize();
         let corner = centre + bis * (r / half.cos());
+        let (weight, quartic) = match self.profile {
+            None => (half.cos(), None),
+            Some(Profile::ConicRho(rho)) => (rho / (1.0 - rho), None),
+            Some(Profile::ConicRadius(radius)) => (conic_weight_for(a, corner, b, radius)?, None),
+            Some(Profile::CurvatureContinuous) => (1.0, Some(continuous_quartic(a, corner, b, fa, fb)?)),
+        };
         Some(Section {
             edge: e,
             centre,
             a,
             b,
             corner,
-            weight: half.cos(),
+            weight,
             a_off: a + da * self.push,
             b_off: b + db * self.push,
             corner_off: corner + bis * (self.push / half.cos()),
+            quartic,
         })
     }
 }
@@ -398,6 +511,10 @@ pub fn rolling_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) ->
 pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base: u32) -> Result<Tool> {
     let (radius, bevel, kind, along) = match blend {
         Blend::Fillet(r) => (r, false, BevelKind::Equal, None),
+        Blend::Profiled { radius, profile } => {
+            profile.check()?;
+            (radius, false, BevelKind::Equal, None)
+        }
         Blend::Chamfer(c) => (c, true, BevelKind::Equal, None),
         Blend::ChamferOffset(d) => (d, true, BevelKind::Offset, None),
         Blend::ChamferAngle { distance, angle, along } => {
@@ -419,6 +536,10 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
         legs,
         radius,
         bevel,
+        profile: match blend {
+            Blend::Profiled { profile, .. } => Some(profile),
+            _ => None,
+        },
         kind,
         convex: true,
         target: 0.0,
@@ -478,6 +599,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
         a_off: pm,
         b_off: pm,
         corner_off: pm,
+        quartic: None,
     };
 
     // Carry the round past an open run's ends only where nothing lies beyond them (as the
@@ -516,9 +638,11 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
                 guess = by_index[m].unwrap_or(first);
             }
             let s = roller.section(ts[k], &guess).ok_or_else(|| {
-                KernelError::Unsupported(
-                    "the ball cannot roll along this edge (the faces do not leave room for it)".into(),
-                )
+                KernelError::Unsupported(if matches!(roller.profile, Some(Profile::ConicRadius(_))) {
+                    "the conic's radius cannot be reached between these faces, or the ball cannot roll along this edge".into()
+                } else {
+                    "the ball cannot roll along this edge (the faces do not leave room for it)".into()
+                })
             })?;
             guess = s;
             by_index[k] = Some(s);
@@ -611,7 +735,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
             let (pc, wc) = hermite(1);
             let (pb, _) = hermite(2);
             let arc_mid = (pa + pc * 2.0 + pb) / (2.0 + 2.0 * wc);
-            if !bevel {
+            if !bevel && roller.profile.is_none() {
                 err = err.max(((arc_mid - exact.centre).length() - radius).abs());
             }
             if err > FIT {
@@ -782,34 +906,33 @@ fn build(
         }
         out
     };
-    let rows: Vec<Vec<(DVec3, f64)>> = (0..6).map(control).collect();
+    let rows: Vec<Vec<(DVec3, f64)>> = (0..8).map(control).collect();
+    // Contact B's row; the pushed sides follow it.
+    let deg = roller.degree();
     let curve = |j: usize| -> Result<Curve> {
         let pts = rows[j].iter().map(|(p, _)| *p).collect();
         Ok(Curve::Spline(Arc::new(Spline::new(3, knots.clone(), pts, Vec::new())?)))
     };
     let m = rows[0].len();
-    // The round: rows A, corner (weighted), B across.
-    let mut points = Vec::with_capacity(3 * m);
-    let mut weights = Vec::with_capacity(3 * m);
-    for ((a, c), b) in rows[0].iter().zip(&rows[1]).zip(&rows[2]) {
-        for &(p, w) in [a, c, b] {
+    // The round: its control rows from A to B across (a conic's corner weighted).
+    let mut points = Vec::with_capacity((deg + 1) * m);
+    let mut weights = Vec::with_capacity((deg + 1) * m);
+    for i in 0..m {
+        for row in &rows[..=deg] {
+            let (p, w) = row[i];
             points.push(p / w);
             weights.push(w);
         }
     }
-    let round = SplineSurface::new(
-        (3, 2),
-        knots.clone(),
-        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-        (m, 3),
-        points,
-        weights,
-    )?;
+    let mut across_knots = vec![0.0; deg + 1];
+    across_knots.extend(vec![1.0; deg + 1]);
+    let round =
+        SplineSurface::new((3, deg), knots.clone(), across_knots.clone(), (m, deg + 1), points, weights)?;
     // A side running off a contact curve (rows 0 and 2) carries on straight past it, as
     // far again, so the contact lies inside its patch: a face meets the side along it,
     // and an intersection traced along a patch's own boundary would break up.
     let ruled = |j0: usize, j1: usize| -> Result<Surface> {
-        let contact = |j: usize| j == 0 || j == 2;
+        let contact = |j: usize| j == 0 || j == deg;
         let mut points = Vec::with_capacity(2 * m);
         for (r0, r1) in rows[j0].iter().zip(&rows[j1]) {
             let (p0, p1) = (r0.0, r1.0);
@@ -830,7 +953,7 @@ fn build(
     // A pushed), and the segments between them (the arc first). It must turn
     // counter-clockwise about the direction of travel, as an extrusion's profile does
     // about its direction.
-    let corner_rows = [0usize, 2, 3, 4, 5];
+    let corner_rows = [0usize, deg, deg + 1, deg + 2, deg + 3];
     let (_, t_start) = roller.point(ts[0]);
     let s = &sections[0];
     let poly = [s.a, s.b, s.b_off, s.corner_off, s.a_off];
@@ -868,8 +991,16 @@ fn build(
             let (j0, j1) = (rows_in_order[i], rows_in_order[(i + 1) % 5]);
             let (p0, p1) = (s.rows()[j0], s.rows()[j1]);
             let (p0, p1) = (p0.0 / p0.1, p1.0 / p1.1);
-            let is_arc = (j0 == 0 && j1 == 2) || (j0 == 2 && j1 == 0);
-            let (curve, t0, t1) = if is_arc && !roller.bevel {
+            let is_arc = (j0 == 0 && j1 == deg) || (j0 == deg && j1 == 0);
+            let (curve, t0, t1) = if is_arc && !roller.bevel && roller.profile.is_some() {
+                // The section's own curve: a conic or the quartic, from A to B.
+                let rs = s.rows();
+                let pts = rs[..=deg].iter().map(|(p, w)| *p / *w).collect();
+                let ws = rs[..=deg].iter().map(|(_, w)| *w).collect();
+                let c = Spline::new(deg, across_knots.clone(), pts, ws)?;
+                let (t0, t1) = if j0 == 0 { (0.0, 1.0) } else { (1.0, 0.0) };
+                (Curve::Spline(Arc::new(c)), t0, t1)
+            } else if is_arc && !roller.bevel {
                 let r = roller.radius;
                 let x = (s.a - s.centre) / r;
                 let y = ((s.b - s.centre) - x * (s.b - s.centre).dot(x)).normalize();
@@ -927,7 +1058,7 @@ fn build(
     let (_, t_mid) = roller.point(ts[km]);
     for i in 0..5 {
         let (j0, j1) = (rows_in_order[i], rows_in_order[(i + 1) % 5]);
-        let is_arc = (j0 == 0 && j1 == 2) || (j0 == 2 && j1 == 0);
+        let is_arc = (j0 == 0 && j1 == deg) || (j0 == deg && j1 == 0);
         let surface = if is_arc { Surface::BSpline(Arc::new(round.clone())) } else { ruled(j0, j1)? };
         // A point on the side and its outward direction: right of the profile's travel.
         let rs = sm.rows();
@@ -937,7 +1068,8 @@ fn build(
             let p = (p0 + p1) * 0.5;
             (p, p - sm.edge)
         } else if is_arc {
-            let p = sm.centre + ((p0 + p1) * 0.5 - sm.centre).normalize() * roller.radius;
+            // The round's middle; the ball's centre lies on the tool's outer side of it.
+            let p = round.eval_st(glam::DVec2::new(ts[km], 0.5));
             (p, sm.centre - p)
         } else {
             ((p0 + p1) * 0.5, (p1 - p0).cross(t_mid))
@@ -948,7 +1080,7 @@ fn build(
         }
         let tag = match (is_arc, j0) {
             (true, _) => tag_base + 2,
-            (false, 3) | (false, 2) => tag_base + 4,
+            (false, j) if j == deg || j == deg + 1 => tag_base + 4,
             _ => tag_base,
         };
         tool.add_face(Face {

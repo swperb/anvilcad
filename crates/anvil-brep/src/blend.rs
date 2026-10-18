@@ -38,6 +38,44 @@ pub enum Blend {
     /// concave edge) meet where the bevel's ends are dropped back square to each face, as
     /// a fillet of that radius would touch them.
     ChamferOffset(f64),
+    /// Round with this radius whose cross-section is not a circular arc: it touches the
+    /// faces where a ball of the radius would, with the given profile between.
+    Profiled { radius: f64, profile: Profile },
+}
+
+/// The cross-section of a fillet's round between where a ball of its radius touches the
+/// two faces, when it is not the ball's circular arc (see `docs/re/fillet-curved-edges.md`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Profile {
+    /// A conic tangent to both faces, weighted by rho: the shoulder point (the conic's
+    /// middle) lies this fraction of the way from the middle of the chord between the
+    /// contacts to the corner where the tangents meet. From 0.5 (a parabola) to 0.95 (a
+    /// hyperbola close to the corner).
+    ConicRho(f64),
+    /// A conic tangent to both faces whose radius of curvature at the shoulder point is
+    /// this.
+    ConicRadius(f64),
+    /// A curve tangent to both faces with the faces' own curvature where it meets them,
+    /// so there is no jump in curvature across the boundary.
+    CurvatureContinuous,
+}
+
+impl Profile {
+    /// The rho values a conic fillet may have.
+    pub const RHO: std::ops::RangeInclusive<f64> = 0.5..=0.95;
+
+    /// Checks the profile's own value.
+    pub fn check(&self) -> Result<()> {
+        match *self {
+            Profile::ConicRho(rho) if !Self::RHO.contains(&rho) => {
+                invalid("a conic fillet's rho must be from 0.5 to 0.95")
+            }
+            Profile::ConicRadius(r) if !(r.is_finite() && r > 0.0) => {
+                invalid("a conic fillet's radius must be a positive number")
+            }
+            _ => Ok(()),
+        }
+    }
 }
 
 impl Blend {
@@ -46,18 +84,21 @@ impl Blend {
         match *self {
             Blend::Fillet(r) | Blend::Chamfer(r) | Blend::ChamferOffset(r) => r,
             Blend::ChamferAngle { distance, .. } => distance,
+            Blend::Profiled { radius, .. } => radius,
         }
     }
 
     fn name(&self) -> &'static str {
-        if matches!(self, Blend::Fillet(_)) { "fillet" } else { "chamfer" }
+        if matches!(self, Blend::Fillet(_) | Blend::Profiled { .. }) { "fillet" } else { "chamfer" }
     }
 
     /// How far the blend sets back along faces `fa` and `fb` where they meet at the angle
     /// `phi` (on the corner's side), as on flat faces.
     fn setbacks(&self, phi: f64, fa: usize, fb: usize) -> Result<(f64, f64)> {
         Ok(match *self {
-            Blend::Fillet(r) | Blend::ChamferOffset(r) => (r / (phi / 2.0).tan(), r / (phi / 2.0).tan()),
+            Blend::Fillet(r) | Blend::ChamferOffset(r) | Blend::Profiled { radius: r, .. } => {
+                (r / (phi / 2.0).tan(), r / (phi / 2.0).tan())
+            }
             Blend::Chamfer(c) => (c, c),
             Blend::ChamferAngle { distance, angle, along } => {
                 if !(angle > 0.0 && angle + phi < PI) {
@@ -177,6 +218,11 @@ fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Re
     let size = blend.size();
     if !(size.is_finite() && size > 0.0) {
         return invalid("the size must be a positive number");
+    }
+    if let Blend::Profiled { profile, .. } = blend {
+        // Only a circular round has a closed form; the others are swept.
+        profile.check()?;
+        return Err(KernelError::Unsupported("fillet profiles other than circular arcs".into()));
     }
     let e = solid.edge(edge).ok_or_else(|| KernelError::InvalidInput("the edge does not exist".into()))?;
     if let Curve::Circle { frame, radius } = e.curve {

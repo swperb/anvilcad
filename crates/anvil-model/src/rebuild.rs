@@ -216,6 +216,15 @@ impl BuildState {
         }
     }
 
+    /// Why feature `id`, which only the exact kernel builds, failed: the exact kernel's
+    /// own reason when it was this feature that left it, or that an earlier one did.
+    fn needs_exact(&self, id: u32, what: &str) -> String {
+        match &self.faceted_from {
+            Some((from, reason)) if *from == id => reason.clone(),
+            _ => format!("{what} need the exact kernel, and this part is faceted from an earlier feature on"),
+        }
+    }
+
     fn leave_exact(&mut self, id: u32, reason: String) {
         if self.exact.take().is_some() {
             self.faceted_from = Some((id, reason));
@@ -462,10 +471,25 @@ impl Document {
                 };
             }
             FeatureKind::Fillet(f) => {
+                use anvil_brep::blend::{Blend, Profile};
                 let radius = num(&f.radius, "radius")?;
-                let fillet = anvil_brep::blend::Blend::Fillet(radius);
+                let fillet = match &f.profile {
+                    FilletProfile::Circular => Blend::Fillet(radius),
+                    FilletProfile::ConicRho { rho } => {
+                        Blend::Profiled { radius, profile: Profile::ConicRho(num(rho, "rho")?) }
+                    }
+                    FilletProfile::ConicRadius { radius: r } => {
+                        Blend::Profiled { radius, profile: Profile::ConicRadius(num(r, "conic radius")?) }
+                    }
+                    FilletProfile::CurvatureContinuous => {
+                        Blend::Profiled { radius, profile: Profile::CurvatureContinuous }
+                    }
+                };
                 if st.exact_step(id, |b| exact::blend(b, &f.edges, exact::Treatment::Plain(fillet), id)) {
                     return Ok(());
+                }
+                if f.profile != FilletProfile::Circular {
+                    return Err(st.needs_exact(id, &format!("{} fillets", f.profile.label().to_lowercase())));
                 }
                 st.body = blend_edges(&st.body, &f.edges, EdgeTreatment::Fillet { radius }, id)
                     .map_err(|e| e.to_string())?;
@@ -486,10 +510,7 @@ impl Document {
                     return Ok(());
                 }
                 if c.kind != ChamferKind::EqualDistance {
-                    return Err(format!(
-                        "{} chamfers need the exact kernel, and this part is faceted from an earlier feature on",
-                        c.kind.label().to_lowercase()
-                    ));
+                    return Err(st.needs_exact(id, &format!("{} chamfers", c.kind.label().to_lowercase())));
                 }
                 st.body = blend_edges(&st.body, &c.edges, EdgeTreatment::Chamfer { distance }, id)
                     .map_err(|e| e.to_string())?;

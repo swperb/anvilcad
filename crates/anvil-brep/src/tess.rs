@@ -91,43 +91,80 @@ fn grade_touching_ends(solid: &Solid, edges: &mut [Vec<DVec3>]) {
             ends[e.end.index()].push((i, false, d));
         }
     }
-    let mut grade: Vec<(usize, bool)> = Vec::new();
+    // Ends leaving one vertex together, graded together.
+    let mut groups: Vec<Vec<(usize, bool)>> = Vec::new();
     for list in &ends {
         for (k, a) in list.iter().enumerate() {
             if list.iter().skip(k + 1).any(|b| (a.0, a.1) != (b.0, b.1) && a.2.dot(b.2) > 0.995) {
-                grade.push((a.0, a.1));
-                grade.extend(list.iter().filter(|b| a.2.dot(b.2) > 0.995).map(|b| (b.0, b.1)));
+                let mut g: Vec<(usize, bool)> =
+                    list.iter().filter(|b| a.2.dot(b.2) > 0.995).map(|b| (b.0, b.1)).collect();
+                g.push((a.0, a.1));
+                g.sort_unstable();
+                g.dedup();
+                groups.push(g);
             }
         }
     }
+    // The end of edge `i` (at its start or not), the next sample's parameter, and how far
+    // that sample is.
+    let end_of = |edges: &[Vec<DVec3>], i: usize, at_start: bool| {
+        let (e, pts) = (&solid.edges[i], &edges[i]);
+        let n = pts.len();
+        let (end, next) = if at_start { (pts[0], pts[1]) } else { (pts[n - 1], pts[n - 2]) };
+        let t_end = if at_start { e.t0 } else { e.t1 };
+        (end, t_end, e.curve.param_in_range(next, e.t0, e.t1), (next - end).length())
+    };
+    // The point of edge `i` the distance `d` from its end, by bisection between the end
+    // and the next sample.
+    let at = |i: usize, (end, t_end, t_next, _): (DVec3, f64, f64, f64), d: f64| {
+        let c = &solid.edges[i].curve;
+        let (mut a, mut b) = (0.0, 1.0);
+        for _ in 0..60 {
+            let m = 0.5 * (a + b);
+            if (c.eval(t_end + (t_next - t_end) * m) - end).length() < d {
+                a = m;
+            } else {
+                b = m;
+            }
+        }
+        c.eval(t_end + (t_next - t_end) * 0.5 * (a + b))
+    };
+    // Grading starts where the group's edges are apart: curves that leave each other with
+    // no difference in curvature (a curvature-continuous round's edge beside a straight
+    // one) part only as the cube of the distance.
+    let apart = 1e-12 * (hi - lo).length().max(1e-3);
+    let mut start: Vec<((usize, bool), f64)> = Vec::new();
+    for g in &groups {
+        let info: Vec<_> = g.iter().map(|&(i, s)| (i, end_of(edges, i, s))).collect();
+        let reach = info.iter().map(|x| x.1.3).fold(f64::MAX, f64::min);
+        let mut d = base;
+        while d < 0.6 * reach {
+            let pts: Vec<DVec3> = info.iter().map(|&(i, x)| at(i, x, d)).collect();
+            let closest = (0..pts.len())
+                .flat_map(|a| (a + 1..pts.len()).map(move |b| (a, b)))
+                .map(|(a, b)| (pts[a] - pts[b]).length())
+                .fold(f64::MAX, f64::min);
+            if closest > apart {
+                break;
+            }
+            d *= 1.5;
+        }
+        start.extend(g.iter().map(|k| (*k, d)));
+    }
+    let mut grade: Vec<(usize, bool)> = start.iter().map(|x| x.0).collect();
     grade.sort_unstable();
     grade.dedup();
     for (i, at_start) in grade {
-        let e = &solid.edges[i];
+        // The furthest any group with this end starts.
+        let first = start.iter().filter(|x| x.0 == (i, at_start)).map(|x| x.1).fold(base, f64::max);
+        let info = end_of(edges, i, at_start);
+        let reach = info.3;
         let pts = &mut edges[i];
         let n = pts.len();
-        let (end, next) = if at_start { (pts[0], pts[1]) } else { (pts[n - 1], pts[n - 2]) };
-        let (t_end, t_next) = if at_start {
-            (e.t0, e.curve.param_in_range(next, e.t0, e.t1))
-        } else {
-            (e.t1, e.curve.param_in_range(next, e.t0, e.t1))
-        };
-        let reach = (next - end).length();
         let mut extra = Vec::new();
-        let mut d = base;
+        let mut d = first;
         while d < 0.6 * reach {
-            // The point on the curve `d` from the end, by bisection between the end and
-            // the next sample.
-            let (mut a, mut b) = (0.0, 1.0);
-            for _ in 0..60 {
-                let m = 0.5 * (a + b);
-                if (e.curve.eval(t_end + (t_next - t_end) * m) - end).length() < d {
-                    a = m;
-                } else {
-                    b = m;
-                }
-            }
-            extra.push(e.curve.eval(t_end + (t_next - t_end) * 0.5 * (a + b)));
+            extra.push(at(i, info, d));
             d *= 1.5;
         }
         if at_start {

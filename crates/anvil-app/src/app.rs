@@ -662,6 +662,15 @@ impl AnvilApp {
                 FeatureKind::ImportedBody(_) => {}
                 FeatureKind::Fillet(f) => {
                     bufs.insert("radius", f.radius.text());
+                    match &f.profile {
+                        FilletProfile::ConicRho { rho } => {
+                            bufs.insert("rho", rho.text());
+                        }
+                        FilletProfile::ConicRadius { radius } => {
+                            bufs.insert("conic", radius.text());
+                        }
+                        _ => {}
+                    }
                 }
                 FeatureKind::Chamfer(c) => {
                     bufs.insert("distance", c.distance.text());
@@ -807,7 +816,11 @@ impl AnvilApp {
                 kind: ChamferKind::EqualDistance,
             })
         } else {
-            FeatureKind::Fillet(FilletFeature { edges: Vec::new(), radius: Dim::Value(2.0) })
+            FeatureKind::Fillet(FilletFeature {
+                edges: Vec::new(),
+                radius: Dim::Value(2.0),
+                profile: FilletProfile::Circular,
+            })
         };
         let id = self.doc.add_feature(kind);
         self.open_editor(id, before, true);
@@ -1580,6 +1593,22 @@ impl AnvilApp {
                         ui.weak("Features above it are parametric; this body is fixed geometry.");
                     }
                     FeatureKind::Fillet(fl) => {
+                        let current = fl.profile.label();
+                        egui::ComboBox::from_label("Profile").selected_text(current).show_ui(ui, |ui| {
+                            for (i, label) in FilletProfile::LABELS.iter().enumerate() {
+                                if ui.selectable_label(current == *label, *label).clicked()
+                                    && current != *label
+                                {
+                                    fl.profile = match i {
+                                        0 => FilletProfile::Circular,
+                                        1 => FilletProfile::ConicRho { rho: Dim::Value(0.5) },
+                                        2 => FilletProfile::ConicRadius { radius: Dim::Value(1.0) },
+                                        _ => FilletProfile::CurvatureContinuous,
+                                    };
+                                    changed = true;
+                                }
+                            }
+                        });
                         changed |= Self::dim_field(
                             ui,
                             "Radius (mm)",
@@ -1587,6 +1616,27 @@ impl AnvilApp {
                             bufs.entry("radius").or_default(),
                             &vars,
                         );
+                        match &mut fl.profile {
+                            FilletProfile::ConicRho { rho } => {
+                                changed |= Self::dim_field(
+                                    ui,
+                                    "Rho (0.5 to 0.95)",
+                                    rho,
+                                    bufs.entry("rho").or_default(),
+                                    &vars,
+                                );
+                            }
+                            FilletProfile::ConicRadius { radius } => {
+                                changed |= Self::dim_field(
+                                    ui,
+                                    "Shoulder radius (mm)",
+                                    radius,
+                                    bufs.entry("conic").or_default(),
+                                    &vars,
+                                );
+                            }
+                            _ => {}
+                        }
                         ui.label(format!("{} edge(s) selected.", fl.edges.len()));
                         ui.weak("Click edges in the graphics area to add or remove them.");
                         if !fl.edges.is_empty() && ui.button("Clear selection").clicked() {
