@@ -315,6 +315,10 @@ pub struct FilletFeature {
     /// The round's cross-section (circular in parts saved before there was a choice).
     #[serde(default)]
     pub profile: FilletProfile,
+    /// Also round every edge running smoothly on from the selected ones (off in parts
+    /// saved before there was a choice, so they rebuild as they did).
+    #[serde(default)]
+    pub tangent_propagation: bool,
 }
 
 /// The cross-section of a fillet's round, between where a ball of its radius touches the
@@ -353,6 +357,10 @@ pub struct ChamferFeature {
     /// How the bevel is set out (equal distance in parts saved before there was a choice).
     #[serde(default)]
     pub kind: ChamferKind,
+    /// Also bevel every edge running smoothly on from the selected ones (off in parts
+    /// saved before there was a choice).
+    #[serde(default)]
+    pub tangent_propagation: bool,
 }
 
 /// How a chamfer's bevel is set out from its edges.

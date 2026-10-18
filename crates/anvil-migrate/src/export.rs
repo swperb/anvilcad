@@ -816,7 +816,13 @@ impl Ctx<'_> {
                     items = data.call("Edges", &[]).map(|v| v.objects()).unwrap_or_default();
                 }
                 let edges = self.map_edges(&items)?;
-                Ok(vec![FeatureKind::Fillet(FilletFeature { edges, radius: Dim::Value(radius), profile })])
+                let tangent_propagation = data.bool("PropagateToTangentFaces", &[]).unwrap_or(false);
+                Ok(vec![FeatureKind::Fillet(FilletFeature {
+                    edges,
+                    radius: Dim::Value(radius),
+                    profile,
+                    tangent_propagation,
+                })])
             }),
             "Chamfer" => with_selections(&data, &self.model, || {
                 let kind = data.i64("Type", &[]).unwrap_or(0);
@@ -836,6 +842,7 @@ impl Ctx<'_> {
                     edges,
                     distance: Dim::Value(d1),
                     kind: ChamferKind::EqualDistance,
+                    tangent_propagation: data.bool("TangentPropagation", &[]).unwrap_or(false),
                 })])
             }),
             "Shell" => with_selections(&data, &self.model, || {

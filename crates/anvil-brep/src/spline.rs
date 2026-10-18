@@ -264,8 +264,15 @@ impl Spline {
                 }
             }
         }
-        // Golden-section refinement around the best candidate.
-        let (mut a, mut b) = ((best.0 - step).max(lo), (best.0 + step).min(hi));
+        // Golden-section refinement around the best candidate, reaching at least to the
+        // samples either side of it (spans differ in length, so the table is not evenly
+        // spread and an average step can fall short of them).
+        let samples = || shifts.iter().flat_map(|sh| table.iter().map(move |(t, _)| t + sh));
+        let below = samples().filter(|t| *t < best.0).fold(f64::MIN, f64::max);
+        let above = samples().filter(|t| *t > best.0).fold(f64::MAX, f64::min);
+        let left = if below > f64::MIN { step.max(best.0 - below) } else { step };
+        let right = if above < f64::MAX { step.max(above - best.0) } else { step };
+        let (mut a, mut b) = ((best.0 - left).max(lo), (best.0 + right).min(hi));
         let f = |t: f64| (self.eval(t) - p).length_squared();
         for _ in 0..80 {
             let m1 = a + (b - a) * 0.381_966;
@@ -372,6 +379,22 @@ pub(crate) fn basis_free(degree: usize, knots: &[f64], n: usize, t: f64) -> (usi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closest_point_on_a_curve_with_uneven_spans() {
+        // One long straight span, then many short ones: the closest point on the long span
+        // is found exactly, though the average sample spacing is much shorter than its own.
+        let mut pts = vec![DVec3::new(-10.0, 0.0, 0.0)];
+        pts.extend((0..200).map(|k| DVec3::new(k as f64 * 0.01, 0.0, 0.0)));
+        let tans = vec![DVec3::X; pts.len()];
+        let s = Spline::hermite(&pts, &tans, false).expect("spline");
+        let (lo, hi) = s.domain();
+        for x in [-9.3, -7.7, -2.6] {
+            let p = DVec3::new(x, 1.0, 0.0);
+            let q = s.eval(s.closest(p, lo, hi));
+            assert!((q - DVec3::new(x, 0.0, 0.0)).length() < 1e-6, "{x}: {q}");
+        }
+    }
 
     #[test]
     fn hermite_quarter_circles_follow_the_circle() {

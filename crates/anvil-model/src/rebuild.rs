@@ -485,7 +485,9 @@ impl Document {
                         Blend::Profiled { radius, profile: Profile::CurvatureContinuous }
                     }
                 };
-                if st.exact_step(id, |b| exact::blend(b, &f.edges, exact::Treatment::Plain(fillet), id)) {
+                if st.exact_step(id, |b| {
+                    exact::blend(b, &f.edges, exact::Treatment::Plain(fillet), f.tangent_propagation, id)
+                }) {
                     return Ok(());
                 }
                 if f.profile != FilletProfile::Circular {
@@ -506,7 +508,7 @@ impl Document {
                         flip: *flip,
                     },
                 };
-                if st.exact_step(id, |b| exact::blend(b, &c.edges, treatment, id)) {
+                if st.exact_step(id, |b| exact::blend(b, &c.edges, treatment, c.tangent_propagation, id)) {
                     return Ok(());
                 }
                 if c.kind != ChamferKind::EqualDistance {

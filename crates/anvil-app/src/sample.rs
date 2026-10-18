@@ -129,18 +129,21 @@ pub fn sample_part() -> Document {
         edges: corners,
         radius: Dim::Value(6.0),
         profile: FilletProfile::Circular,
+        tangent_propagation: false,
     }));
     let rim = EdgeRef::new(FaceId { feature: boss, index: FaceId::END_CAP }, side(boss, 0));
     doc.add_feature(FeatureKind::Fillet(FilletFeature {
         edges: vec![rim],
         radius: Dim::Value(1.5),
         profile: FilletProfile::Circular,
+        tangent_propagation: false,
     }));
     let root = EdgeRef::new(FaceId { feature: base, index: FaceId::END_CAP }, side(boss, 0));
     doc.add_feature(FeatureKind::Fillet(FilletFeature {
         edges: vec![root],
         radius: Dim::Value(3.0),
         profile: FilletProfile::Circular,
+        tangent_propagation: false,
     }));
     doc
 }

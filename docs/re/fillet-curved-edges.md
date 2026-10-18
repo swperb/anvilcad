@@ -118,9 +118,9 @@ Silent or ambiguous:
   round about the circle's axis (a flat face square to it, a cylinder or cone on it), are
   filleted (and chamfered) exactly.
 - Edges selected together that run smoothly one into the next (the outline of a slot or a
-  rounded rectangle) are blended as one run, so the rounds join without a step, as with
-  tangent propagation. AnvilCAD rounds the edges selected; it does not yet add tangent
-  edges that were not selected.
+  rounded rectangle) are blended as one run, so the rounds join without a step. With
+  tangent propagation the edges that run on from them are added even when not selected
+  (see [tangent-propagation.md](tangent-propagation.md)).
 - An arc that does not run on into another edge is rounded past its end only where
   nothing lies beyond it, so the round ends cleanly on the faces there.
 - Any other edge between two faces (a hole slanting through a plate, a hole drilled across
@@ -170,8 +170,8 @@ Silent or ambiguous:
     continuous setting and the conic's value; a fillet with a chamfer's cross-section, or
     a conic type with curvature continuous both set, is refused.
 - Where a swept round's edge runs into another round at a corner (both tangent to the
-  face they share at one point), the rounds meet there; as for the closed-form rounds,
-  a round whose edge runs smoothly on into the earlier round's edge stops at that end, and
-  the earlier round is not carried round the corner until tangent propagation is offered.
+  face they share at one point), the rounds meet there. Without tangent propagation a
+  round whose edge runs smoothly on into the earlier round's edge stops at that end; with
+  it, the round carries on round the earlier one.
 - Runs mixing convex and concave edges, hold lines, overflow choices and round corners are
   not offered yet; those fall back to the faceted kernel or are refused.
