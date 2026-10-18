@@ -232,6 +232,8 @@ pub enum Icon {
     Check,
     Equations,
     Properties,
+    /// A configuration: two stacked variants of a part.
+    Configuration,
     ViewFront,
     ViewTop,
     ViewRight,
@@ -458,6 +460,10 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
                 dot(5.5, y, accent);
                 line((7.5, y), (11.0, y), ln);
             }
+        }
+        Icon::Configuration => {
+            poly(&[(5.0, 2.0), (14.0, 2.0), (14.0, 9.0), (5.0, 9.0)], Color32::TRANSPARENT, ln);
+            poly(&[(2.0, 6.0), (11.0, 6.0), (11.0, 14.0), (2.0, 14.0)], tint, hi);
         }
         Icon::ViewFront => cube(1),
         Icon::ViewTop => cube(2),

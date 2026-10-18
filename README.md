@@ -53,6 +53,11 @@ system are still ahead; see the roadmap.
 **Parameters and properties**
 - Global variables with equations (`width = 80`, `depth = width / 2`, functions like
   `sqrt`, `sin` in degrees, `min`, `max`); type `=width` into any dimension to link it
+- Configurations: variants of a part in one file, with feature suppression, feature
+  dimensions, global variables and material set per configuration; derived configurations
+  that inherit from a parent; configuration-specific properties; a configuration manager
+  tab and a configuration table that edits every configuration and rebuilds them all
+  ([spec](docs/re/configurations.md))
 - Material library (26 metals and plastics: carbon and alloy steels such as A36, 1018 and
   4140; 304, 316 and 17-4 stainless; 5052, 6061 and 7075 aluminum; brass, copper,
   titanium; Delrin, UHMW, HDPE, PTFE, nylon, PEEK, polycarbonate, acrylic, ABS, PLA, PVC)

@@ -12,6 +12,9 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+mod configs;
+use configs::{ConfigUi, Manager};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Selection {
     None,
@@ -37,7 +40,7 @@ enum Editor {
     /// Waiting for the user to pick a plane or planar face.
     PickPlane(PlanePurpose),
     /// Editing a feature live. Cancel restores `before`.
-    Feature { id: u32, before: Document, is_new: bool, bufs: HashMap<&'static str, String> },
+    Feature { id: u32, before: Box<Document>, is_new: bool, bufs: HashMap<&'static str, String> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +132,8 @@ pub struct AnvilApp {
     scripted_dialogs: Option<VecDeque<Option<PathBuf>>>,
     /// File dialogs asked for since the harness last looked, with the answer each got.
     dialog_log: Vec<DialogRequest>,
+    /// The configuration manager and its windows.
+    cfg: ConfigUi,
 }
 
 /// A file dialog the app asked for while dialogs were scripted.
@@ -205,6 +210,7 @@ impl AnvilApp {
             hover_edge: None,
             scripted_dialogs: None,
             dialog_log: Vec::new(),
+            cfg: ConfigUi::default(),
         };
         if let Some(p) = open {
             if p.as_os_str() == "--sample" {
@@ -257,6 +263,8 @@ impl AnvilApp {
     }
 
     fn rebuild(&mut self) {
+        // Edits to configured parameters belong to the active configuration.
+        self.doc.capture_configuration();
         self.state = self.doc.rebuild();
         if self.dfm.report.is_some() {
             self.dfm.stale = true;
@@ -289,6 +297,7 @@ impl AnvilApp {
         self.editor = None;
         self.selection = Selection::None;
         self.fit_pending = true;
+        self.cfg.reset();
         self.rebuild();
     }
 
@@ -324,6 +333,7 @@ impl AnvilApp {
     fn after_history_jump(&mut self) {
         self.committed = self.doc.clone();
         self.editor = None;
+        self.cfg.props = None;
         if let Some(s) = &mut self.sketch {
             s.selection.clear();
             s.dim_edit = None;
@@ -684,7 +694,7 @@ impl AnvilApp {
                 FeatureKind::Hole(h) => bufs = hole_bufs(h),
             }
         }
-        self.editor = Some(Editor::Feature { id, before, is_new, bufs });
+        self.editor = Some(Editor::Feature { id, before: Box::new(before), is_new, bufs });
         self.selection = Selection::Feature(id);
         if self.pick_target().is_some() {
             self.compute_pick_body(id);
@@ -1171,6 +1181,11 @@ impl AnvilApp {
                         if theme::command_button(ui, Icon::Properties, "Custom Properties", None).clicked() {
                             self.windows.properties = true;
                         }
+                        if theme::command_button(ui, Icon::Configuration, "Configuration Table", None)
+                            .clicked()
+                        {
+                            self.cfg.table = true;
+                        }
                     });
                 }
             }
@@ -1187,6 +1202,14 @@ impl AnvilApp {
             theme::paint_icon(ui.painter(), r, Icon::Part, pal.text, pal.accent);
             ui.label(RichText::new(self.part_name()).size(15.0).strong());
         });
+        if self.doc.configurations.len() > 1 {
+            let pal = Palette::of(ui);
+            ui.label(
+                RichText::new(format!("Configuration: {}", self.doc.active_configuration_name()))
+                    .size(12.0)
+                    .color(pal.text_weak),
+            );
+        }
         ui.add_space(6.0);
         let mat = self
             .doc
@@ -1299,6 +1322,14 @@ impl AnvilApp {
                     action = Some((id, "rename"));
                     ui.close_menu();
                 }
+                if ui
+                    .button("Configure Feature")
+                    .on_hover_text("Vary its suppression and dimensions by configuration")
+                    .clicked()
+                {
+                    action = Some((id, "configure"));
+                    ui.close_menu();
+                }
                 if ui.button("Roll Back to Here").clicked() {
                     action = Some((id, "rollback"));
                     ui.close_menu();
@@ -1337,6 +1368,7 @@ impl AnvilApp {
                     let name = self.doc.feature(id).map(|f| f.name.clone()).unwrap_or_default();
                     self.rename = Some((id, name));
                 }
+                "configure" => self.configure_feature(id),
                 "rollback" => {
                     self.doc.rollback = self.doc.index_of(id);
                     self.rebuild();
@@ -1746,7 +1778,7 @@ impl AnvilApp {
     fn finish_editor(&mut self, ok: bool) {
         if let Some(Editor::Feature { before, is_new, .. }) = self.editor.take() {
             if !ok {
-                self.doc = before;
+                self.doc = *before;
                 if is_new {
                     self.selection = Selection::None;
                 }
@@ -2657,14 +2689,18 @@ impl AnvilApp {
             ctx,
             |ui| {
                 let mut del = None;
+                let mut renamed = Vec::new();
                 egui::Grid::new("vars").striped(true).num_columns(4).show(ui, |ui| {
                     ui.strong("Name");
                     ui.strong("Value / Equation");
                     ui.strong("Evaluates to");
                     ui.end_row();
                     for (i, v) in self.doc.variables.iter_mut().enumerate() {
-                        changed |=
-                            ui.add(egui::TextEdit::singleline(&mut v.name).desired_width(100.0)).changed();
+                        let old = v.name.clone();
+                        if ui.add(egui::TextEdit::singleline(&mut v.name).desired_width(100.0)).changed() {
+                            renamed.push((old, v.name.clone()));
+                            changed = true;
+                        }
                         changed |=
                             ui.add(egui::TextEdit::singleline(&mut v.expr).desired_width(140.0)).changed();
                         match (self.state.variables.get(&v.name), self.state.variable_errors.get(&v.name)) {
@@ -2684,6 +2720,9 @@ impl AnvilApp {
                         ui.end_row();
                     }
                 });
+                for (old, new) in renamed {
+                    self.doc.rename_configured_variable(&old, &new);
+                }
                 if let Some(i) = del {
                     self.doc.variables.remove(i);
                     changed = true;
@@ -3126,6 +3165,37 @@ impl AnvilApp {
                 "new": is_new,
             }),
         };
+        let configurations: Vec<_> = self
+            .doc
+            .configuration_tree()
+            .into_iter()
+            .filter_map(|(id, _)| self.doc.configuration(id))
+            .map(|c| {
+                json!({
+                    "id": c.id,
+                    "name": c.name,
+                    "active": c.id == self.doc.active_configuration,
+                    "parent": c.parent.and_then(|p| self.doc.configuration(p)).map(|p| p.name.clone()),
+                    "description": c.description,
+                    "suppress_new_features": c.suppress_new_features,
+                })
+            })
+            .collect();
+        let configured: Vec<_> = self
+            .doc
+            .configured
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let values: serde_json::Map<String, serde_json::Value> = self
+                    .doc
+                    .configurations
+                    .iter()
+                    .map(|c| (c.name.clone(), json!(self.doc.resolved_value(i, c.id).map(|v| v.text()))))
+                    .collect();
+                json!({ "parameter": self.doc.param_label(&p.param), "values": values })
+            })
+            .collect();
         let w = &self.windows;
         let r = self.view_rect;
         json!({
@@ -3140,11 +3210,17 @@ impl AnvilApp {
             "body": body,
             "material": self.doc.material.as_ref().map(|m| m.name.clone()),
             "variables": self.state.variables,
+            "manager": format!("{:?}", self.cfg.manager),
+            "configurations": configurations,
+            "active_configuration": self.doc.active_configuration_name(),
+            "configured": configured,
             "sketch": sketch,
             "editor": editor,
             "windows": {
                 "properties": w.properties, "equations": w.equations, "mass": w.mass,
                 "dfm": w.dfm, "about": w.about,
+                "configuration_table": self.cfg.table,
+                "configuration_properties": self.cfg.props.is_some(),
             },
             "message": self.message.as_ref().map(|(t, m)| json!({ "title": t, "text": m })),
             "confirm": self.confirm.map(|a| format!("{a:?}")),
@@ -3511,6 +3587,10 @@ impl AnvilApp {
                                 ui.label(RichText::new("MMGS").size(11.5).color(pal.text_weak))
                                     .on_hover_text("Units: millimetre, gram, second");
                             });
+                        if self.doc.configurations.len() > 1 {
+                            ui.label(RichText::new(self.doc.active_configuration_name()).size(12.5))
+                                .on_hover_text("The active configuration");
+                        }
                         if let Some(s) = &self.sketch {
                             ui.separator();
                             ui.label(RichText::new(s.status.status_text()).size(12.5));
@@ -3536,7 +3616,11 @@ impl AnvilApp {
                     } else if self.editor.is_some() {
                         self.property_manager(ui);
                     } else {
-                        self.feature_tree(ui);
+                        self.manager_tabs(ui);
+                        match self.cfg.manager {
+                            Manager::Features => self.feature_tree(ui),
+                            Manager::Configurations => self.configuration_manager(ui),
+                        }
                     }
                 });
             });
@@ -3544,6 +3628,7 @@ impl AnvilApp {
             self.viewport(ui);
         });
         self.windows(ctx);
+        self.config_windows(ctx);
         self.commit_if_changed();
         self.handle_screenshot(ctx);
     }

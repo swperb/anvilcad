@@ -964,4 +964,58 @@ mod tests {
         }
         assert!(model > 200, "only {model} model pixels in the viewport");
     }
+
+    /// Configure the sample's base depth, make a thicker configuration from the table,
+    /// switch back, and make a derived configuration that inherits the depth.
+    #[test]
+    fn configurations_by_clicking() {
+        let mut h = Headless::new();
+        run(&mut h, json!({"cmd": "sample"}));
+        let volume = |h: &mut Headless| {
+            let st = run(h, json!({"cmd": "state"}))["state"].clone();
+            (st["body"]["volume"].as_f64().unwrap(), st)
+        };
+        let (before, _) = volume(&mut h);
+
+        run(&mut h, json!({"cmd": "click", "label": "Boss-Extrude1", "button": "right"}));
+        run(&mut h, json!({"cmd": "click", "label": "Configure Feature"}));
+        run(&mut h, json!({"cmd": "click", "label": "Configurations", "role": "Button", "index": 0}));
+        run(&mut h, json!({"cmd": "click", "label": "Add Configuration...", "role": "Button"}));
+        run(&mut h, json!({"cmd": "click", "label": "Configuration name", "offset": [190, 0]}));
+        run(&mut h, json!({"cmd": "key", "key": "A", "modifiers": ["cmd"]}));
+        run(&mut h, json!({"cmd": "type", "text": "Thick"}));
+        run(&mut h, json!({"cmd": "click", "label": "OK", "role": "Button"}));
+        let (v, st) = volume(&mut h);
+        assert_eq!(st["active_configuration"], "Thick", "{st}");
+        assert!((v - before).abs() < 1e-6, "a new configuration starts as a copy");
+
+        // The depth cell in the Thick row: the second "=thickness" in the table.
+        run(&mut h, json!({"cmd": "click", "label": "=thickness", "index": 1}));
+        run(&mut h, json!({"cmd": "key", "key": "A", "modifiers": ["cmd"]}));
+        run(&mut h, json!({"cmd": "type", "text": "20"}));
+        run(&mut h, json!({"cmd": "key", "key": "Enter"}));
+        let (thick, st) = volume(&mut h);
+        assert!(thick > before + 1000.0, "{thick} vs {before}");
+        assert_eq!(st["configured"][1]["values"]["Thick"], "20", "{st}");
+        assert_eq!(st["configured"][1]["values"]["Default"], "=thickness", "{st}");
+
+        run(&mut h, json!({"cmd": "click", "label": "Default", "role": "Button", "button": "right"}));
+        run(&mut h, json!({"cmd": "click", "label": "Show Configuration"}));
+        let (v, st) = volume(&mut h);
+        assert_eq!(st["active_configuration"], "Default");
+        assert!((v - before).abs() < 1e-6, "{v} vs {before}");
+
+        run(&mut h, json!({"cmd": "click", "label": "Thick", "role": "Button", "button": "right"}));
+        run(&mut h, json!({"cmd": "click", "label": "Add Derived Configuration..."}));
+        run(&mut h, json!({"cmd": "click", "label": "OK", "role": "Button"}));
+        let (v, st) = volume(&mut h);
+        assert_eq!(st["active_configuration"], "Thick derived");
+        assert_eq!(st["configurations"][2]["parent"], "Thick", "{st}");
+        assert!((v - thick).abs() < 1e-6, "the derived configuration inherits the depth");
+
+        // Undo takes back the derived configuration.
+        run(&mut h, json!({"cmd": "key", "key": "Z", "modifiers": ["cmd"]}));
+        let (_, st) = volume(&mut h);
+        assert_eq!(st["configurations"].as_array().unwrap().len(), 2, "{st}");
+    }
 }

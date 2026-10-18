@@ -1,0 +1,30 @@
+# Configure the sample part's base, add a "Thick" configuration with a 20 mm base from the
+# configuration table, rebuild all configurations, then add a configuration derived from it.
+# Run: cargo run -p anvil-app --bin anvilcad-agent -- --script docs/agent/configurations.jsonl
+{"cmd":"sample"}
+{"cmd":"click","label":"Boss-Extrude1","button":"right"}
+{"cmd":"click","label":"Configure Feature"}
+{"cmd":"click","label":"Configurations","role":"Button","index":0}
+{"cmd":"click","label":"Add Configuration...","role":"Button"}
+{"cmd":"click","label":"Configuration name","offset":[190,0]}
+{"cmd":"key","key":"A","modifiers":["cmd"]}
+{"cmd":"type","text":"Thick"}
+{"cmd":"click","label":"Description","offset":[190,0]}
+{"cmd":"type","text":"Thick base"}
+{"cmd":"click","label":"OK","role":"Button"}
+{"cmd":"click","label":"=thickness","index":1}
+{"cmd":"key","key":"A","modifiers":["cmd"]}
+{"cmd":"type","text":"20"}
+{"cmd":"key","key":"Enter"}
+{"cmd":"state","id":"thick"}
+{"cmd":"click","label":"Rebuild All Configurations"}
+{"cmd":"click","label":"Default","role":"Button","button":"right"}
+{"cmd":"click","label":"Show Configuration"}
+{"cmd":"state","id":"default"}
+{"cmd":"click","label":"Thick [Thick base]","button":"right"}
+{"cmd":"click","label":"Add Derived Configuration..."}
+{"cmd":"click","label":"OK","role":"Button"}
+{"cmd":"state","id":"derived"}
+{"cmd":"screenshot","path":"target/agent/configurations-derived.png"}
+{"cmd":"click","label":"Feature Tree"}
+{"cmd":"screenshot","path":"target/agent/configurations-tree.png"}
