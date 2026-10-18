@@ -898,6 +898,97 @@ impl AnvilApp {
         self.rebuild();
     }
 
+    fn cmd_rib(&mut self) {
+        if self.state.body.is_empty() {
+            self.message = Some(("Rib".into(), "There is no part for a rib to meet yet.".into()));
+            return;
+        }
+        self.begin_feature(|_, sk| {
+            Some(FeatureKind::Rib(RibFeature {
+                sketch: sk,
+                thickness: Dim::Value(2.0),
+                sides: RibSides::Both,
+                normal_to_sketch: false,
+                flip: false,
+                natural: false,
+            }))
+        });
+    }
+
+    /// The body features, in the Bodies menu's order. Each starts on every body; the
+    /// panel picks them.
+    fn cmd_body(&mut self, which: usize) {
+        if self.state.body_names.is_empty() {
+            self.message =
+                Some(("Bodies".into(), "There are no bodies yet (or the part is faceted).".into()));
+            return;
+        }
+        let all: Vec<BodyRef> = self.state.body_names.clone();
+        let z = || [Dim::Value(0.0), Dim::Value(0.0), Dim::Value(0.0)];
+        let kind = match which {
+            0 => FeatureKind::Combine(CombineFeature { op: CombineOp::Add, main: None, bodies: all }),
+            1 => FeatureKind::MoveCopy(MoveCopyFeature {
+                bodies: vec![],
+                copies: 0,
+                translate: z(),
+                rotate: z(),
+                origin: None,
+            }),
+            2 => FeatureKind::DeleteBody(DeleteBodyFeature {
+                bodies: all.into_iter().take(1).collect(),
+                keep: false,
+            }),
+            3 => FeatureKind::Split(SplitFeature {
+                planes: self.selected_plane().into_iter().collect(),
+                bodies: vec![],
+            }),
+            _ => FeatureKind::Scale(ScaleFeature {
+                bodies: vec![],
+                about: ScaleAbout::Centroid,
+                factors: [Dim::Value(1.0), Dim::Value(1.0), Dim::Value(1.0)],
+            }),
+        };
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(kind);
+        self.open_editor(id, before, true);
+    }
+
+    /// A reference axis: the axis of the selected round face, else where the Right and
+    /// Top planes meet.
+    fn cmd_axis(&mut self) {
+        let kind = match self.selection {
+            Selection::Face(f)
+                if !matches!(
+                    self.state.body.face_polygons(f).next().map(|p| p.tag.surface),
+                    Some(anvil_kernel::SurfaceKind::Plane) | None
+                ) =>
+            {
+                AxisKind::Face(f)
+            }
+            _ => AxisKind::TwoPlanes(PlaneRef::Right, PlaneRef::Top),
+        };
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::Axis(AxisFeature { kind, reverse: false }));
+        self.open_editor(id, before, true);
+    }
+
+    /// A reference point: the centre of the selected face, else the centre of mass.
+    fn cmd_point(&mut self) {
+        let kind = match self.selection {
+            Selection::Face(f) => PointFeature::FaceCenter(f),
+            _ => PointFeature::CenterOfMass,
+        };
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::Point(kind));
+        self.open_editor(id, before, true);
+    }
+
+    fn cmd_coordsys(&mut self) {
+        let before = self.doc.clone();
+        let id = self.doc.add_feature(FeatureKind::CoordSys(CoordSysFeature::default()));
+        self.open_editor(id, before, true);
+    }
+
     fn cmd_draft(&mut self) {
         if self.state.body.is_empty() {
             self.message = Some(("Draft".into(), "There is no body to draft yet.".into()));
@@ -1293,10 +1384,10 @@ impl AnvilApp {
                         if theme::command_button(ui, Icon::Hole, "Hole", None).clicked() {
                             self.cmd_hole();
                         }
-                        if theme::command_button(ui, Icon::Sweep, "Swept Boss/Base", None).clicked() {
+                        if theme::command_button(ui, Icon::Sweep, "Sweep", None).on_hover_text("Swept Boss/Base").clicked() {
                             self.cmd_sweep();
                         }
-                        if theme::command_button(ui, Icon::Loft, "Lofted Boss/Base", None).clicked() {
+                        if theme::command_button(ui, Icon::Loft, "Loft", None).on_hover_text("Lofted Boss/Base").clicked() {
                             self.cmd_loft();
                         }
                         if theme::command_button(ui, Icon::Draft, "Draft", None).clicked() {
@@ -1305,11 +1396,37 @@ impl AnvilApp {
                         if theme::command_button(ui, Icon::Dome, "Dome", None).clicked() {
                             self.cmd_dome();
                         }
+                        if theme::command_button(ui, Icon::Rib, "Rib", None).clicked() {
+                            self.cmd_rib();
+                        }
+                        if let Some(i) = command_menu(
+                            ui,
+                            Icon::Bodies,
+                            "Bodies",
+                            &[
+                                (Icon::Bodies, "Combine"),
+                                (Icon::Bodies, "Move/Copy Bodies"),
+                                (Icon::Bodies, "Delete/Keep Bodies"),
+                                (Icon::Bodies, "Split"),
+                                (Icon::Bodies, "Scale"),
+                            ],
+                        ) {
+                            self.cmd_body(i);
+                        }
                     });
                     theme::group_rule(ui);
                     theme::command_group(ui, "Reference", |ui| {
-                        if theme::command_button(ui, Icon::Plane, "Reference Plane", None).clicked() {
-                            self.cmd_plane();
+                        match command_menu(
+                            ui,
+                            Icon::Plane,
+                            "Reference",
+                            &[(Icon::Plane, "Plane"), (Icon::Axis, "Axis"), (Icon::RefPoint, "Point"), (Icon::CoordSys, "Coordinate System")],
+                        ) {
+                            Some(0) => self.cmd_plane(),
+                            Some(1) => self.cmd_axis(),
+                            Some(2) => self.cmd_point(),
+                            Some(3) => self.cmd_coordsys(),
+                            _ => {}
                         }
                     });
                 }
@@ -1458,6 +1575,24 @@ impl AnvilApp {
             });
         }
         theme::tree_row(ui, Icon::Origin, "Origin", RowLook::default());
+        // A part of several bodies lists them (see docs/re/multibody.md).
+        let bodies = self.state.body_names.clone();
+        if bodies.len() > 1 {
+            let names: HashMap<u32, String> =
+                self.doc.features.iter().map(|f| (f.id, f.name.clone())).collect();
+            egui::CollapsingHeader::new(format!("Solid Bodies({})", bodies.len()))
+                .id_salt("solid-bodies")
+                .show(ui, |ui| {
+                    for b in &bodies {
+                        theme::tree_row(
+                            ui,
+                            Icon::Bodies,
+                            &body_label(&bodies, &names, *b),
+                            RowLook::default(),
+                        );
+                    }
+                });
+        }
         ui.add_space(4.0);
         theme::section_label(ui, "History");
 
@@ -1634,6 +1769,7 @@ impl AnvilApp {
     fn property_manager(&mut self, ui: &mut egui::Ui) {
         let sel_plane = self.selected_plane();
         let sel_point = self.face_click.map(|(_, p)| PointRef::Model(p));
+        let body_names = self.state.body_names.clone();
         let Some(editor) = &mut self.editor else { return };
         match editor {
             Editor::PickPlane(purpose) => {
@@ -2130,6 +2266,156 @@ impl AnvilApp {
                             });
                         ui.label(format!("{} face(s) to draft.", d.faces.len()));
                         ui.weak("Click faces in the graphics area to add or remove them.");
+                    }
+                    FeatureKind::Rib(r) => {
+                        ui.label(format!(
+                            "Sketch: {}",
+                            sketch_names.get(&r.sketch).cloned().unwrap_or_default()
+                        ));
+                        changed |= dim_edit(ui, "Thickness (mm)", &mut r.thickness, bufs, "thickness", &vars);
+                        egui::ComboBox::from_label("Thickness on")
+                            .selected_text(format!("{:?}", r.sides))
+                            .show_ui(ui, |ui| {
+                                for x in [RibSides::Both, RibSides::First, RibSides::Second] {
+                                    changed |=
+                                        ui.selectable_value(&mut r.sides, x, format!("{x:?}")).changed();
+                                }
+                            });
+                        changed |=
+                            ui.checkbox(&mut r.normal_to_sketch, "Run along the sketch normal").changed();
+                        changed |= ui.checkbox(&mut r.flip, "Flip material side").changed();
+                        changed |= ui.checkbox(&mut r.natural, "Natural (carry arcs round)").changed();
+                    }
+                    FeatureKind::Combine(c) => {
+                        egui::ComboBox::from_label("Operation").selected_text(format!("{:?}", c.op)).show_ui(
+                            ui,
+                            |ui| {
+                                for o in [CombineOp::Add, CombineOp::Subtract, CombineOp::Common] {
+                                    changed |= ui.selectable_value(&mut c.op, o, format!("{o:?}")).changed();
+                                }
+                            },
+                        );
+                        if c.op == CombineOp::Subtract {
+                            let label = c
+                                .main
+                                .map(|b| body_label(&body_names, &sketch_names, b))
+                                .unwrap_or_else(|| "first chosen".into());
+                            egui::ComboBox::from_label("Main body").selected_text(label).show_ui(ui, |ui| {
+                                for b in &body_names {
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut c.main,
+                                            Some(*b),
+                                            body_label(&body_names, &sketch_names, *b),
+                                        )
+                                        .changed();
+                                }
+                            });
+                        }
+                        changed |= body_checks(ui, &mut c.bodies, &body_names, &sketch_names, false);
+                    }
+                    FeatureKind::MoveCopy(m) => {
+                        changed |= body_checks(ui, &mut m.bodies, &body_names, &sketch_names, true);
+                        ui.horizontal(|ui| {
+                            ui.label("Copies (0 moves)");
+                            changed |= ui.add(egui::DragValue::new(&mut m.copies).range(0..=1000)).changed();
+                        });
+                        for (i, (k1, k2)) in
+                            [("tx", "rx"), ("ty", "ry"), ("tz", "rz")].into_iter().enumerate()
+                        {
+                            let axis = ["X", "Y", "Z"][i];
+                            changed |= dim_edit(
+                                ui,
+                                &format!("Move {axis} (mm)"),
+                                &mut m.translate[i],
+                                bufs,
+                                k1,
+                                &vars,
+                            );
+                            changed |= dim_edit(
+                                ui,
+                                &format!("Turn about {axis} (deg)"),
+                                &mut m.rotate[i],
+                                bufs,
+                                k2,
+                                &vars,
+                            );
+                        }
+                    }
+                    FeatureKind::DeleteBody(dl) => {
+                        changed |=
+                            ui.checkbox(&mut dl.keep, "Keep the chosen bodies, delete the rest").changed();
+                        changed |= body_checks(ui, &mut dl.bodies, &body_names, &sketch_names, false);
+                    }
+                    FeatureKind::Split(sp) => {
+                        let names: Vec<String> = sp.planes.iter().map(|p| p.label()).collect();
+                        ui.label(format!(
+                            "Planes: {}",
+                            if names.is_empty() { "none".into() } else { names.join(", ") }
+                        ));
+                        if let Some(p) = sel_plane {
+                            if ui.button("Add the selected plane or face").clicked()
+                                && !sp.planes.contains(&p)
+                            {
+                                sp.planes.push(p);
+                                changed = true;
+                            }
+                        }
+                        if !sp.planes.is_empty() && ui.button("Clear planes").clicked() {
+                            sp.planes.clear();
+                            changed = true;
+                        }
+                        changed |= body_checks(ui, &mut sp.bodies, &body_names, &sketch_names, true);
+                    }
+                    FeatureKind::Scale(sc) => {
+                        egui::ComboBox::from_label("Scale about")
+                            .selected_text(format!("{:?}", sc.about))
+                            .show_ui(ui, |ui| {
+                                for a in [ScaleAbout::Centroid, ScaleAbout::Origin] {
+                                    changed |=
+                                        ui.selectable_value(&mut sc.about, a, format!("{a:?}")).changed();
+                                }
+                            });
+                        for (i, k) in ["sx", "sy", "sz"].into_iter().enumerate() {
+                            changed |= dim_edit(
+                                ui,
+                                &format!("{} factor", ["X", "Y", "Z"][i]),
+                                &mut sc.factors[i],
+                                bufs,
+                                k,
+                                &vars,
+                            );
+                        }
+                        changed |= body_checks(ui, &mut sc.bodies, &body_names, &sketch_names, true);
+                    }
+                    FeatureKind::Axis(a) => {
+                        ui.label(a.kind.label());
+                        if let Some(p) = sel_plane {
+                            if ui.button("Where the selected plane meets the Front plane").clicked() {
+                                a.kind = AxisKind::TwoPlanes(p, PlaneRef::Front);
+                                changed = true;
+                            }
+                        }
+                        changed |= ui.checkbox(&mut a.reverse, "Reverse direction").changed();
+                    }
+                    FeatureKind::Point(p) => {
+                        ui.label(p.label());
+                    }
+                    FeatureKind::CoordSys(c) => {
+                        for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Origin {axis} (mm)"));
+                                changed |=
+                                    ui.add(egui::DragValue::new(&mut c.position[i]).speed(0.5)).changed();
+                            });
+                        }
+                        for (i, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Turn about {axis} (deg)"));
+                                changed |=
+                                    ui.add(egui::DragValue::new(&mut c.rotation[i]).speed(1.0)).changed();
+                            });
+                        }
                     }
                     FeatureKind::Loft(l) => {
                         let names: Vec<String> =
@@ -3842,6 +4128,65 @@ fn dim_edit(
     AnvilApp::dim_field(ui, label, dim, bufs.entry(key).or_insert(text), vars)
 }
 
+/// A body's name as the tree shows it: its feature's name, with `[n]` when that
+/// feature left several bodies.
+fn body_label(all: &[BodyRef], names: &HashMap<u32, String>, b: BodyRef) -> String {
+    let name = names.get(&b.feature).cloned().unwrap_or_else(|| format!("#{}", b.feature));
+    if all.iter().filter(|x| x.feature == b.feature).count() > 1 {
+        format!("{name}[{}]", b.index)
+    } else {
+        name
+    }
+}
+
+/// Check boxes choosing bodies; with `all_when_empty`, an empty list means every body.
+fn body_checks(
+    ui: &mut egui::Ui,
+    chosen: &mut Vec<BodyRef>,
+    all: &[BodyRef],
+    names: &HashMap<u32, String>,
+    all_when_empty: bool,
+) -> bool {
+    let mut changed = false;
+    ui.label(if all_when_empty && chosen.is_empty() { "Bodies: all" } else { "Bodies:" });
+    for b in all {
+        let mut on = chosen.contains(b);
+        if ui.checkbox(&mut on, body_label(all, names, *b)).changed() {
+            if on {
+                chosen.push(*b);
+            } else {
+                chosen.retain(|x| x != b);
+            }
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// A command button that opens a menu of commands; returns the one chosen.
+fn command_menu(ui: &mut egui::Ui, icon: Icon, label: &str, items: &[(Icon, &str)]) -> Option<usize> {
+    let resp = theme::command_button(ui, icon, label, None);
+    let id = ui.make_persistent_id(("command-menu", label));
+    if resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    let pal = Palette::of(ui);
+    let mut picked = None;
+    egui::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_min_width(200.0);
+        for (i, (ic, text)) in items.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), Sense::hover());
+                theme::paint_icon(ui.painter(), r, *ic, pal.text, pal.accent);
+                if ui.selectable_label(false, *text).clicked() {
+                    picked = Some(i);
+                }
+            });
+        }
+    });
+    picked
+}
+
 fn toggle_face(list: &mut Vec<FaceId>, f: FaceId) {
     match list.iter().position(|x| *x == f) {
         Some(i) => {
@@ -4934,6 +5279,34 @@ mod ui_tests {
         let v = h.app.state.body.mass_properties().volume;
         let expected = 40.0 * 20.0 * 10.0 - 38.0 * 18.0 * 9.0;
         assert!((v - expected).abs() < 1e-4, "{v} vs {expected}");
+    }
+
+    #[test]
+    fn split_a_block_into_bodies_and_scale_one() {
+        let mut h = Harness::new();
+        block(&mut h);
+        // Split along the Right plane (x = 0): two 20 x 40 x 20 halves.
+        h.app.selection = Selection::Plane(PlaneRef::Right);
+        h.app.cmd_body(3);
+        h.step(vec![]);
+        h.app.finish_editor(true);
+        h.step(vec![]);
+        assert!(h.app.state.errors.is_empty(), "{:?}", h.app.state.errors);
+        assert_eq!(h.app.state.body_names.len(), 2);
+        let first = h.app.state.body_names[0];
+        // Scale the first half by 2 about its centroid: 16000 becomes 128000.
+        h.app.cmd_body(4);
+        h.step(vec![]);
+        let id = h.app.doc.features.last().unwrap().id;
+        if let Some(FeatureKind::Scale(x)) = h.app.doc.feature_mut(id).map(|f| &mut f.kind) {
+            x.bodies = vec![first];
+            x.factors = [Dim::Value(2.0), Dim::Value(2.0), Dim::Value(2.0)];
+        }
+        h.app.finish_editor(true);
+        h.step(vec![]);
+        assert!(h.app.state.errors.is_empty(), "{:?}", h.app.state.errors);
+        let v = h.app.state.body.mass_properties().volume;
+        assert!((v - (128000.0 + 16000.0)).abs() < 1e-6, "{v}");
     }
 
     #[test]

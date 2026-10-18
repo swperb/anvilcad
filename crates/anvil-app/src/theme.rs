@@ -227,6 +227,9 @@ pub enum Icon {
     Bodies,
     Section,
     Convert,
+    Axis,
+    RefPoint,
+    CoordSys,
     Measure,
     Imported,
     Select,
@@ -485,6 +488,25 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             poly(&[(3.0, 2.0), (13.0, 2.0), (13.0, 7.0), (3.0, 7.0)], tint, ln);
             path(&[(3.0, 10.0), (13.0, 10.0), (13.0, 14.5), (3.0, 14.5), (3.0, 10.0)], hi);
             line((8.0, 7.0), (8.0, 9.0), ln);
+        }
+        Icon::Axis => {
+            // A dashed line through a ring.
+            for i in 0..5 {
+                let y = 1.0 + i as f32 * 3.0;
+                line((8.0, y), (8.0, y + 1.8), hi);
+            }
+            arc((8.0, 8.0), 5.0, 0.0, 360.0, ln);
+        }
+        Icon::RefPoint => {
+            line((3.0, 8.0), (13.0, 8.0), ln);
+            line((8.0, 3.0), (8.0, 13.0), ln);
+            arc((8.0, 8.0), 2.2, 0.0, 360.0, hi);
+        }
+        Icon::CoordSys => {
+            // Three axes from an origin.
+            line((5.0, 11.0), (14.0, 11.0), hi);
+            line((5.0, 11.0), (5.0, 2.0), ln);
+            line((5.0, 11.0), (1.5, 14.5), ln);
         }
         Icon::Measure => {
             // A rule with ticks.
