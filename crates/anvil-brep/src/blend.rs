@@ -85,14 +85,11 @@ pub fn blend_chain(solid: &Solid, edges: &[(EdgeId, u32)], blend: Blend, owner: 
             let (t, c) = acc.ok_or_else(|| KernelError::InvalidInput("no edge to blend".into()))?;
             (t, c, Vec::new())
         }
-        Err(KernelError::Unsupported(why)) => match blend {
-            Blend::Fillet(r) => {
-                let ids: Vec<EdgeId> = edges.iter().map(|e| e.0).collect();
-                let tag_base = edges.first().map_or(0, |e| e.1);
-                crate::rolling::rolling_run_tool(solid, &ids, r, tag_base)?
-            }
-            Blend::Chamfer(_) => return Err(KernelError::Unsupported(why)),
-        },
+        Err(KernelError::Unsupported(_)) => {
+            let ids: Vec<EdgeId> = edges.iter().map(|e| e.0).collect();
+            let tag_base = edges.first().map_or(0, |e| e.1);
+            crate::rolling::rolling_run_tool(solid, &ids, blend, tag_base)?
+        }
         Err(e) => return Err(e),
     };
     tool.set_owner(owner);

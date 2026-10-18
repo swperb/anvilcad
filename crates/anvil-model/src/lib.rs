@@ -516,6 +516,57 @@ mod exact_rolling_fillets {
 }
 
 #[cfg(test)]
+mod exact_freeform_chamfers {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// The rims of a hole drilled across a boss, chamfered: their bevel is swept along
+    /// the saddle-shaped edges, and the part stays on the exact kernel.
+    #[test]
+    fn cross_hole_rims_chamfer_exactly() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        let boss_circle = sf.sketch.add_circle(c, 12.0);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let boss = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(40.0),
+            reverse: false,
+            op: BodyOp::Boss,
+        }));
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        let c = sf.sketch.add_point(v2(0.0, 20.0));
+        let hole_circle = sf.sketch.add_circle(c, 4.0);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let hole = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::ThroughAllBoth,
+            depth: Dim::Value(0.0),
+            reverse: false,
+            op: BodyOp::Cut,
+        }));
+        let before = doc.rebuild().body.mass_properties().volume;
+        let rim =
+            EdgeRef::new(FaceId::side(boss, boss_circle as u32), FaceId::side(hole, hole_circle as u32));
+        let chamfer = doc.add_feature(FeatureKind::Chamfer(ChamferFeature {
+            edges: vec![rim],
+            distance: Dim::Value(1.0),
+        }));
+        let st = doc.rebuild();
+        assert_eq!(st.faceted_from, None);
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert!(st.exact_features.contains(&chamfer));
+        // Each rim loses about half a unit square (the bevel's triangle where the faces
+        // meet at right angles; more where they meet more sharply) along about 26 mm.
+        let taken = before - st.body.mass_properties().volume;
+        assert!(taken > 2.0 * 0.5 * 26.0 * 0.8 && taken < 2.0 * 0.5 * 26.0 * 2.0, "{taken}");
+        assert_eq!(st.body.open_edges(), 0);
+    }
+}
+
+#[cfg(test)]
 mod exact_rolling_runs {
     use super::*;
     use anvil_kernel::{v2, EdgeRef, FaceId};
