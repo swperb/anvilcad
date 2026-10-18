@@ -1240,7 +1240,7 @@ impl AnvilApp {
                         {
                             self.cmd_pattern(true);
                         }
-                        if theme::command_button(ui, Icon::Mirror, "Mirror", None).clicked() {
+                        if theme::command_button(ui, Icon::MirrorFeature, "Mirror", None).clicked() {
                             self.cmd_mirror();
                         }
                     });
@@ -1683,7 +1683,7 @@ impl AnvilApp {
                         if !e.end.two_sided() {
                             let mut on = e.direction2.is_some();
                             if ui.checkbox(&mut on, "Direction 2").changed() {
-                                e.direction2 = on.then(|| EndSpec {
+                                e.direction2 = on.then_some(EndSpec {
                                     end: EndCondition::Blind,
                                     depth: Dim::Value(10.0),
                                     target: None,
@@ -1711,7 +1711,7 @@ impl AnvilApp {
                         changed |= thin_editor(ui, &mut e.thin, bufs, &vars, true);
                         let mut from = e.start_offset.is_some();
                         if ui.checkbox(&mut from, "Start offset from the sketch").changed() {
-                            e.start_offset = from.then(|| Dim::Value(5.0));
+                            e.start_offset = from.then_some(Dim::Value(5.0));
                             changed = true;
                         }
                         if let Some(d) = &mut e.start_offset {
@@ -1820,7 +1820,7 @@ impl AnvilApp {
                         changed |= ui.checkbox(&mut p.reverse, "Reverse direction").changed();
                         let mut two = p.direction2.is_some();
                         if ui.checkbox(&mut two, "Direction 2").changed() {
-                            p.direction2 = two.then(|| PatternDirection {
+                            p.direction2 = two.then_some(PatternDirection {
                                 direction: Axis::Y,
                                 spacing: Dim::Value(20.0),
                                 count: Dim::Value(2.0),
@@ -1874,7 +1874,7 @@ impl AnvilApp {
                         changed |= ui.checkbox(&mut p.reverse, "Reverse direction").changed();
                         let mut two = p.direction2.is_some();
                         if ui.checkbox(&mut two, "Direction 2 (symmetric)").changed() {
-                            p.direction2 = two.then(|| CircularDirection2 {
+                            p.direction2 = two.then_some(CircularDirection2 {
                                 symmetric: true,
                                 angle: Dim::Value(360.0),
                                 count: Dim::Value(2.0),
@@ -2050,7 +2050,7 @@ impl AnvilApp {
                         );
                         let mut round = sw.diameter.is_some();
                         if ui.checkbox(&mut round, "Round profile").changed() {
-                            sw.diameter = round.then(|| Dim::Value(5.0));
+                            sw.diameter = round.then_some(Dim::Value(5.0));
                             changed = true;
                         }
                         if let Some(d) = &mut sw.diameter {
@@ -3688,7 +3688,7 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Chamfer(_) => Icon::Chamfer,
         FeatureKind::Shell(_) => Icon::Shell,
         FeatureKind::Hole(_) => Icon::Hole,
-        FeatureKind::Mirror(_) => Icon::Mirror,
+        FeatureKind::Mirror(_) => Icon::MirrorFeature,
         FeatureKind::SketchPattern(_) => Icon::LinearPattern,
         FeatureKind::Axis(_) | FeatureKind::Point(_) | FeatureKind::CoordSys(_) => Icon::Plane,
         FeatureKind::Sweep(_) => Icon::Sweep,
@@ -3804,7 +3804,7 @@ fn draft_editor(
     let mut changed = false;
     let mut on = draft.is_some();
     if ui.checkbox(&mut on, "Draft").changed() {
-        *draft = on.then(|| Draft { angle: Dim::Value(5.0), outward: false });
+        *draft = on.then_some(Draft { angle: Dim::Value(5.0), outward: false });
         changed = true;
     }
     if let Some(d) = draft {
@@ -3842,7 +3842,7 @@ fn thin_editor(
     }
     let mut round = w.fillet.is_some();
     if ui.checkbox(&mut round, "Round corners").changed() {
-        w.fillet = round.then(|| Dim::Value(1.0));
+        w.fillet = round.then_some(Dim::Value(1.0));
         changed = true;
     }
     if let Some(r) = &mut w.fillet {
@@ -3851,7 +3851,7 @@ fn thin_editor(
     if caps {
         let mut cap = w.cap.is_some();
         if ui.checkbox(&mut cap, "Cap ends").changed() {
-            w.cap = cap.then(|| Dim::Value(1.0));
+            w.cap = cap.then_some(Dim::Value(1.0));
             changed = true;
         }
         if let Some(c) = &mut w.cap {

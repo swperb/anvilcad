@@ -218,7 +218,7 @@ pub enum Icon {
     Chamfer,
     Shell,
     Hole,
-    Mirror,
+    MirrorFeature,
     Sweep,
     Draft,
     Dome,
@@ -425,7 +425,7 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             line((10.0, 14.0), (14.5, 14.0), ln);
             line((8.0, 1.5), (8.0, 15.0), hi);
         }
-        Icon::Mirror => {
+        Icon::MirrorFeature => {
             // A shape and its reflection either side of a dashed plane.
             poly(&[(2.0, 4.0), (6.5, 4.0), (6.5, 12.0), (4.0, 12.0)], tint, ln);
             poly(&[(9.5, 4.0), (14.0, 4.0), (12.0, 12.0), (9.5, 12.0)], Color32::TRANSPARENT, ln);
