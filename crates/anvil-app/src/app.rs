@@ -275,7 +275,19 @@ impl AnvilApp {
         if self.pick_target().is_none() {
             self.pick_body = None;
         }
-        let shown = self.pick_body.as_ref().map(|p| &p.solid).unwrap_or(&self.state.body);
+        // A section view shows the part cut open, unless edges or faces are being picked.
+        let sectioned = match (&self.doc.section, &self.pick_body) {
+            (Some(v), None) if v.on => match self.doc.section_body(v, &self.state) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    self.status = format!("Section view: {e}");
+                    None
+                }
+            },
+            _ => None,
+        };
+        let shown =
+            self.pick_body.as_ref().map(|p| &p.solid).or(sectioned.as_ref()).unwrap_or(&self.state.body);
         self.mesh = shown.tessellate();
         self.edges = shown.feature_edges();
         self.scene_dirty = true;
@@ -1336,6 +1348,10 @@ impl AnvilApp {
                         }
                         if theme::command_button(ui, Icon::Measure, "Measure", None).clicked() {
                             self.measure = Some(Vec::new());
+                        }
+                        let on = self.doc.section.as_ref().is_some_and(|v| v.on);
+                        if theme::command_button(ui, Icon::Section, "Section View", Some(on)).clicked() {
+                            self.toggle_section();
                         }
                     });
                     theme::group_rule(ui);
@@ -2945,6 +2961,78 @@ impl AnvilApp {
         }
     }
 
+    /// Turns the section view on (with one plane, the Front plane, the first time) or off.
+    fn toggle_section(&mut self) {
+        let v = self.doc.section.get_or_insert_with(|| SectionView {
+            planes: vec![SectionPlane {
+                plane: PlaneRef::Front,
+                offset: 0.0,
+                rotate_x: 0.0,
+                rotate_y: 0.0,
+                reverse: false,
+            }],
+            on: false,
+        });
+        v.on = !v.on;
+        self.rebuild();
+    }
+
+    fn section_window(&mut self, ctx: &egui::Context) {
+        let Some(v) = self.doc.section.as_mut().filter(|v| v.on) else { return };
+        let mut changed = false;
+        let mut open = true;
+        egui::Window::new("Section View").open(&mut open).resizable(false).show(ctx, |ui| {
+            let mut remove = None;
+            for (i, sp) in v.planes.iter_mut().enumerate() {
+                ui.label(format!("Section {}", i + 1));
+                ui.horizontal(|ui| {
+                    for p in [PlaneRef::Front, PlaneRef::Top, PlaneRef::Right] {
+                        changed |= ui.selectable_value(&mut sp.plane, p, p.label()).changed();
+                    }
+                });
+                for (label, val, speed) in [
+                    ("Offset (mm)", &mut sp.offset, 0.5),
+                    ("X rotation (deg)", &mut sp.rotate_x, 1.0),
+                    ("Y rotation (deg)", &mut sp.rotate_y, 1.0),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        changed |= ui.add(egui::DragValue::new(val).speed(speed)).changed();
+                    });
+                }
+                ui.horizontal(|ui| {
+                    changed |= ui.checkbox(&mut sp.reverse, "Reverse").changed();
+                    if i > 0 && ui.button("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                });
+                ui.separator();
+            }
+            if let Some(i) = remove {
+                v.planes.remove(i);
+                changed = true;
+            }
+            if v.planes.len() < 3 && ui.button("Add a section plane").clicked() {
+                v.planes.push(SectionPlane {
+                    plane: PlaneRef::Right,
+                    offset: 0.0,
+                    rotate_x: 0.0,
+                    rotate_y: 0.0,
+                    reverse: false,
+                });
+                changed = true;
+            }
+            ui.weak("The section changes only the view, never the part.");
+        });
+        if !open {
+            v.on = false;
+            changed = true;
+        }
+        if changed {
+            self.rebuild();
+        }
+    }
+
     fn measure_window(&mut self, ctx: &egui::Context) {
         let Some(picks) = self.measure.clone() else { return };
         let mut open = true;
@@ -2981,6 +3069,7 @@ impl AnvilApp {
 
     fn windows(&mut self, ctx: &egui::Context) {
         self.measure_window(ctx);
+        self.section_window(ctx);
         let mut open = self.windows.properties;
         egui::Window::new("Properties").open(&mut open).default_width(460.0).show(ctx, |ui| {
             ui.label(RichText::new("Material").strong());

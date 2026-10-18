@@ -225,6 +225,7 @@ pub enum Icon {
     Loft,
     Rib,
     Bodies,
+    Section,
     Measure,
     Imported,
     Select,
@@ -469,6 +470,14 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             // Two overlapping blocks.
             poly(&[(1.5, 6.0), (9.5, 6.0), (9.5, 14.0), (1.5, 14.0)], tint, ln);
             poly(&[(6.5, 2.0), (14.5, 2.0), (14.5, 10.0), (6.5, 10.0)], Color32::TRANSPARENT, hi);
+        }
+        Icon::Section => {
+            // A block cut open, with its cap shaded.
+            path(
+                &[(2.0, 6.0), (8.0, 3.0), (14.0, 6.0), (14.0, 12.0), (8.0, 15.0), (2.0, 12.0), (2.0, 6.0)],
+                ln,
+            );
+            poly(&[(8.0, 3.0), (14.0, 6.0), (14.0, 12.0), (8.0, 9.0)], tint, hi);
         }
         Icon::Measure => {
             // A rule with ticks.

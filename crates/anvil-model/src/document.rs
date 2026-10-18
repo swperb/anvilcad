@@ -1028,6 +1028,9 @@ pub struct Document {
     /// Features at or after this index are rolled back (not rebuilt).
     #[serde(default)]
     pub rollback: Option<usize>,
+    /// The section view, kept with the part but never changing its geometry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<crate::section::SectionView>,
     /// The part's configurations (see `config.rs`). Never empty once normalized.
     #[serde(default)]
     pub configurations: Vec<Configuration>,
@@ -1099,6 +1102,7 @@ impl Document {
             features: Vec::new(),
             next_id: 1,
             rollback: None,
+            section: None,
             configurations: vec![Configuration::new(1, DEFAULT_CONFIGURATION)],
             active_configuration: 1,
             configured: Vec::new(),

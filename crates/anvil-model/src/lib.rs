@@ -22,6 +22,7 @@ pub mod rebuild;
 pub mod refgeom;
 mod revolve;
 pub mod rib;
+pub mod section;
 pub mod step;
 pub mod sweep;
 pub mod thin;
@@ -42,6 +43,7 @@ pub use refgeom::{
     PointFeature,
 };
 pub use rib::{RibFeature, RibSides};
+pub use section::{SectionPlane, SectionView};
 pub use sweep::{SweepDirection, SweepFeature};
 
 #[cfg(test)]
