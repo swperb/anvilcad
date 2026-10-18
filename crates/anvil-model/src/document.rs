@@ -99,41 +99,227 @@ impl PlaneRef {
     }
 
     fn references(&self, id: u32) -> bool {
+        self.dependency() == Some(id)
+    }
+
+    /// The feature this plane comes from, if any.
+    pub fn dependency(&self) -> Option<u32> {
         match *self {
-            PlaneRef::Face(f) => f.feature == id,
-            PlaneRef::Feature(f) => f == id,
-            _ => false,
+            PlaneRef::Face(f) => Some(f.feature),
+            PlaneRef::Feature(f) => Some(f),
+            _ => None,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BodyOp {
+    #[default]
     Boss,
     Cut,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Where an extrusion ends, for one direction. See `docs/re/extrude-revolve.md`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EndCondition {
+    #[default]
     Blind,
     MidPlane,
     ThroughAll,
     ThroughAllBoth,
+    /// To the next face of the part that covers the whole profile.
+    UpToNext,
+    /// To the plane parallel to the sketch through a point (the feature's `target`).
+    UpToVertex,
+    /// To a plane or planar face (the feature's `target`), which may lean.
+    UpToSurface,
+    /// To a set distance (the depth) short of, or past, a plane or planar face.
+    OffsetFromSurface,
 }
 
 impl EndCondition {
-    pub const ALL: [EndCondition; 4] =
-        [EndCondition::Blind, EndCondition::MidPlane, EndCondition::ThroughAll, EndCondition::ThroughAllBoth];
+    pub const ALL: [EndCondition; 8] = [
+        EndCondition::Blind,
+        EndCondition::ThroughAll,
+        EndCondition::ThroughAllBoth,
+        EndCondition::UpToNext,
+        EndCondition::UpToVertex,
+        EndCondition::UpToSurface,
+        EndCondition::OffsetFromSurface,
+        EndCondition::MidPlane,
+    ];
+    /// The conditions Direction 2 offers (the two-sided ones are not).
+    pub const SECOND: [EndCondition; 6] = [
+        EndCondition::Blind,
+        EndCondition::ThroughAll,
+        EndCondition::UpToNext,
+        EndCondition::UpToVertex,
+        EndCondition::UpToSurface,
+        EndCondition::OffsetFromSurface,
+    ];
     pub fn label(&self) -> &'static str {
         match self {
             EndCondition::Blind => "Blind",
             EndCondition::MidPlane => "Mid Plane",
             EndCondition::ThroughAll => "Through All",
             EndCondition::ThroughAllBoth => "Through All - Both",
+            EndCondition::UpToNext => "Up To Next",
+            EndCondition::UpToVertex => "Up To Vertex",
+            EndCondition::UpToSurface => "Up To Surface",
+            EndCondition::OffsetFromSurface => "Offset From Surface",
         }
     }
+    /// True when the condition reads the depth field (a blind depth or an offset).
     pub fn uses_depth(&self) -> bool {
-        matches!(self, EndCondition::Blind | EndCondition::MidPlane)
+        matches!(self, EndCondition::Blind | EndCondition::MidPlane | EndCondition::OffsetFromSurface)
+    }
+    /// True when the condition needs a target (a point or a plane).
+    pub fn needs_target(&self) -> bool {
+        matches!(self, EndCondition::UpToVertex | EndCondition::UpToSurface | EndCondition::OffsetFromSurface)
+    }
+    /// True when the condition already reaches both ways from the sketch.
+    pub fn two_sided(&self) -> bool {
+        matches!(self, EndCondition::MidPlane | EndCondition::ThroughAllBoth)
+    }
+}
+
+/// A point a feature refers to.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PointRef {
+    /// A point of a sketch, by feature id and point index.
+    SketchPoint { sketch: u32, point: usize },
+    /// A fixed position in model space, such as a model vertex picked in the graphics
+    /// area. It does not follow later edits of the geometry it was picked on.
+    Model(Vec3),
+    /// A reference point feature.
+    Feature(u32),
+}
+
+impl PointRef {
+    /// The feature this point comes from, if any.
+    pub fn dependency(&self) -> Option<u32> {
+        match *self {
+            PointRef::SketchPoint { sketch, .. } => Some(sketch),
+            PointRef::Feature(id) => Some(id),
+            PointRef::Model(_) => None,
+        }
+    }
+}
+
+/// What an Up To Vertex, Up To Surface or Offset From Surface end refers to.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum EndTarget {
+    Point(PointRef),
+    /// A plane or planar face. `reverse_offset` puts an offset past the surface (away
+    /// from the sketch) instead of short of it; `translate` moves the surface along the
+    /// extrusion by the offset instead of offsetting it along its own normal.
+    Plane {
+        plane: PlaneRef,
+        #[serde(default)]
+        reverse_offset: bool,
+        #[serde(default)]
+        translate: bool,
+    },
+}
+
+impl EndTarget {
+    pub fn label(&self) -> String {
+        match self {
+            EndTarget::Point(PointRef::SketchPoint { sketch, point }) => {
+                format!("Point {} of feature #{sketch}", point + 1)
+            }
+            EndTarget::Point(PointRef::Model(p)) => format!("Point ({:.3}, {:.3}, {:.3})", p.x, p.y, p.z),
+            EndTarget::Point(PointRef::Feature(id)) => format!("Point #{id}"),
+            EndTarget::Plane { plane, .. } => plane.label(),
+        }
+    }
+
+    fn dependencies(&self) -> Vec<u32> {
+        match *self {
+            EndTarget::Point(p) => p.dependency().into_iter().collect(),
+            EndTarget::Plane { plane, .. } => plane.dependency().into_iter().collect(),
+        }
+    }
+}
+
+/// Draft while extruding: the side faces lean by `angle` (degrees) from the direction
+/// of extrusion, closing the section in with distance from the sketch, or opening it
+/// out when `outward` is set.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Draft {
+    pub angle: Dim,
+    #[serde(default)]
+    pub outward: bool,
+}
+
+/// The second direction of a two-ended extrusion: it runs the opposite way from the
+/// sketch with its own end, depth and draft.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EndSpec {
+    pub end: EndCondition,
+    pub depth: Dim,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<EndTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<Draft>,
+}
+
+/// How a thin feature's wall sits on the sketch curves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ThinKind {
+    /// All the thickness on one side: outside a closed contour, to the left of an open
+    /// one (walking it from its first point), or the other side when reversed.
+    #[default]
+    OneDirection,
+    /// Half the thickness on each side.
+    MidPlane,
+    /// `thickness` on the first side and `thickness2` on the other.
+    TwoDirection,
+}
+
+impl ThinKind {
+    pub const ALL: [ThinKind; 3] = [ThinKind::OneDirection, ThinKind::MidPlane, ThinKind::TwoDirection];
+    pub fn label(&self) -> &'static str {
+        match self {
+            ThinKind::OneDirection => "One-Direction",
+            ThinKind::MidPlane => "Mid-Plane",
+            ThinKind::TwoDirection => "Two-Direction",
+        }
+    }
+}
+
+/// A thin feature: the sketch curves become a wall of a set thickness instead of the
+/// regions they bound.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ThinWall {
+    pub kind: ThinKind,
+    pub thickness: Dim,
+    #[serde(default = "default_thickness2")]
+    pub thickness2: Dim,
+    #[serde(default)]
+    pub reverse: bool,
+    /// Rounds the corners of open contours with this inside radius.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fillet: Option<Dim>,
+    /// Closes both ends of a closed contour's wall with caps this thick, inside its length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cap: Option<Dim>,
+}
+
+fn default_thickness2() -> Dim {
+    Dim::Value(1.0)
+}
+
+impl ThinWall {
+    pub fn new(thickness: f64) -> ThinWall {
+        ThinWall {
+            kind: ThinKind::OneDirection,
+            thickness: Dim::Value(thickness),
+            thickness2: Dim::Value(thickness),
+            reverse: false,
+            fillet: None,
+            cap: None,
+        }
     }
 }
 
@@ -147,6 +333,8 @@ pub enum Axis {
         origin: Vec3,
         dir: Vec3,
     },
+    /// A reference axis feature.
+    Feature(u32),
 }
 
 impl Axis {
@@ -156,6 +344,7 @@ impl Axis {
             Axis::Y => Vec3::Y,
             Axis::Z => Vec3::Z,
             Axis::Line { dir, .. } => dir.normalized(),
+            Axis::Feature(_) => Vec3::Z,
         }
     }
 
@@ -170,6 +359,7 @@ impl Axis {
     pub fn label(&self) -> String {
         match self {
             Axis::Line { .. } => "Custom axis".into(),
+            Axis::Feature(id) => format!("Axis #{id}"),
             other => format!("{other:?}"),
         }
     }
@@ -234,14 +424,78 @@ impl SketchFeature {
     }
 }
 
+/// An extruded boss or cut. Direction 1 is `end`, `depth`, `target` and `draft`; see
+/// `docs/re/extrude-revolve.md` for every option.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExtrudeFeature {
     pub sketch: u32,
     pub end: EndCondition,
+    /// Blind depth, total depth for Mid Plane, or the offset for Offset From Surface.
     pub depth: Dim,
     #[serde(default)]
     pub reverse: bool,
     pub op: BodyOp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<EndTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<Draft>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction2: Option<EndSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<ThinWall>,
+    /// Start on a plane this far from the sketch plane, along the sketch normal
+    /// (against it when `start_flip` is set), instead of on the sketch plane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_offset: Option<Dim>,
+    #[serde(default)]
+    pub start_flip: bool,
+    /// Cuts only: remove the material outside the profile instead of inside.
+    #[serde(default)]
+    pub flip_side: bool,
+}
+
+impl Default for ExtrudeFeature {
+    fn default() -> Self {
+        ExtrudeFeature {
+            sketch: 0,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            reverse: false,
+            op: BodyOp::Boss,
+            target: None,
+            draft: None,
+            direction2: None,
+            thin: None,
+            start_offset: None,
+            start_flip: false,
+            flip_side: false,
+        }
+    }
+}
+
+impl ExtrudeFeature {
+    /// Every feature this extrusion refers to.
+    fn dependencies(&self) -> Vec<u32> {
+        let mut v = vec![self.sketch];
+        for t in self.target.iter().chain(self.direction2.iter().filter_map(|d| d.target.as_ref())) {
+            v.extend(t.dependencies());
+        }
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+}
+
+/// How far a revolve turns. See `docs/re/extrude-revolve.md`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub enum RevolveKind {
+    /// The angle one way from the sketch.
+    #[default]
+    OneDirection,
+    /// Half the angle each way from the sketch.
+    MidPlane,
+    /// The angle one way and `angle2` (degrees) the other.
+    TwoDirection { angle2: Dim },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -252,31 +506,185 @@ pub struct RevolveFeature {
     /// Degrees.
     pub angle: Dim,
     pub op: BodyOp,
+    #[serde(default)]
+    pub kind: RevolveKind,
+    #[serde(default)]
+    pub reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<ThinWall>,
+    /// Cuts only: remove the material outside the profile within the swept angle.
+    #[serde(default)]
+    pub flip_side: bool,
 }
 
+impl Default for RevolveFeature {
+    fn default() -> Self {
+        RevolveFeature {
+            sketch: 0,
+            axis: 0,
+            angle: Dim::Value(360.0),
+            op: BodyOp::Boss,
+            kind: RevolveKind::OneDirection,
+            reverse: false,
+            thin: None,
+            flip_side: false,
+        }
+    }
+}
+
+/// A reference plane. See `docs/re/reference-geometry.md`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlaneFeature {
+    /// The plane it is parallel to, turned from or halfway from.
     pub base: PlaneRef,
+    /// The distance of an offset plane.
     pub offset: Dim,
+    /// Offset planes: put the plane on the other side, turned over (as it always has
+    /// been). At angle planes: turn the other way.
     #[serde(default)]
     pub flip: bool,
+    #[serde(default)]
+    pub kind: crate::refgeom::PlaneKind,
+    /// Turns the plane over (its normal and x axis reverse) without moving it.
+    #[serde(default)]
+    pub flip_normal: bool,
 }
 
+impl Default for PlaneFeature {
+    fn default() -> Self {
+        PlaneFeature {
+            base: PlaneRef::Front,
+            offset: Dim::Value(10.0),
+            flip: false,
+            kind: crate::refgeom::PlaneKind::Offset,
+            flip_normal: false,
+        }
+    }
+}
+
+/// A linear pattern: copies of its seed features along one or two directions. See
+/// `docs/re/mirror-and-patterns.md`. Counts include the seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinearPatternFeature {
     pub features: Vec<u32>,
     pub direction: Axis,
     pub spacing: Dim,
     pub count: Dim,
+    #[serde(default)]
+    pub reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction2: Option<PatternDirection>,
+    /// Copy only the seed along Direction 2, not the whole Direction 1 row.
+    #[serde(default)]
+    pub seed_only: bool,
+    /// Instances left out, as 1-based (Direction 1, Direction 2) places; the seed is (1, 1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<[u32; 2]>,
 }
 
+impl Default for LinearPatternFeature {
+    fn default() -> Self {
+        LinearPatternFeature {
+            features: Vec::new(),
+            direction: Axis::X,
+            spacing: Dim::Value(20.0),
+            count: Dim::Value(3.0),
+            reverse: false,
+            direction2: None,
+            seed_only: false,
+            skip: Vec::new(),
+        }
+    }
+}
+
+/// The second direction of a linear pattern.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PatternDirection {
+    pub direction: Axis,
+    pub spacing: Dim,
+    pub count: Dim,
+    #[serde(default)]
+    pub reverse: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A circular pattern: copies of its seed features turned about an axis. With equal
+/// spacing the angle is the total (360 spreads the instances evenly round the full
+/// circle); otherwise it is the angle between neighbouring instances. Counts include
+/// the seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CircularPatternFeature {
     pub features: Vec<u32>,
     pub axis: Axis,
-    /// Degrees. 360 spaces instances evenly around the full circle.
+    /// Degrees: the total with equal spacing, the step otherwise.
     pub total_angle: Dim,
     pub count: Dim,
+    #[serde(default = "yes")]
+    pub equal_spacing: bool,
+    #[serde(default)]
+    pub reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction2: Option<CircularDirection2>,
+    /// Instances left out, as (direction, k): k counts from the seed (1) in turning order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<[u32; 2]>,
+}
+
+impl Default for CircularPatternFeature {
+    fn default() -> Self {
+        CircularPatternFeature {
+            features: Vec::new(),
+            axis: Axis::Y,
+            total_angle: Dim::Value(360.0),
+            count: Dim::Value(4.0),
+            equal_spacing: true,
+            reverse: false,
+            direction2: None,
+            skip: Vec::new(),
+        }
+    }
+}
+
+/// The other way round the axis. Symmetric copies Direction 1's angle and count.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CircularDirection2 {
+    #[serde(default)]
+    pub symmetric: bool,
+    pub angle: Dim,
+    pub count: Dim,
+    #[serde(default = "yes")]
+    pub equal_spacing: bool,
+}
+
+/// Reflects seed features (or the whole body) in a plane or planar face, and
+/// optionally in a second one. See `docs/re/mirror-and-patterns.md`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MirrorFeature {
+    pub plane: PlaneRef,
+    #[serde(default)]
+    pub features: Vec<u32>,
+    /// Mirror the whole body built so far (and join the copy to it) instead of features.
+    #[serde(default)]
+    pub bodies: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plane2: Option<PlaneRef>,
+    /// With two planes, mirror only the seed in the second plane, not the first copy.
+    #[serde(default)]
+    pub seed_only: bool,
+}
+
+/// Copies of seed features at the free points of a sketch: each copy is the seed
+/// moved so its reference point lands on a sketch point.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SketchPatternFeature {
+    pub features: Vec<u32>,
+    pub sketch: u32,
+    /// Where on the seed each copy is placed from; the seed's centroid when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<PointRef>,
 }
 
 /// Geometry captured from another CAD system for features that cannot be rebuilt
@@ -409,6 +817,15 @@ pub enum FeatureKind {
     Chamfer(ChamferFeature),
     Shell(ShellFeature),
     Hole(crate::hole::HoleFeature),
+    Mirror(MirrorFeature),
+    SketchPattern(SketchPatternFeature),
+    Axis(crate::refgeom::AxisFeature),
+    Point(crate::refgeom::PointFeature),
+    CoordSys(crate::refgeom::CoordSysFeature),
+    Sweep(crate::sweep::SweepFeature),
+    Draft(crate::modify::DraftFeature),
+    Dome(crate::modify::DomeFeature),
+    Loft(crate::loft::LoftFeature),
 }
 
 impl FeatureKind {
@@ -416,9 +833,12 @@ impl FeatureKind {
     pub fn name_prefix(&self) -> &'static str {
         match self {
             FeatureKind::Sketch(_) => "Sketch",
+            FeatureKind::Extrude(e) if e.op == BodyOp::Cut && e.thin.is_some() => "Cut-Extrude-Thin",
             FeatureKind::Extrude(e) if e.op == BodyOp::Cut => "Cut-Extrude",
+            FeatureKind::Extrude(e) if e.thin.is_some() => "Extrude-Thin",
             FeatureKind::Extrude(_) => "Boss-Extrude",
             FeatureKind::Revolve(r) if r.op == BodyOp::Cut => "Cut-Revolve",
+            FeatureKind::Revolve(r) if r.thin.is_some() => "Revolve-Thin",
             FeatureKind::Revolve(_) => "Revolve",
             FeatureKind::Plane(_) => "Plane",
             FeatureKind::LinearPattern(_) => "LPattern",
@@ -428,6 +848,17 @@ impl FeatureKind {
             FeatureKind::Chamfer(_) => "Chamfer",
             FeatureKind::Shell(_) => "Shell",
             FeatureKind::Hole(_) => "Hole",
+            FeatureKind::Mirror(_) => "Mirror",
+            FeatureKind::Sweep(s) if s.op == BodyOp::Cut => "Cut-Sweep",
+            FeatureKind::Sweep(_) => "Sweep",
+            FeatureKind::Draft(_) => "Draft",
+            FeatureKind::Loft(l) if l.op == BodyOp::Cut => "Cut-Loft",
+            FeatureKind::Loft(_) => "Loft",
+            FeatureKind::Dome(_) => "Dome",
+            FeatureKind::Axis(_) => "Axis",
+            FeatureKind::Point(_) => "Point",
+            FeatureKind::CoordSys(_) => "Coordinate System",
+            FeatureKind::SketchPattern(_) => "Sketch-Pattern",
         }
     }
 
@@ -440,12 +871,41 @@ impl FeatureKind {
         };
         match self {
             FeatureKind::Sketch(s) => plane_dep(&s.plane),
-            FeatureKind::Extrude(e) => vec![e.sketch],
+            FeatureKind::Extrude(e) => e.dependencies(),
             FeatureKind::Revolve(r) => vec![r.sketch],
             FeatureKind::Hole(h) => vec![h.sketch],
-            FeatureKind::Plane(p) => plane_dep(&p.base),
+            FeatureKind::Plane(p) => {
+                let mut v = plane_dep(&p.base);
+                v.extend(p.kind.dependencies());
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
+            FeatureKind::Axis(a) => a.kind.dependencies(),
+            FeatureKind::Sweep(s) => s.dependencies(),
+            FeatureKind::Draft(d) => d.dependencies(),
+            FeatureKind::Loft(l) => l.profiles.clone(),
+            FeatureKind::Dome(d) => d.dependencies(),
+            FeatureKind::Point(p) => p.dependencies(),
+            FeatureKind::CoordSys(c) => c.dependencies(),
             FeatureKind::LinearPattern(p) => p.features.clone(),
             FeatureKind::CircularPattern(p) => p.features.clone(),
+            FeatureKind::Mirror(m) => {
+                let mut v = m.features.clone();
+                v.extend(m.plane.dependency());
+                v.extend(m.plane2.and_then(|p| p.dependency()));
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
+            FeatureKind::SketchPattern(p) => {
+                let mut v = p.features.clone();
+                v.push(p.sketch);
+                v.extend(p.reference.and_then(|r| r.dependency()));
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
             FeatureKind::ImportedBody(_) => vec![],
             FeatureKind::Fillet(f) => edge_features(&f.edges),
             FeatureKind::Chamfer(c) => edge_features(&c.edges),

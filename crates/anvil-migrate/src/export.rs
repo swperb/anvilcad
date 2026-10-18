@@ -218,7 +218,8 @@ impl Ctx<'_> {
                 self.report.add(name, ty, Outcome::Skipped, "3D sketches are not supported yet")
             }
             "Extrusion" | "Boss" | "Cut" | "ICE" | "Revolution" | "RevCut" | "LPattern" | "CirPattern"
-            | "Fillet" | "Chamfer" | "Shell" => {
+            | "Fillet" | "Chamfer" | "Shell" | "BossThin" | "CutThin" | "RevolutionThin"
+            | "MirrorPattern" => {
                 if !self.pending.is_empty() {
                     if !self.can_rollback {
                         self.pending.push((name.into(), ty.into(), "follows imported geometry".into()));
@@ -399,6 +400,7 @@ impl Ctx<'_> {
             base: PlaneRef::Fixed(frame),
             offset: Dim::Value(0.0),
             flip: false,
+            ..Default::default()
         }));
         self.name_feature(
             id,
@@ -638,11 +640,11 @@ impl Ctx<'_> {
     fn candidates(&self, f: &Disp, ty: &str) -> Result<Vec<FeatureKind>, String> {
         let data = f.obj("GetDefinition", &[]).map_err(err)?;
         match ty {
-            "Extrusion" | "Boss" | "Cut" | "ICE" => {
+            "Extrusion" | "Boss" | "Cut" | "ICE" | "BossThin" | "CutThin" => {
                 // "ICE" extrusions can be bosses or cuts; the API does not say which, so both
                 // are tried (cut first when the name suggests it) and verification decides.
                 let op = match ty {
-                    "Cut" => BodyOp::Cut,
+                    "Cut" | "CutThin" => BodyOp::Cut,
                     "ICE" if name_hint_cut(f) => BodyOp::Cut,
                     _ => BodyOp::Boss,
                 };
@@ -651,18 +653,48 @@ impl Ctx<'_> {
                 } else {
                     vec![op]
                 };
-                if data.bool("IsThinFeature", &[]).unwrap_or(false) {
-                    return Err("thin features are not supported yet".into());
-                }
-                if data.bool("GetDraftWhileExtruding", &[true.into()]).unwrap_or(false) {
-                    return Err("drafted extrusions are not supported yet".into());
-                }
-                if data.i64("FromType", &[]).unwrap_or(0) != 0 {
-                    return Err("extrusions starting away from the sketch plane are not supported yet".into());
-                }
-                if op == BodyOp::Cut && data.bool("FlipSideToCut", &[]).unwrap_or(false) {
-                    return Err("'flip side to cut' is not supported yet".into());
-                }
+                // Thin walls (docs/re/extrude-revolve.md, swThinWallType_e): which side
+                // SOLIDWORKS calls outward is checked by verification, so both are tried.
+                let thin = if data.bool("IsThinFeature", &[]).unwrap_or(false) {
+                    let kind = data.i64("ThinWallType", &[]).unwrap_or(0);
+                    let t1 = data.f64("GetWallThickness", &[true.into()]).map_err(err)? * M_TO_MM;
+                    let t2 = data.f64("GetWallThickness", &[false.into()]).unwrap_or(0.0) * M_TO_MM;
+                    let mut w = ThinWall::new(t1);
+                    w.thickness2 = Dim::Value(t2);
+                    w.kind = match kind {
+                        2 => ThinKind::MidPlane,
+                        3 => ThinKind::TwoDirection,
+                        _ => ThinKind::OneDirection,
+                    };
+                    w.reverse = kind == 1;
+                    if data.bool("CapEnds", &[]).unwrap_or(false) {
+                        w.cap = Some(Dim::Value(data.f64("CapThickness", &[]).unwrap_or(0.0) * M_TO_MM));
+                    }
+                    let r = data.f64("GetAutoFilletRadius", &[]).unwrap_or(0.0) * M_TO_MM;
+                    if r > 0.0 {
+                        w.fillet = Some(Dim::Value(r));
+                    }
+                    Some(w)
+                } else {
+                    None
+                };
+                // Draft per direction: GetDraftOutward is true for outward.
+                let draft = |fwd: bool| -> Option<Draft> {
+                    data.bool("GetDraftWhileExtruding", &[fwd.into()]).unwrap_or(false).then(|| Draft {
+                        angle: Dim::Value(
+                            data.f64("GetDraftAngle", &[fwd.into()]).unwrap_or(0.0).to_degrees(),
+                        ),
+                        outward: data.bool("GetDraftOutward", &[fwd.into()]).unwrap_or(false),
+                    })
+                };
+                // A start offset (swStartOffset = 3).
+                let start_offset = match data.i64("FromType", &[]).unwrap_or(0) {
+                    0 => None,
+                    3 => Some(data.f64("FromOffsetDistance", &[]).unwrap_or(0.0) * M_TO_MM),
+                    _ => return Err("extrusions starting at a face or vertex are not supported yet".into()),
+                };
+                let start_flip = data.bool("FromOffsetReverse", &[]).unwrap_or(false);
+                let flip_side = op == BodyOp::Cut && data.bool("FlipSideToCut", &[]).unwrap_or(false);
                 if op == BodyOp::Boss && !data.bool("Merge", &[]).unwrap_or(true) {
                     return Err("multibody extrusions (merge result off) are not supported yet".into());
                 }
@@ -672,12 +704,25 @@ impl Ctx<'_> {
                 let e2 = data.i64("GetEndCondition", &[false.into()]).unwrap_or(0);
                 let d1 = data.f64("GetDepth", &[true.into()]).map_err(err)? * M_TO_MM;
                 let d2 = data.f64("GetDepth", &[false.into()]).unwrap_or(0.0) * M_TO_MM;
+                let mut direction2 = None;
                 let (end, depth) = match (e1, both, e2) {
                     (0, false, _) => (EndCondition::Blind, d1),
                     (6, _, _) => (EndCondition::MidPlane, d1),
                     (1, false, _) => (EndCondition::ThroughAll, 0.0),
                     (9, _, _) | (1, true, 1) => (EndCondition::ThroughAllBoth, 0.0),
-                    (0, true, 0) if (d1 - d2).abs() < 1e-6 => (EndCondition::MidPlane, 2.0 * d1),
+                    (0, true, 0) if (d1 - d2).abs() < 1e-6 && draft(true) == draft(false) => {
+                        (EndCondition::MidPlane, 2.0 * d1)
+                    }
+                    (0 | 1, true, 0 | 1) => {
+                        let end2 = if e2 == 1 { EndCondition::ThroughAll } else { EndCondition::Blind };
+                        direction2 = Some(EndSpec {
+                            end: end2,
+                            depth: Dim::Value(d2),
+                            target: None,
+                            draft: draft(false),
+                        });
+                        (if e1 == 1 { EndCondition::ThroughAll } else { EndCondition::Blind }, d1)
+                    }
                     (2 | 3 | 4 | 5 | 7 | 10 | 11, false, _) => {
                         let d = self.measured_depth(f, sketch)?;
                         *self.note.borrow_mut() = Some(format!(
@@ -690,30 +735,66 @@ impl Ctx<'_> {
                     _ => return Err("this end condition is not supported yet".into()),
                 };
                 let reverse = data.bool("ReverseDirection", &[]).unwrap_or(false);
+                let thins: Vec<Option<ThinWall>> = match &thin {
+                    Some(w) if w.kind != ThinKind::MidPlane => {
+                        let mut other = w.clone();
+                        other.reverse = !other.reverse;
+                        vec![thin.clone(), Some(other)]
+                    }
+                    _ => vec![thin.clone()],
+                };
                 let mut out = Vec::new();
                 for op in ops {
                     for r in [reverse, !reverse] {
-                        out.push(FeatureKind::Extrude(ExtrudeFeature {
-                            sketch,
-                            end,
-                            depth: Dim::Value(depth),
-                            reverse: r,
-                            op,
-                        }));
+                        for t in &thins {
+                            out.push(FeatureKind::Extrude(ExtrudeFeature {
+                                sketch,
+                                end,
+                                depth: Dim::Value(depth),
+                                reverse: r,
+                                op,
+                                draft: draft(true),
+                                direction2: direction2.clone(),
+                                thin: t.clone(),
+                                start_offset: start_offset.map(Dim::Value),
+                                start_flip,
+                                flip_side,
+                                ..Default::default()
+                            }));
+                        }
                     }
                 }
                 Ok(out)
             }
-            "Revolution" | "RevCut" => {
+            "Revolution" | "RevCut" | "RevolutionThin" => {
                 let op = if ty == "RevCut" { BodyOp::Cut } else { BodyOp::Boss };
-                if data.bool("IsThinFeature", &[]).unwrap_or(false) {
-                    return Err("thin features are not supported yet".into());
-                }
+                let thin = if data.bool("IsThinFeature", &[]).unwrap_or(false) {
+                    let kind = data.i64("ThinWallType", &[]).unwrap_or(0);
+                    let mut w =
+                        ThinWall::new(data.f64("GetWallThickness", &[true.into()]).map_err(err)? * M_TO_MM);
+                    w.thickness2 =
+                        Dim::Value(data.f64("GetWallThickness", &[false.into()]).unwrap_or(0.0) * M_TO_MM);
+                    w.kind = match kind {
+                        2 => ThinKind::MidPlane,
+                        3 => ThinKind::TwoDirection,
+                        _ => ThinKind::OneDirection,
+                    };
+                    w.reverse = kind == 1;
+                    Some(w)
+                } else {
+                    None
+                };
+                // swRevolveType_e: one direction 0, mid-plane 1, two directions 2, and
+                // the 360 degree forms 3, 4, 5.
                 let kind = data.i64("Type", &[]).unwrap_or(0);
-                let angle = match kind {
-                    0 => data.f64("GetRevolutionAngle", &[true.into()]).map_err(err)?.to_degrees(),
-                    3 => 360.0,
-                    _ => return Err("mid-plane and two-direction revolves are not supported yet".into()),
+                let a1 = data.f64("GetRevolutionAngle", &[true.into()]).unwrap_or(0.0).to_degrees();
+                let a2 = data.f64("GetRevolutionAngle", &[false.into()]).unwrap_or(0.0).to_degrees();
+                let (angle, rkind) = match kind {
+                    0 => (a1, RevolveKind::OneDirection),
+                    1 => (a1, RevolveKind::MidPlane),
+                    2 => (a1, RevolveKind::TwoDirection { angle2: Dim::Value(a2) }),
+                    3..=5 => (360.0, RevolveKind::OneDirection),
+                    _ => return Err("this revolve type is not supported yet".into()),
                 };
                 let info = self.consumed_sketch(f)?;
                 let axis = with_selections(&data, &self.model, || {
@@ -727,14 +808,37 @@ impl Ctx<'_> {
                 let sketch = info.id;
                 Ok([angle, -angle]
                     .into_iter()
-                    .map(|a| FeatureKind::Revolve(RevolveFeature { sketch, axis, angle: Dim::Value(a), op }))
+                    .map(|a| {
+                        FeatureKind::Revolve(RevolveFeature {
+                            sketch,
+                            axis,
+                            angle: Dim::Value(a.abs()),
+                            reverse: a < 0.0,
+                            kind: rkind.clone(),
+                            thin: thin.clone(),
+                            op,
+                            ..Default::default()
+                        })
+                    })
                     .collect())
             }
             "LPattern" => with_selections(&data, &self.model, || {
                 let features = self.seed_ids(&data)?;
-                if data.i64("D2TotalInstances", &[]).unwrap_or(1) > 1 {
-                    return Err("two-direction linear patterns are not supported yet".into());
-                }
+                let n2 = data.i64("D2TotalInstances", &[]).unwrap_or(1);
+                let direction2 = if n2 > 1 {
+                    let ax = data.obj("D2Axis", &[]).map_err(err)?;
+                    let (o2, d2) = axis_of(&ax).ok_or("the second pattern direction could not be read")?;
+                    let s2 = if data.bool("D2ReverseDirection", &[]).unwrap_or(false) { -1.0 } else { 1.0 };
+                    Some(PatternDirection {
+                        direction: Axis::Line { origin: o2, dir: d2 * s2 },
+                        spacing: Dim::Value(data.f64("D2Spacing", &[]).map_err(err)? * M_TO_MM),
+                        count: Dim::Value(n2 as f64),
+                        reverse: false,
+                    })
+                } else {
+                    None
+                };
+                let seed_only = data.bool("D2PatternSeedOnly", &[]).unwrap_or(false);
                 let ax = data.obj("D1Axis", &[]).map_err(err)?;
                 let (origin, dir) = axis_of(&ax).ok_or("the pattern direction could not be read")?;
                 let spacing = data.f64("D1Spacing", &[]).map_err(err)? * M_TO_MM;
@@ -748,6 +852,9 @@ impl Ctx<'_> {
                             direction: Axis::Line { origin, dir: dir * s },
                             spacing: Dim::Value(spacing),
                             count: Dim::Value(count),
+                            direction2: direction2.clone(),
+                            seed_only,
+                            ..Default::default()
                         })
                     })
                     .collect())
@@ -776,6 +883,7 @@ impl Ctx<'_> {
                             axis: Axis::Line { origin, dir: dir * s },
                             total_angle: Dim::Value(t),
                             count: Dim::Value(count),
+                            ..Default::default()
                         }));
                     }
                 }
@@ -864,6 +972,33 @@ impl Ctx<'_> {
                     }
                 }
                 Ok(vec![FeatureKind::Shell(ShellFeature { remove, thickness: Dim::Value(thickness) })])
+            }),
+            "MirrorPattern" => with_selections(&data, &self.model, || {
+                let features = self.seed_ids(&data)?;
+                let plane = data.obj("Plane", &[]).map_err(err)?;
+                let pref = match data.i64("GetMirrorPlaneType", &[]).unwrap_or(1) {
+                    // A face of the part: found by a point on it.
+                    0 => {
+                        let p = face_point(&plane).ok_or("the mirror face could not be read")?;
+                        PlaneRef::Face(
+                            self.st.body.face_at(p, 0.1).ok_or("the mirror face has no counterpart")?,
+                        )
+                    }
+                    _ => {
+                        let n = plane.string("Name", &[]).map_err(err)?;
+                        self.planes
+                            .get(&n)
+                            .copied()
+                            .ok_or_else(|| format!("the mirror plane '{n}' was not carried over"))?
+                    }
+                };
+                Ok(vec![FeatureKind::Mirror(MirrorFeature {
+                    plane: pref,
+                    features,
+                    bodies: false,
+                    plane2: None,
+                    seed_only: false,
+                })])
             }),
             _ => Err(format!("'{ty}' features are not supported yet")),
         }

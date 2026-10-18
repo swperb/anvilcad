@@ -33,9 +33,21 @@ system are still ahead; see the roadmap.
 
 **Features**
 - Extruded Boss/Base and Extruded Cut: Blind, Mid Plane, Through All, Through All - Both,
-  reverse direction
-- Revolved Boss and Revolved Cut about any sketch line
-- Linear Pattern and Circular Pattern (about any axis)
+  Up To Next, Up To Vertex, Up To Surface and Offset From Surface (leaning planes too),
+  reverse, a second direction, draft inward or outward (exact cones and leaning planes),
+  a start offset, flip side to cut, and thin walls on open or closed sketches
+  (one-direction, mid-plane, two-direction, rounded corners, capped ends)
+  ([spec](docs/re/extrude-revolve.md))
+- Revolved Boss and Revolved Cut about any sketch line: one direction, mid plane or two
+  directions, reverse, thin walls
+- Swept Boss/Base and Swept Cut along smooth paths of lines and arcs, with a sketch or
+  round profile, one way, the other or both ([spec](docs/re/sweep-and-loft.md))
+- Linear Pattern (two directions, seed only, skipped instances), Circular Pattern
+  (instance or equal spacing, both ways, skipped instances, about any axis or reference
+  axis), sketch-driven patterns, and Mirror of features or the whole body in one or two
+  planes, all exact ([spec](docs/re/mirror-and-patterns.md))
+- Draft (neutral plane, with outer, inner or all-loop propagation) and Dome
+  ([spec](docs/re/rib-draft-dome.md))
 - Fillet (constant radius, with a circular, conic rho, conic radius or
   curvature-continuous profile, and tangent propagation to the edges that run smoothly on
   from those selected) and Chamfer (equal distance, angle and distance, or offset
@@ -47,9 +59,16 @@ system are still ahead; see the roadmap.
 - Holes at sketch points: drilled, counterbored, countersunk and tapped, blind (with a
   drill point) or through, with an optional near-side countersink, sized from ISO metric
   and ANSI inch fastener tables
-- Reference planes offset from planes or faces
+- Reference planes (offset, parallel through a point, three points, line and point, at an
+  angle, mid plane, normal to a curve), reference axes, reference points and coordinate
+  systems ([spec](docs/re/reference-geometry.md))
 - Sketch on Front/Top/Right planes, reference planes, or any planar model face
 - Edit, suppress, rename, delete (with dependents), roll back
+
+**Evaluate**
+- Measure: lengths, radii, arc and chord lengths, areas and perimeters of edges and faces,
+  and distances (minimum, centre or maximum for round entities), normal distances and
+  angles between two picks, exact on exact parts ([spec](docs/re/measure-and-section.md))
 
 **Parameters and properties**
 - Global variables with equations (`width = 80`, `depth = width / 2`, functions like

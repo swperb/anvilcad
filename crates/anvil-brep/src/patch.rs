@@ -481,6 +481,17 @@ impl SplineSurface {
         }
     }
 
+    /// The patch with every control point mapped by `f` (an affine map, such as a
+    /// reflection) and `frame` as its new reference frame.
+    pub fn mapped(&self, f: impl Fn(DVec3) -> DVec3, frame: Frame) -> SplineSurface {
+        SplineSurface {
+            points: self.points.iter().map(|p| f(*p)).collect(),
+            frame,
+            grid: OnceLock::new(),
+            ..self.clone()
+        }
+    }
+
     /// A box holding the whole patch (the control net's).
     pub fn bounds(&self) -> (DVec3, DVec3) {
         self.points
@@ -555,6 +566,14 @@ impl SplineSurface {
         for i in 0..=ns {
             for j in 1..nt {
                 k = k.max(bend(at(i, j - 1), at(i, j), at(i, j + 1)));
+            }
+        }
+        // A doubly ruled patch (a twisted bilinear one, say) has straight rows and
+        // columns; its bend shows only across them, along the grid's diagonals.
+        for i in 1..ns {
+            for j in 1..nt {
+                k = k.max(bend(at(i - 1, j - 1), at(i, j), at(i + 1, j + 1)));
+                k = k.max(bend(at(i - 1, j + 1), at(i, j), at(i + 1, j - 1)));
             }
         }
         k

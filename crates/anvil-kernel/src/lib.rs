@@ -7,11 +7,13 @@
 //! - [`solid`]: boundary representation, mass properties, picking, tessellation
 //! - [`csg`]: boolean union / subtract / intersect
 //! - [`build`]: extrude and revolve
+//! - [`offset`]: offsets of line and arc chains, thin-feature walls
 
 pub mod blend;
 pub mod build;
 pub mod csg;
 pub mod math;
+pub mod offset;
 pub mod profile;
 pub mod shell;
 pub mod solid;

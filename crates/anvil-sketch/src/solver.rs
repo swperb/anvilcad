@@ -194,8 +194,17 @@ impl Sketch {
                 Tangent { line: e, entity } => {
                     let (a, b) = line(e);
                     let d = b - a;
-                    let dist = (d.cross(center(entity) - a) / d.length().max(1e-12)).abs();
-                    push(dist - radius(entity));
+                    match self.shared_end(e, entity) {
+                        // Touching at a shared end point, the radius there is square to the
+                        // line. Written this way the residual has a useful gradient; the
+                        // distance form below is flat at the solution (any point of the
+                        // line is at least as far from the centre as the line is).
+                        Some(q) => push(norm_dot(p(q) - center(entity), d)),
+                        None => {
+                            let dist = (d.cross(center(entity) - a) / d.length().max(1e-12)).abs();
+                            push(dist - radius(entity));
+                        }
+                    }
                 }
                 Concentric { a, b } => {
                     let (ca, cb) = (center(a), center(b));
@@ -220,6 +229,81 @@ impl Sketch {
                     let d = b - a;
                     push(2.0 * (d.cross(p(i) - a) / d.length().max(1e-12)).abs() - value);
                 }
+                Collinear { a, b } => {
+                    let (a0, a1) = line(a);
+                    let (b0, b1) = line(b);
+                    let d = a1 - a0;
+                    let len = d.length().max(1e-12);
+                    push(d.cross(b0 - a0) / len);
+                    push(d.cross(b1 - a0) / len);
+                }
+                Coradial { a, b } => {
+                    let (ca, cb) = (center(a), center(b));
+                    push(ca.x - cb.x);
+                    push(ca.y - cb.y);
+                    push(radius(a) - radius(b));
+                }
+                Symmetric { p: i, q: j, line: e } => {
+                    let (a, b) = line(e);
+                    let d = b - a;
+                    let len = d.length().max(1e-12);
+                    let (pi, pj) = (p(i), p(j));
+                    push(d.cross((pi + pj) * 0.5 - a) / len);
+                    push(d.dot(pj - pi) / len);
+                }
+                TangentCircles { a, b, inside } => match self.shared_end(a, b) {
+                    // Touching at a shared end point, both centres lie on one line through
+                    // it (see Tangent above for why this form).
+                    Some(q) => push(norm_cross(center(a) - p(q), center(b) - p(q))),
+                    None => {
+                        let dist = center(a).distance(center(b));
+                        let (ra, rb) = (radius(a), radius(b));
+                        push(if inside { dist - (ra - rb).abs() } else { dist - (ra + rb) });
+                    }
+                },
+                Intersection { p: i, a, b } => {
+                    for e in [a, b] {
+                        let (l0, l1) = line(e);
+                        let d = l1 - l0;
+                        push(d.cross(p(i) - l0) / d.length().max(1e-12));
+                    }
+                }
+                FixLine { line: e, x: fx, y: fy, degrees } => {
+                    let (a, b) = line(e);
+                    let u = Vec2::from_angle(degrees.to_radians());
+                    let o = v2(fx, fy);
+                    push(u.cross(a - o));
+                    push(u.cross(b - o));
+                }
+                FixRound { entity, x: fx, y: fy, r } => {
+                    let c = center(entity);
+                    push(c.x - fx);
+                    push(c.y - fy);
+                    push(radius(entity) - r);
+                }
+                Offset { base, entity, value } => {
+                    self.offset_residuals(&p, &radius, base, entity, value, &mut push)
+                }
+                SameOffset { base, entity, like_base, like_entity, flip } => {
+                    let v = self.offset_of(&p, &radius, like_base, like_entity);
+                    let v = if flip { -v } else { v };
+                    self.offset_residuals(&p, &radius, base, entity, v, &mut push);
+                }
+                PatternPoint { seed, inst, d1, i, d2, j } => {
+                    let q = p(seed) + dir(d1) * f64::from(i) + dir(d2) * f64::from(j);
+                    let r = p(inst);
+                    push(r.x - q.x);
+                    push(r.y - q.y);
+                }
+                RotatedPoint { seed, inst, k0, k1, k } => {
+                    let (c, _) = line(k0);
+                    let (u, w) = (dir(k0), dir(k1));
+                    let step = u.cross(w).atan2(u.dot(w));
+                    let q = crate::curve::rotate_about(p(seed), c, step * f64::from(k));
+                    let r = p(inst);
+                    push(r.x - q.x);
+                    push(r.y - q.y);
+                }
             }
         }
         // Arcs keep both endpoints on the same radius.
@@ -227,6 +311,66 @@ impl Sketch {
             if let Geom::Arc { c, a, b } = e.geom {
                 out.push(p(a).distance(p(c)) - p(b).distance(p(c)));
                 owner.push(usize::MAX);
+            }
+        }
+    }
+
+    /// An end point two entities share, if any. It depends only on the entities, so it
+    /// never changes between iterations.
+    fn shared_end(&self, e: usize, f: usize) -> Option<PointId> {
+        let ends = |g: Geom| match g {
+            Geom::Line { a, b } | Geom::Arc { a, b, .. } => Some([a, b]),
+            Geom::Circle { .. } => None,
+        };
+        let (x, y) = (ends(self.entities[e].geom)?, ends(self.entities[f].geom)?);
+        x.into_iter().find(|p| y.contains(p))
+    }
+
+    /// The signed offset of `entity` from `base` (see [`Constraint::Offset`]).
+    fn offset_of(
+        &self,
+        p: &dyn Fn(PointId) -> Vec2,
+        radius: &dyn Fn(usize) -> f64,
+        base: usize,
+        entity: usize,
+    ) -> f64 {
+        match (self.entities[base].geom, self.entities[entity].geom) {
+            (Geom::Line { a, b }, Geom::Line { a: ea, .. }) => {
+                let d = p(b) - p(a);
+                d.cross(p(ea) - p(a)) / d.length().max(1e-12)
+            }
+            (Geom::Line { .. }, _) | (_, Geom::Line { .. }) => 0.0,
+            _ => radius(entity) - radius(base),
+        }
+    }
+
+    /// The residuals that hold `entity` at offset `value` from `base`. Their number
+    /// depends only on the entities, so it never changes between iterations.
+    fn offset_residuals(
+        &self,
+        p: &dyn Fn(PointId) -> Vec2,
+        radius: &dyn Fn(usize) -> f64,
+        base: usize,
+        entity: usize,
+        value: f64,
+        push: &mut dyn FnMut(f64),
+    ) {
+        match (self.entities[base].geom, self.entities[entity].geom) {
+            (Geom::Line { a, b }, Geom::Line { a: ea, b: eb }) => {
+                let (pa, d) = (p(a), p(b) - p(a));
+                let len = d.length().max(1e-12);
+                push(d.cross(p(ea) - pa) / len - value);
+                push(d.cross(p(eb) - pa) / len - value);
+            }
+            (Geom::Line { .. }, _) | (_, Geom::Line { .. }) => push(0.0),
+            (bg, eg) => {
+                let (bc, ec) = (center_point(bg), center_point(eg));
+                if bc != ec {
+                    let (cb, ce) = (p(bc), p(ec));
+                    push(ce.x - cb.x);
+                    push(ce.y - cb.y);
+                }
+                push(radius(entity) - radius(base) - value);
             }
         }
     }
@@ -353,6 +497,13 @@ impl Sketch {
             res = self.solve();
         }
         res
+    }
+}
+
+fn center_point(g: Geom) -> PointId {
+    match g {
+        Geom::Circle { c, .. } | Geom::Arc { c, .. } => c,
+        Geom::Line { a, .. } => a,
     }
 }
 

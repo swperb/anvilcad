@@ -26,7 +26,7 @@ pub fn frame(f: &Frame) -> brep::Frame {
     brep::Frame { origin: d3(f.origin), x: d3(f.x), y: d3(f.y), z: d3(f.z) }
 }
 
-fn exact_loop(l: &Loop2) -> brep::Loop2 {
+pub(crate) fn exact_loop(l: &Loop2) -> brep::Loop2 {
     let mut segs = Vec::with_capacity(l.segs.len());
     let mut tags = Vec::with_capacity(l.segs.len());
     for s in &l.segs {
@@ -59,6 +59,24 @@ pub fn extrude(
 ) -> Result<Vec<brep::Solid>, String> {
     let regions = regions(profiles)?;
     let mut tools = brep::extrude::extrude_regions(&frame(f), &regions, z0, z1).map_err(|e| e.to_string())?;
+    for t in &mut tools {
+        t.set_owner(feature);
+    }
+    Ok(tools)
+}
+
+/// Extruded tool bodies with draft (see [`anvil_brep::taper`]), one per region.
+pub fn extrude_drafted(
+    profiles: &[Profile],
+    f: &Frame,
+    z0: f64,
+    z1: f64,
+    taper: f64,
+    feature: u32,
+) -> Result<Vec<brep::Solid>, String> {
+    let regions = regions(profiles)?;
+    let mut tools = brep::taper::extrude_regions_drafted(&frame(f), &regions, z0, z1, taper)
+        .map_err(|e| e.to_string())?;
     for t in &mut tools {
         t.set_owner(feature);
     }

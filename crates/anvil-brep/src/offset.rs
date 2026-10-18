@@ -208,7 +208,7 @@ fn circle_through(p: DVec3, q: DVec3, r: DVec3, like: &Frame) -> Option<Curve> {
 /// The point near `x` on all the surfaces and curves: Gauss-Newton on the surfaces'
 /// signed distances (damped, so meeting tangentially it moves no further than needed),
 /// then alternating projections onto the curves.
-fn settle<'a>(
+pub(crate) fn settle<'a>(
     mut x: DVec3,
     surfaces: impl Iterator<Item = &'a Surface> + Clone,
     curves: impl Iterator<Item = &'a Curve> + Clone,
@@ -251,7 +251,7 @@ fn settle<'a>(
 
 /// Parameters on `c` from `a` to `b`, running the way the old edge `e` ran (past the
 /// point near `mid` for an open edge; round the circle the same way for a closed one).
-fn span(c: &Curve, a: DVec3, b: DVec3, e: &Edge, mid: DVec3) -> Result<(f64, f64)> {
+pub(crate) fn span(c: &Curve, a: DVec3, b: DVec3, e: &Edge, mid: DVec3) -> Result<(f64, f64)> {
     let t0 = c.param_of(a);
     let t1 = c.param_of(b);
     let Some(period) = c.period() else { return Ok((t0, t1)) };
@@ -277,7 +277,7 @@ fn span(c: &Curve, a: DVec3, b: DVec3, e: &Edge, mid: DVec3) -> Result<(f64, f64
 
 /// The signed area round a face's outer loop in its surface's layout, or `None` where
 /// that is not meaningful (a loop going round a periodic surface).
-fn turning(solid: &Solid, f: usize, surface: &Surface) -> Option<f64> {
+pub(crate) fn turning(solid: &Solid, f: usize, surface: &Surface) -> Option<f64> {
     let face = solid.faces.get(f)?;
     let period = surface.u_period();
     let mut uv: Vec<glam::DVec2> = Vec::new();

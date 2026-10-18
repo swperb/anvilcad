@@ -201,6 +201,35 @@ impl Solid {
         )
     }
 
+    /// The solid reflected in the plane through `origin` with normal `normal`. Each
+    /// polygon's winding is reversed so normals still point out.
+    pub fn mirrored(&self, origin: Vec3, normal: Vec3) -> Solid {
+        let n = normal.normalized();
+        let pt = |v: Vec3| v - n * (2.0 * (v - origin).dot(n));
+        let dir = |v: Vec3| v - n * (2.0 * v.dot(n));
+        Solid::new(
+            self.polygons
+                .iter()
+                .filter_map(|p| {
+                    let mut tag = p.tag;
+                    tag.surface = match tag.surface {
+                        SurfaceKind::Plane => SurfaceKind::Plane,
+                        SurfaceKind::Other => SurfaceKind::Other,
+                        SurfaceKind::Cylinder { axis_origin, axis_dir, radius } => SurfaceKind::Cylinder {
+                            axis_origin: pt(axis_origin),
+                            axis_dir: dir(axis_dir),
+                            radius,
+                        },
+                        SurfaceKind::Revolved { axis_origin, axis_dir } => {
+                            SurfaceKind::Revolved { axis_origin: pt(axis_origin), axis_dir: dir(axis_dir) }
+                        }
+                    };
+                    Polygon::new(p.verts.iter().rev().map(|&v| pt(v)).collect(), tag)
+                })
+                .collect(),
+        )
+    }
+
     /// Volume, area and centroid via the divergence theorem over a fan triangulation.
     pub fn mass_properties(&self) -> MassProperties {
         let mut vol = 0.0;

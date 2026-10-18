@@ -15,6 +15,7 @@ pub enum BuildError {
     ZeroDepth,
     ZeroAngle,
     ProfileCrossesAxis,
+    DraftTooLarge,
 }
 
 impl std::fmt::Display for BuildError {
@@ -25,6 +26,9 @@ impl std::fmt::Display for BuildError {
             BuildError::ZeroAngle => write!(f, "angle must be non-zero"),
             BuildError::ProfileCrossesAxis => {
                 write!(f, "the profile crosses the axis of revolution")
+            }
+            BuildError::DraftTooLarge => {
+                write!(f, "the draft angle is too large: the profile closes up before the end")
             }
         }
     }
@@ -99,6 +103,119 @@ fn side_walls(lp: &Loop2, frame: &Frame, lo: f64, hi: f64, feature: u32, out: &m
         let w = |p: Vec2, z: f64| frame.to_world3(v3(p.x, p.y, z));
         out.extend(Polygon::new(vec![w(a, lo), w(b, lo), w(b, hi), w(a, hi)], FaceTag { id, surface }));
     }
+}
+
+/// Extrudes profiles with draft: the cross-section at height `z` is the profile moved
+/// `z * taper` outwards (inwards when negative), so the sketch plane keeps the profile as
+/// drawn. Each boundary point moves along the mitre of its two neighbouring edges, which
+/// keeps straight sides straight and corners sharp.
+pub fn extrude_drafted(
+    profiles: &[Profile],
+    frame: &Frame,
+    z0: f64,
+    z1: f64,
+    taper: f64,
+    feature: u32,
+) -> Result<Solid, BuildError> {
+    if taper == 0.0 {
+        return extrude(profiles, frame, z0, z1, feature);
+    }
+    if profiles.is_empty() {
+        return Err(BuildError::EmptyProfile);
+    }
+    if (z1 - z0).abs() < 1e-9 {
+        return Err(BuildError::ZeroDepth);
+    }
+    let (lo, hi) = (z0.min(z1), z0.max(z1));
+    let (lo_idx, hi_idx) =
+        if z1 >= z0 { (FaceId::START_CAP, FaceId::END_CAP) } else { (FaceId::END_CAP, FaceId::START_CAP) };
+    let mut polys = Vec::new();
+    for prof in profiles {
+        let mut prof = prof.clone();
+        prof.normalize_orientation();
+        let mut rings: Vec<(Vec<crate::profile::LoopSample>, Vec<Vec2>)> = Vec::new();
+        for lp in prof.loops() {
+            let samples = lp.samples(CHORD_TOL);
+            let mitres = mitres(&samples.iter().map(|s| s.p).collect::<Vec<_>>());
+            rings.push((samples, mitres));
+        }
+        let at = |pts: &[Vec2], m: &[Vec2], z: f64| -> Vec<Vec2> {
+            pts.iter().zip(m).map(|(p, m)| *p + *m * (z * taper)).collect()
+        };
+        // Every edge must keep its direction at both ends of the extrusion.
+        for (samples, m) in &rings {
+            let pts: Vec<Vec2> = samples.iter().map(|s| s.p).collect();
+            for z in [lo, hi] {
+                let moved = at(&pts, m, z);
+                let n = pts.len();
+                for i in 0..n {
+                    let (a, b) = (pts[i], pts[(i + 1) % n]);
+                    let (c, d) = (moved[i], moved[(i + 1) % n]);
+                    if (d - c).dot(b - a) <= 0.0 {
+                        return Err(BuildError::DraftTooLarge);
+                    }
+                }
+            }
+        }
+        for (z, idx, flip) in [(lo, lo_idx, true), (hi, hi_idx, false)] {
+            let mut loops = rings.iter().map(|(s, m)| at(&s.iter().map(|q| q.p).collect::<Vec<_>>(), m, z));
+            let outer = loops.next().unwrap_or_default();
+            let holes: Vec<Vec<Vec2>> = loops.collect();
+            let (pts, tris) = triangulate(&outer, &holes);
+            for t in tris {
+                let mut vs: Vec<Vec3> =
+                    t.iter().map(|&i| frame.to_world3(v3(pts[i].x, pts[i].y, z))).collect();
+                if flip {
+                    vs.reverse();
+                }
+                polys.extend(Polygon::new(vs, plane_tag(feature, idx)));
+            }
+        }
+        for ((samples, m), lp) in rings.iter().zip(prof.loops()) {
+            let pts: Vec<Vec2> = samples.iter().map(|s| s.p).collect();
+            let (bottom, top) = (at(&pts, m, lo), at(&pts, m, hi));
+            let n = pts.len();
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let seg = &lp.segs[samples[i].seg];
+                let surface = match *seg {
+                    Seg2::Line { .. } => SurfaceKind::Plane,
+                    Seg2::Arc { center, .. } => {
+                        SurfaceKind::Revolved { axis_origin: frame.to_world(center), axis_dir: frame.z }
+                    }
+                };
+                let tag = FaceTag { id: FaceId::side(feature, seg.source()), surface };
+                let w = |p: Vec2, z: f64| frame.to_world3(v3(p.x, p.y, z));
+                let quad = [w(bottom[i], lo), w(bottom[j], lo), w(top[j], hi), w(top[i], hi)];
+                // Leaning quads need not be flat; split them.
+                polys.extend(Polygon::new(vec![quad[0], quad[1], quad[2]], tag));
+                polys.extend(Polygon::new(vec![quad[0], quad[2], quad[3]], tag));
+            }
+        }
+    }
+    Ok(Solid::new(polys))
+}
+
+/// For each vertex of a closed polyline, the vector that moves it with a unit outward
+/// (right of travel) offset of both neighbouring edges.
+fn mitres(pts: &[Vec2]) -> Vec<Vec2> {
+    let n = pts.len();
+    let normal = |a: Vec2, b: Vec2| {
+        let d = (b - a).normalized();
+        crate::math::v2(d.y, -d.x)
+    };
+    (0..n)
+        .map(|i| {
+            let n1 = normal(pts[(i + n - 1) % n], pts[i]);
+            let n2 = normal(pts[i], pts[(i + 1) % n]);
+            let c = 1.0 + n1.dot(n2);
+            if c < 1e-9 {
+                n2
+            } else {
+                (n1 + n2) * (1.0 / c)
+            }
+        })
+        .collect()
 }
 
 /// Revolves profiles about an axis lying in the sketch plane, given by a point and
@@ -270,6 +387,39 @@ mod tests {
                 .any(|p| p.tag.id == FaceId::side(1, 4)
                     && matches!(p.tag.surface, SurfaceKind::Cylinder { .. }))
         );
+    }
+
+    #[test]
+    fn drafted_box_and_cylinder() {
+        let t = 5f64.to_radians().tan();
+        let prof = Profile::new(Loop2::rectangle(v2(0.0, 0.0), v2(20.0, 10.0), 0), vec![]);
+        let s = extrude_drafted(std::slice::from_ref(&prof), &Frame::WORLD, 0.0, 10.0, -t, 1).unwrap();
+        let area = |z: f64| (20.0 - 2.0 * z * t) * (10.0 - 2.0 * z * t);
+        let exact = 10.0 / 6.0 * (area(0.0) + 4.0 * area(5.0) + area(10.0));
+        assert!(close(s.mass_properties().volume, exact, 1e-9), "{}", s.mass_properties().volume);
+        assert_eq!(s.open_edges(), 0);
+        let c = Profile::new(Loop2::circle(v2(0.0, 0.0), 5.0, 0), vec![]);
+        let s = extrude_drafted(&[c], &Frame::WORLD, 0.0, 8.0, t, 1).unwrap();
+        let (r0, r1) = (5.0, 5.0 + 8.0 * t);
+        let exact = PI * 8.0 / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1);
+        assert!(close(s.mass_properties().volume, exact, 5e-3), "{}", s.mass_properties().volume);
+        assert_eq!(
+            extrude_drafted(&[prof], &Frame::WORLD, 0.0, 30.0, -1.0, 1).unwrap_err(),
+            BuildError::DraftTooLarge
+        );
+    }
+
+    #[test]
+    fn mirrored_block_keeps_its_volume() {
+        let b = block(v3(5.0, 0.0, 0.0), v3(15.0, 10.0, 4.0), 1);
+        let m = b.mirrored(v3(0.0, 0.0, 0.0), v3(1.0, 0.0, 0.0));
+        let mp = m.mass_properties();
+        assert!(close(mp.volume, 400.0, 1e-12), "{}", mp.volume);
+        assert!((mp.centroid - v3(-10.0, 5.0, 2.0)).length() < 1e-9);
+        assert_eq!(m.open_edges(), 0);
+        // Reflected in its own end face it doubles up into one longer block.
+        let u = b.union(&b.mirrored(v3(15.0, 0.0, 0.0), v3(1.0, 0.0, 0.0)));
+        assert!(close(u.mass_properties().volume, 800.0, 1e-9));
     }
 
     #[test]
