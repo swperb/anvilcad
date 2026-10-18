@@ -10,6 +10,7 @@ pub mod equations;
 pub mod exact;
 pub mod hole;
 pub mod material;
+pub mod measure;
 pub mod rebuild;
 pub mod step;
 
