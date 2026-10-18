@@ -757,6 +757,7 @@ impl Ctx<'_> {
                             direction: Axis::Line { origin, dir: dir * s },
                             spacing: Dim::Value(spacing),
                             count: Dim::Value(count),
+                            ..Default::default()
                         })
                     })
                     .collect())
@@ -785,6 +786,7 @@ impl Ctx<'_> {
                             axis: Axis::Line { origin, dir: dir * s },
                             total_angle: Dim::Value(t),
                             count: Dim::Value(count),
+                            ..Default::default()
                         }));
                     }
                 }

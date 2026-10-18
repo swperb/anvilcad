@@ -523,21 +523,129 @@ pub struct PlaneFeature {
     pub flip: bool,
 }
 
+/// A linear pattern: copies of its seed features along one or two directions. See
+/// `docs/re/mirror-and-patterns.md`. Counts include the seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinearPatternFeature {
     pub features: Vec<u32>,
     pub direction: Axis,
     pub spacing: Dim,
     pub count: Dim,
+    #[serde(default)]
+    pub reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction2: Option<PatternDirection>,
+    /// Copy only the seed along Direction 2, not the whole Direction 1 row.
+    #[serde(default)]
+    pub seed_only: bool,
+    /// Instances left out, as 1-based (Direction 1, Direction 2) places; the seed is (1, 1).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<[u32; 2]>,
 }
 
+impl Default for LinearPatternFeature {
+    fn default() -> Self {
+        LinearPatternFeature {
+            features: Vec::new(),
+            direction: Axis::X,
+            spacing: Dim::Value(20.0),
+            count: Dim::Value(3.0),
+            reverse: false,
+            direction2: None,
+            seed_only: false,
+            skip: Vec::new(),
+        }
+    }
+}
+
+/// The second direction of a linear pattern.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PatternDirection {
+    pub direction: Axis,
+    pub spacing: Dim,
+    pub count: Dim,
+    #[serde(default)]
+    pub reverse: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// A circular pattern: copies of its seed features turned about an axis. With equal
+/// spacing the angle is the total (360 spreads the instances evenly round the full
+/// circle); otherwise it is the angle between neighbouring instances. Counts include
+/// the seed.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CircularPatternFeature {
     pub features: Vec<u32>,
     pub axis: Axis,
-    /// Degrees. 360 spaces instances evenly around the full circle.
+    /// Degrees: the total with equal spacing, the step otherwise.
     pub total_angle: Dim,
     pub count: Dim,
+    #[serde(default = "yes")]
+    pub equal_spacing: bool,
+    #[serde(default)]
+    pub reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction2: Option<CircularDirection2>,
+    /// Instances left out, as (direction, k): k counts from the seed (1) in turning order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skip: Vec<[u32; 2]>,
+}
+
+impl Default for CircularPatternFeature {
+    fn default() -> Self {
+        CircularPatternFeature {
+            features: Vec::new(),
+            axis: Axis::Y,
+            total_angle: Dim::Value(360.0),
+            count: Dim::Value(4.0),
+            equal_spacing: true,
+            reverse: false,
+            direction2: None,
+            skip: Vec::new(),
+        }
+    }
+}
+
+/// The other way round the axis. Symmetric copies Direction 1's angle and count.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CircularDirection2 {
+    #[serde(default)]
+    pub symmetric: bool,
+    pub angle: Dim,
+    pub count: Dim,
+    #[serde(default = "yes")]
+    pub equal_spacing: bool,
+}
+
+/// Reflects seed features (or the whole body) in a plane or planar face, and
+/// optionally in a second one. See `docs/re/mirror-and-patterns.md`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MirrorFeature {
+    pub plane: PlaneRef,
+    #[serde(default)]
+    pub features: Vec<u32>,
+    /// Mirror the whole body built so far (and join the copy to it) instead of features.
+    #[serde(default)]
+    pub bodies: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plane2: Option<PlaneRef>,
+    /// With two planes, mirror only the seed in the second plane, not the first copy.
+    #[serde(default)]
+    pub seed_only: bool,
+}
+
+/// Copies of seed features at the free points of a sketch: each copy is the seed
+/// moved so its reference point lands on a sketch point.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SketchPatternFeature {
+    pub features: Vec<u32>,
+    pub sketch: u32,
+    /// Where on the seed each copy is placed from; the seed's centroid when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<PointRef>,
 }
 
 /// Geometry captured from another CAD system for features that cannot be rebuilt
@@ -670,6 +778,8 @@ pub enum FeatureKind {
     Chamfer(ChamferFeature),
     Shell(ShellFeature),
     Hole(crate::hole::HoleFeature),
+    Mirror(MirrorFeature),
+    SketchPattern(SketchPatternFeature),
 }
 
 impl FeatureKind {
@@ -692,6 +802,8 @@ impl FeatureKind {
             FeatureKind::Chamfer(_) => "Chamfer",
             FeatureKind::Shell(_) => "Shell",
             FeatureKind::Hole(_) => "Hole",
+            FeatureKind::Mirror(_) => "Mirror",
+            FeatureKind::SketchPattern(_) => "Sketch-Pattern",
         }
     }
 
@@ -710,6 +822,24 @@ impl FeatureKind {
             FeatureKind::Plane(p) => plane_dep(&p.base),
             FeatureKind::LinearPattern(p) => p.features.clone(),
             FeatureKind::CircularPattern(p) => p.features.clone(),
+            FeatureKind::Mirror(m) => {
+                let mut v = m.features.clone();
+                v.extend(m.plane.dependency());
+                v.extend(m.plane2.and_then(|p| p.dependency()));
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
+            FeatureKind::SketchPattern(p) => {
+                let mut v = p.features.clone();
+                v.push(p.sketch);
+                if let Some(PointRef::SketchPoint { sketch, .. }) = p.reference {
+                    v.push(sketch);
+                }
+                v.sort_unstable();
+                v.dedup();
+                v
+            }
             FeatureKind::ImportedBody(_) => vec![],
             FeatureKind::Fillet(f) => edge_features(&f.edges),
             FeatureKind::Chamfer(c) => edge_features(&c.edges),

@@ -716,6 +716,7 @@ mod tests {
             direction: Axis::Line { origin: anvil_kernel::Vec3::ZERO, dir: frame.x },
             spacing: Dim::Value(10.0),
             count: Dim::Value(3.0),
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);

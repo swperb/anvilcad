@@ -125,6 +125,7 @@ pub fn sample_part() -> Document {
         direction: Axis::X,
         spacing: Dim::Value(16.0),
         count: Dim::Value(3.0),
+        ..Default::default()
     }));
 
     // Round the plate's vertical corners, the boss rim, and the boss root.

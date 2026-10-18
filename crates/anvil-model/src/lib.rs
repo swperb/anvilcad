@@ -13,7 +13,9 @@ pub mod exact;
 mod extrude;
 pub mod hole;
 pub mod material;
+mod pattern;
 pub mod rebuild;
+mod revolve;
 pub mod step;
 pub mod thin;
 
@@ -185,6 +187,7 @@ mod tests {
             axis: Axis::Z,
             total_angle: 360.0.into(),
             count: 6.0.into(),
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -347,6 +350,7 @@ mod import_tests {
             axis: Axis::Line { origin: anvil_kernel::v3(5.0, 0.0, 0.0), dir: anvil_kernel::Vec3::Z },
             total_angle: Dim::Value(360.0),
             count: Dim::Value(4.0),
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);

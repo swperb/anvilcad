@@ -152,15 +152,6 @@ fn principal_moments(t: [[f64; 3]; 3]) -> [f64; 3] {
     e
 }
 
-/// Rotation by `angle` about the line through `origin` along `axis`.
-fn rotation_frame(origin: Vec3, axis: Vec3, angle: f64) -> Frame {
-    let rot = |v: Vec3| {
-        let (s, c) = angle.sin_cos();
-        v * c + axis.cross(v) * s + axis * axis.dot(v) * (1.0 - c)
-    };
-    Frame { origin: origin - rot(origin), x: rot(Vec3::X), y: rot(Vec3::Y), z: rot(Vec3::Z) }
-}
-
 /// Builds a solid from imported triangles. Each imported face keeps its own face id so
 /// later sketches can attach to it.
 fn imported_solid(id: u32, ib: &ImportedBodyFeature) -> Result<Solid, String> {
@@ -232,7 +223,7 @@ impl BuildState {
     }
 }
 
-fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), String> {
+pub(crate) fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), String> {
     match op {
         BodyOp::Boss => *body = body.union(tool),
         BodyOp::Cut => {
@@ -342,24 +333,14 @@ impl Document {
                 st.tools.insert(id, (tool, ef.op));
             }
             FeatureKind::Revolve(rf) => {
-                let sk = &self.sketch(rf.sketch).ok_or("the sketch this feature uses is missing")?.sketch;
-                let (a, b) = match sk.entities.get(rf.axis).map(|e| e.geom) {
-                    Some(Geom::Line { a, b }) => (sk.pos(a), sk.pos(b)),
-                    _ => return Err("the axis of revolution must be a sketch line".into()),
-                };
-                // Like SOLIDWORKS, an open profile may be closed along the axis of revolution.
-                let (frame, profiles) = match self.sketch_profiles(rf.sketch, st) {
-                    Ok(r) => r,
-                    Err(e) => match close_along_axis(sk, a, b).map(|s| s.profiles()) {
-                        Some(Ok(p)) => (self.sketch_profiles_frame(rf.sketch, st)?, p),
-                        _ => return Err(e),
-                    },
-                };
-                let ang = num(&rf.angle, "angle")?.to_radians();
-                let tool = revolve(&profiles, &frame, a, b - a, ang, id).map_err(|e| e.to_string())?;
+                if rf.flip_side {
+                    return Err("flip side to cut is not available for revolves yet".into());
+                }
+                let plan = self.plan_revolve(&rf, st)?;
+                let tool = plan.faceted(id)?;
                 let mut exact_tools = None;
                 let done = st.exact_step(id, |bodies| {
-                    let tools = exact::revolve(&profiles, &frame, a, b - a, ang, id)?;
+                    let tools = plan.exact(id)?;
                     let mut out = bodies.to_vec();
                     for t in &tools {
                         out = exact::combine(&out, t, rf.op)?;
@@ -376,51 +357,10 @@ impl Document {
                 }
                 st.tools.insert(id, (tool, rf.op));
             }
-            FeatureKind::LinearPattern(pf) => {
-                let spacing = num(&pf.spacing, "spacing")?;
-                let count = num(&pf.count, "count")?.round().max(1.0) as usize;
-                let dir = pf.direction.dir();
-                let moves: Vec<Frame> = (1..count)
-                    .map(|k| Frame { origin: dir * (spacing * k as f64), ..Frame::WORLD })
-                    .collect();
-                let seeds = pattern_seeds(&pf.features, &st.exact_tools);
-                if st.exact_step(id, |b| exact_pattern(b, &seeds?, &moves)) {
-                    return Ok(());
-                }
-                for src in &pf.features {
-                    let (tool, op) =
-                        st.tools.get(src).cloned().ok_or("a seed feature is missing or failed")?;
-                    for k in 1..count {
-                        let f = Frame { origin: dir * (spacing * k as f64), ..Frame::WORLD };
-                        apply(&mut st.body, &tool.transformed(&f), op)?;
-                    }
-                }
-            }
-            FeatureKind::CircularPattern(pf) => {
-                let total = num(&pf.total_angle, "angle")?;
-                let count = num(&pf.count, "count")?.round().max(1.0) as usize;
-                let step = if (total.abs() - 360.0).abs() < 1e-9 {
-                    total / count as f64
-                } else {
-                    total / (count.max(2) - 1) as f64
-                };
-                let axis = pf.axis.dir();
-                let moves: Vec<Frame> = (1..count)
-                    .map(|k| rotation_frame(pf.axis.origin(), axis, (step * k as f64).to_radians()))
-                    .collect();
-                let seeds = pattern_seeds(&pf.features, &st.exact_tools);
-                if st.exact_step(id, |b| exact_pattern(b, &seeds?, &moves)) {
-                    return Ok(());
-                }
-                for src in &pf.features {
-                    let (tool, op) =
-                        st.tools.get(src).cloned().ok_or("a seed feature is missing or failed")?;
-                    for k in 1..count {
-                        let f = rotation_frame(pf.axis.origin(), axis, (step * k as f64).to_radians());
-                        apply(&mut st.body, &tool.transformed(&f), op)?;
-                    }
-                }
-            }
+            FeatureKind::LinearPattern(pf) => self.rebuild_linear_pattern(id, &pf, st)?,
+            FeatureKind::CircularPattern(pf) => self.rebuild_circular_pattern(id, &pf, st)?,
+            FeatureKind::Mirror(m) => self.rebuild_mirror(id, &m, st)?,
+            FeatureKind::SketchPattern(sp) => self.rebuild_sketch_pattern(id, &sp, st)?,
             FeatureKind::ImportedBody(ib) => {
                 let mesh = imported_solid(id, &ib)?;
                 match &ib.exact {
@@ -567,54 +507,11 @@ impl Document {
             .copied()
             .ok_or_else(|| "the sketch this feature uses failed or is suppressed".into())
     }
-
-    fn sketch_profiles(
-        &self,
-        sketch_id: u32,
-        st: &BuildState,
-    ) -> Result<(Frame, Vec<anvil_kernel::Profile>), String> {
-        let sf = self.sketch(sketch_id).ok_or("the sketch this feature uses is missing")?;
-        let frame =
-            *st.frames.get(&sketch_id).ok_or("the sketch this feature uses failed or is suppressed")?;
-        let profiles = sf.sketch.profiles().map_err(|e| e.to_string())?;
-        Ok((frame, profiles))
-    }
-}
-
-type ExactSeeds = Vec<(Vec<anvil_brep::Solid>, BodyOp)>;
-
-/// The exact tool bodies of a pattern's seed features.
-fn pattern_seeds(
-    seeds: &[u32],
-    tools: &HashMap<u32, (Vec<anvil_brep::Solid>, BodyOp)>,
-) -> Result<ExactSeeds, String> {
-    seeds
-        .iter()
-        .map(|s| tools.get(s).cloned().ok_or_else(|| "a seed feature was not built exactly".to_string()))
-        .collect()
-}
-
-/// Applies a copy of every seed tool moved by each frame, in order.
-fn exact_pattern(
-    bodies: &[anvil_brep::Solid],
-    seeds: &ExactSeeds,
-    moves: &[Frame],
-) -> Result<Vec<anvil_brep::Solid>, String> {
-    let mut out = bodies.to_vec();
-    for (tools, op) in seeds {
-        for m in moves {
-            let m = exact::frame(m);
-            for t in tools {
-                out = exact::combine(&out, &t.transformed(&m), *op)?;
-            }
-        }
-    }
-    Ok(out)
 }
 
 /// If the sketch's non-construction geometry has exactly two loose ends and both lie on the
 /// axis line (a, b), returns a copy with a closing segment between them.
-fn close_along_axis(
+pub(crate) fn close_along_axis(
     sk: &anvil_sketch::Sketch,
     a: anvil_kernel::Vec2,
     b: anvil_kernel::Vec2,

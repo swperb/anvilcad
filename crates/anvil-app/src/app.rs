@@ -692,6 +692,7 @@ impl AnvilApp {
                     bufs.insert("thickness", s.thickness.text());
                 }
                 FeatureKind::Hole(h) => bufs = hole_bufs(h),
+                _ => {}
             }
         }
         self.editor = Some(Editor::Feature { id, before: Box::new(before), is_new, bufs });
@@ -764,6 +765,7 @@ impl AnvilApp {
                 axis: Axis::Y,
                 total_angle: Dim::Value(360.0),
                 count: Dim::Value(4.0),
+                ..Default::default()
             })
         } else {
             FeatureKind::LinearPattern(LinearPatternFeature {
@@ -771,6 +773,7 @@ impl AnvilApp {
                 direction: Axis::X,
                 spacing: Dim::Value(20.0),
                 count: Dim::Value(3.0),
+                ..Default::default()
             })
         };
         let id = self.doc.add_feature(kind);
@@ -1750,6 +1753,7 @@ impl AnvilApp {
                         changed |= hole_editor(ui, h, bufs, &vars, hole_points, &mut edit_positions);
                     }
                     FeatureKind::Sketch(_) => {}
+                    _ => {}
                 }
                 if let Some(e) = self.state.errors.get(&id) {
                     ui.colored_label(Palette::of(ui).error, e);
@@ -3258,6 +3262,8 @@ fn kind_name(k: &FeatureKind) -> &'static str {
         FeatureKind::Chamfer(_) => "Chamfer",
         FeatureKind::Shell(_) => "Shell",
         FeatureKind::Hole(_) => "Hole",
+        FeatureKind::Mirror(_) => "Mirror",
+        FeatureKind::SketchPattern(_) => "SketchPattern",
     }
 }
 
@@ -3276,6 +3282,8 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Chamfer(_) => Icon::Chamfer,
         FeatureKind::Shell(_) => Icon::Shell,
         FeatureKind::Hole(_) => Icon::Hole,
+        FeatureKind::Mirror(_) => Icon::LinearPattern,
+        FeatureKind::SketchPattern(_) => Icon::LinearPattern,
     }
 }
 
