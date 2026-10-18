@@ -481,6 +481,17 @@ impl SplineSurface {
         }
     }
 
+    /// The patch with every control point mapped by `f` (an affine map, such as a
+    /// reflection) and `frame` as its new reference frame.
+    pub fn mapped(&self, f: impl Fn(DVec3) -> DVec3, frame: Frame) -> SplineSurface {
+        SplineSurface {
+            points: self.points.iter().map(|p| f(*p)).collect(),
+            frame,
+            grid: OnceLock::new(),
+            ..self.clone()
+        }
+    }
+
     /// A box holding the whole patch (the control net's).
     pub fn bounds(&self) -> (DVec3, DVec3) {
         self.points
