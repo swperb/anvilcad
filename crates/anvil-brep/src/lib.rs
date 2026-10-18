@@ -13,6 +13,8 @@
 pub mod blend;
 pub mod boolean;
 pub mod check;
+pub mod dome;
+pub mod draft;
 pub mod error;
 pub mod extrude;
 pub mod freeform;
