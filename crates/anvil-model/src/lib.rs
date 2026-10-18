@@ -8,11 +8,13 @@ pub mod dfm;
 pub mod document;
 pub mod equations;
 pub mod exact;
+pub mod hole;
 pub mod material;
 pub mod rebuild;
 pub mod step;
 
 pub use document::*;
+pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};
 pub use material::{Material, MaterialClass};
 pub use rebuild::{BuildState, MassReport};
 

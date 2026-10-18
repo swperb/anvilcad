@@ -5,6 +5,7 @@ use crate::render::{Renderer, SceneData};
 use crate::sketcher::{self, OverDefine, SkSel, SketchSession, Tool};
 use crate::theme::{self, Icon, Palette, RowLook};
 use anvil_kernel::{EdgeRef, FaceId, Mesh, ModelEdge, Vec2, Vec3};
+use anvil_model::hole;
 use anvil_model::*;
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Sense, Stroke};
 use std::collections::{HashMap, VecDeque};
@@ -96,6 +97,8 @@ pub struct AnvilApp {
     fit_pending: bool,
     path: Option<PathBuf>,
     selection: Selection,
+    /// Where the selected face was clicked, so a hole can go there.
+    face_click: Option<(FaceId, Vec3)>,
     hover_face: Option<FaceId>,
     dfm: DfmState,
     sketch: Option<SketchSession>,
@@ -171,6 +174,7 @@ impl AnvilApp {
             fit_pending: true,
             path: None,
             selection: Selection::None,
+            face_click: None,
             hover_face: None,
             dfm: DfmState {
                 process: dfm::Process::CncMachining,
@@ -668,6 +672,7 @@ impl AnvilApp {
                 FeatureKind::Shell(s) => {
                     bufs.insert("thickness", s.thickness.text());
                 }
+                FeatureKind::Hole(h) => bufs = hole_bufs(h),
             }
         }
         self.editor = Some(Editor::Feature { id, before, is_new, bufs });
@@ -719,7 +724,7 @@ impl AnvilApp {
     fn cmd_pattern(&mut self, circular: bool) {
         let seed = match self.selection {
             Selection::Feature(id) => match self.doc.feature(id).map(|f| &f.kind) {
-                Some(FeatureKind::Extrude(_)) | Some(FeatureKind::Revolve(_)) => Some(id),
+                Some(FeatureKind::Extrude(_) | FeatureKind::Revolve(_) | FeatureKind::Hole(_)) => Some(id),
                 _ => None,
             },
             _ => None,
@@ -727,7 +732,7 @@ impl AnvilApp {
         let Some(seed) = seed else {
             self.message = Some((
                 "Pattern".into(),
-                "Select an extrude or revolve feature in the tree to pattern.".into(),
+                "Select an extrude, revolve or hole feature in the tree to pattern.".into(),
             ));
             return;
         };
@@ -820,6 +825,46 @@ impl AnvilApp {
         let before = self.doc.clone();
         let id =
             self.doc.add_feature(FeatureKind::Shell(ShellFeature { remove, thickness: Dim::Value(1.0) }));
+        self.open_editor(id, before, true);
+    }
+
+    /// Holes go at the points of a sketch: the selected (or open) sketch, or a new sketch
+    /// on the selected planar face with one point at its middle.
+    fn cmd_hole(&mut self) {
+        let title = "Hole";
+        if let Some(sk) = self.target_sketch() {
+            let has_points = self.doc.sketch(sk).is_some_and(|s| !hole::positions(&s.sketch).is_empty());
+            if !has_points {
+                self.message = Some((
+                    title.into(),
+                    "Holes go at the sketch's points. Add points with the Point tool, then click Hole."
+                        .into(),
+                ));
+                return;
+            }
+            self.begin_feature(|_, sk| Some(FeatureKind::Hole(default_hole(sk))));
+            return;
+        }
+        let face = match self.selection {
+            Selection::Face(f) => self.state.body.planar_face_frame(f).map(|fr| (f, fr)),
+            _ => None,
+        };
+        let Some((face, frame)) = face else {
+            self.message = Some((
+                title.into(),
+                "Select a planar face, or a sketch with points, then click Hole.".into(),
+            ));
+            return;
+        };
+        let before = self.doc.clone();
+        let mut sf = SketchFeature::new(PlaneRef::Face(face));
+        let at = match self.face_click {
+            Some((f, p)) if f == face => p,
+            _ => face_centroid(&self.state.body, face),
+        };
+        sf.sketch.add_point(frame.to_local(at));
+        let sk = self.doc.add_feature(FeatureKind::Sketch(sf));
+        let id = self.doc.add_feature(FeatureKind::Hole(default_hole(sk)));
         self.open_editor(id, before, true);
     }
 
@@ -1054,6 +1099,9 @@ impl AnvilApp {
                         }
                         if theme::command_button(ui, Icon::Shell, "Shell", None).clicked() {
                             self.cmd_shell();
+                        }
+                        if theme::command_button(ui, Icon::Hole, "Hole", None).clicked() {
+                            self.cmd_hole();
                         }
                     });
                     theme::group_rule(ui);
@@ -1384,6 +1432,14 @@ impl AnvilApp {
                         .unwrap_or_default(),
                     _ => Vec::new(),
                 };
+                // How many holes the hole feature's sketch places.
+                let hole_points = match self.doc.feature(id).map(|f| &f.kind) {
+                    Some(FeatureKind::Hole(h)) => {
+                        self.doc.sketch(h.sketch).map_or(0, |s| hole::positions(&s.sketch).len())
+                    }
+                    _ => 0,
+                };
+                let mut edit_positions = false;
                 let Some(f) = self.doc.feature_mut(id) else {
                     self.editor = None;
                     return;
@@ -1596,6 +1652,9 @@ impl AnvilApp {
                             changed = true;
                         }
                     }
+                    FeatureKind::Hole(h) => {
+                        changed |= hole_editor(ui, h, bufs, &vars, hole_points, &mut edit_positions);
+                    }
                     FeatureKind::Sketch(_) => {}
                 }
                 if let Some(e) = self.state.errors.get(&id) {
@@ -1618,6 +1677,16 @@ impl AnvilApp {
                 }
                 if let Some(ok) = close {
                     self.finish_editor(ok);
+                } else if edit_positions {
+                    // Keep the hole and open its sketch to move or add points.
+                    let sketch = match self.doc.feature(id).map(|f| &f.kind) {
+                        Some(FeatureKind::Hole(h)) => Some(h.sketch),
+                        _ => None,
+                    };
+                    self.finish_editor(true);
+                    if let Some(sk) = sketch {
+                        self.edit_sketch(sk);
+                    }
                 }
             }
         }
@@ -1927,13 +1996,11 @@ impl AnvilApp {
             }
         } else if self.sketch.is_none() {
             self.hover_edge = None;
-            let hover = resp
-                .hover_pos()
-                .and_then(|p| {
-                    let (o, d) = self.camera.ray(p, rect);
-                    self.state.body.raycast(o, d)
-                })
-                .map(|h| h.tag.id);
+            let hit = resp.hover_pos().and_then(|p| {
+                let (o, d) = self.camera.ray(p, rect);
+                self.state.body.raycast(o, d)
+            });
+            let hover = hit.as_ref().map(|h| h.tag.id);
             if hover != self.hover_face {
                 self.hover_face = hover;
                 self.scene_dirty = true;
@@ -1942,6 +2009,7 @@ impl AnvilApp {
                 match hover {
                     Some(f) => {
                         self.selection = Selection::Face(f);
+                        self.face_click = hit.map(|h| (f, h.point));
                         if matches!(self.editor, Some(Editor::PickPlane(_))) {
                             if self.state.body.planar_face_frame(f).is_some() {
                                 self.plane_picked(PlaneRef::Face(f));
@@ -3051,6 +3119,7 @@ fn kind_name(k: &FeatureKind) -> &'static str {
         FeatureKind::Fillet(_) => "Fillet",
         FeatureKind::Chamfer(_) => "Chamfer",
         FeatureKind::Shell(_) => "Shell",
+        FeatureKind::Hole(_) => "Hole",
     }
 }
 
@@ -3068,12 +3137,246 @@ fn icon(k: &FeatureKind) -> Icon {
         FeatureKind::Fillet(_) => Icon::Fillet,
         FeatureKind::Chamfer(_) => Icon::Chamfer,
         FeatureKind::Shell(_) => Icon::Shell,
+        FeatureKind::Hole(_) => Icon::Hole,
     }
 }
 
+/// The hole a new Hole command makes: a through clearance hole for an M6 screw.
+fn default_hole(sketch: u32) -> HoleFeature {
+    HoleFeature::standard(sketch, 0, hole::Standard::IsoMetric, "M6", hole::Fit::Normal).unwrap_or(
+        HoleFeature {
+            sketch,
+            kind: HoleKind::Simple,
+            diameter: Dim::Value(6.6),
+            end: HoleEnd::ThroughAll,
+            depth: Dim::Value(18.0),
+            drill_angle: Some(Dim::Value(hole::DRILL_ANGLE)),
+            near_sink: None,
+            reverse: false,
+            size: None,
+        },
+    )
+}
+
+/// The area-weighted middle of a face of the faceted body.
+fn face_centroid(body: &anvil_kernel::Solid, face: FaceId) -> Vec3 {
+    let (mut sum, mut area) = (Vec3::ZERO, 0.0);
+    for p in body.face_polygons(face) {
+        for i in 1..p.verts.len().saturating_sub(1) {
+            let (a, b, c) = (p.verts[0], p.verts[i], p.verts[i + 1]);
+            let w = (b - a).cross(c - a).length();
+            sum += (a + b + c) * (w / 3.0);
+            area += w;
+        }
+    }
+    if area > 0.0 {
+        sum * (1.0 / area)
+    } else {
+        Vec3::ZERO
+    }
+}
+
+/// Text buffers for the hole editor's dimension fields.
+fn hole_bufs(h: &HoleFeature) -> HashMap<&'static str, String> {
+    let mut b = HashMap::new();
+    b.insert("diameter", h.diameter.text());
+    b.insert("depth", h.depth.text());
+    if let Some(a) = &h.drill_angle {
+        b.insert("drill_angle", a.text());
+    }
+    if let Some(s) = &h.near_sink {
+        b.insert("near_diameter", s.diameter.text());
+        b.insert("near_angle", s.angle.text());
+    }
+    match &h.kind {
+        HoleKind::Simple => {}
+        HoleKind::Counterbore { diameter, depth } => {
+            b.insert("cb_diameter", diameter.text());
+            b.insert("cb_depth", depth.text());
+        }
+        HoleKind::Countersink(s) => {
+            b.insert("cs_diameter", s.diameter.text());
+            b.insert("cs_angle", s.angle.text());
+        }
+        HoleKind::Tapped { major, pitch, thread_depth } => {
+            b.insert("major", major.text());
+            b.insert("pitch", pitch.text());
+            b.insert("thread_depth", thread_depth.text());
+        }
+    }
+    b
+}
+
+/// The hole's property panel: type, standard size, dimensions, end and options.
+fn hole_editor(
+    ui: &mut egui::Ui,
+    h: &mut HoleFeature,
+    bufs: &mut HashMap<&'static str, String>,
+    vars: &std::collections::BTreeMap<String, f64>,
+    points: usize,
+    edit_positions: &mut bool,
+) -> bool {
+    use hole::{Fit, Standard};
+    let mut changed = false;
+    let mut resized = false;
+    let current = h.kind.index();
+    egui::ComboBox::from_label("Hole type").selected_text(h.kind.label()).show_ui(ui, |ui| {
+        for (i, label) in HoleKind::LABELS.iter().enumerate() {
+            if ui.selectable_label(current == i, *label).clicked() && current != i {
+                h.set_kind(i);
+                resized = true;
+            }
+        }
+    });
+
+    // Standard, size and fit fill the dimensions below; any of them can then be changed.
+    let standard = h.size.as_ref().map(|z| z.standard).unwrap_or_default();
+    let mut pick: Option<(Standard, String, Fit)> = None;
+    egui::ComboBox::from_label("Standard").selected_text(standard.label()).show_ui(ui, |ui| {
+        for st in Standard::ALL {
+            if ui.selectable_label(st == standard, st.label()).clicked() && st != standard {
+                if let Some(first) = st.sizes().first() {
+                    pick = Some((st, first.name.to_string(), Fit::Normal));
+                }
+            }
+        }
+    });
+    let size_name = h.size.as_ref().map(|z| z.size.clone()).unwrap_or_else(|| "Custom".into());
+    let fit = h.size.as_ref().map(|z| z.fit).unwrap_or_default();
+    egui::ComboBox::from_label("Size").selected_text(&size_name).show_ui(ui, |ui| {
+        for sz in standard.sizes() {
+            if ui.selectable_label(sz.name == size_name, sz.name).clicked() && sz.name != size_name {
+                pick = Some((standard, sz.name.to_string(), fit));
+            }
+        }
+    });
+    if !matches!(h.kind, HoleKind::Tapped { .. }) && h.size.is_some() {
+        egui::ComboBox::from_label("Fit").selected_text(fit.label()).show_ui(ui, |ui| {
+            for f in Fit::ALL {
+                if ui.selectable_label(f == fit, f.label()).clicked() && f != fit {
+                    pick = Some((standard, size_name.clone(), f));
+                }
+            }
+        });
+    }
+    if let Some((st, size, fit)) = pick {
+        if let Some(mut n) = HoleFeature::standard(h.sketch, h.kind.index(), st, &size, fit) {
+            // Keep the placement choices; take the standard's sizes.
+            n.reverse = h.reverse;
+            if !matches!(h.kind, HoleKind::Tapped { .. }) {
+                n.end = h.end;
+                n.depth = h.depth.clone();
+            }
+            n.near_sink = h.near_sink.as_ref().and(n.near_sink.clone().or_else(|| default_near_sink(&n)));
+            *h = n;
+            resized = true;
+        }
+    }
+
+    ui.add_space(4.0);
+    let label = if matches!(h.kind, HoleKind::Tapped { .. }) { "Tap drill (mm)" } else { "Diameter (mm)" };
+    let field = |ui: &mut egui::Ui,
+                 label: &str,
+                 dim: &mut Dim,
+                 key: &'static str,
+                 bufs: &mut HashMap<&'static str, String>| {
+        AnvilApp::dim_field(ui, label, dim, bufs.entry(key).or_insert_with(|| dim.text()), vars)
+    };
+    let mut typed = field(ui, label, &mut h.diameter, "diameter", bufs);
+    match &mut h.kind {
+        HoleKind::Simple => {}
+        HoleKind::Counterbore { diameter, depth } => {
+            typed |= field(ui, "Counterbore diameter (mm)", diameter, "cb_diameter", bufs);
+            typed |= field(ui, "Counterbore depth (mm)", depth, "cb_depth", bufs);
+        }
+        HoleKind::Countersink(s) => {
+            typed |= field(ui, "Countersink diameter (mm)", &mut s.diameter, "cs_diameter", bufs);
+            typed |= field(ui, "Countersink angle (deg)", &mut s.angle, "cs_angle", bufs);
+        }
+        HoleKind::Tapped { major, pitch, thread_depth } => {
+            typed |= field(ui, "Thread diameter (mm)", major, "major", bufs);
+            typed |= field(ui, "Pitch (mm)", pitch, "pitch", bufs);
+            typed |= field(ui, "Thread depth (mm)", thread_depth, "thread_depth", bufs);
+            ui.weak("The thread is recorded on the hole; the solid shows the tap drill.");
+        }
+    }
+
+    ui.add_space(4.0);
+    egui::ComboBox::from_label("End condition").selected_text(h.end.label()).show_ui(ui, |ui| {
+        for e in HoleEnd::ALL {
+            changed |= ui.selectable_value(&mut h.end, e, e.label()).changed();
+        }
+    });
+    if h.end == HoleEnd::Blind {
+        typed |= field(ui, "Depth to shoulder (mm)", &mut h.depth, "depth", bufs);
+        let mut point = h.drill_angle.is_some();
+        if ui.checkbox(&mut point, "Drill point").changed() {
+            h.drill_angle = point.then_some(Dim::Value(hole::DRILL_ANGLE));
+            bufs.insert("drill_angle", hole::DRILL_ANGLE.to_string());
+            changed = true;
+        }
+        if let Some(a) = &mut h.drill_angle {
+            typed |= field(ui, "Drill point angle (deg)", a, "drill_angle", bufs);
+        }
+    }
+    if !matches!(h.kind, HoleKind::Countersink(_)) {
+        let mut near = h.near_sink.is_some();
+        if ui.checkbox(&mut near, "Near-side countersink").changed() {
+            h.near_sink = if near { default_near_sink(h) } else { None };
+            resized = true;
+        }
+        if let Some(s) = &mut h.near_sink {
+            typed |= field(ui, "Countersink diameter (mm)", &mut s.diameter, "near_diameter", bufs);
+            typed |= field(ui, "Countersink angle (deg)", &mut s.angle, "near_angle", bufs);
+        }
+    }
+    changed |= ui.checkbox(&mut h.reverse, "Reverse direction").changed();
+    // A size typed over by hand is no longer the standard's.
+    if typed {
+        if let Some(z) = &mut h.size {
+            z.size = format!("{} (custom)", z.size.trim_end_matches(" (custom)"));
+        }
+    }
+
+    ui.add_space(4.0);
+    ui.label(match points {
+        1 => "1 hole, at the sketch's point.".to_string(),
+        n => format!("{n} holes, one at each of the sketch's points."),
+    });
+    if ui.button("Edit positions").clicked() {
+        *edit_positions = true;
+    }
+    if resized {
+        *bufs = hole_bufs(h);
+    }
+    changed || typed || resized
+}
+
+/// A near-side countersink a little wider than the bore it opens.
+fn default_near_sink(h: &HoleFeature) -> Option<hole::Sink> {
+    let bore = match &h.kind {
+        HoleKind::Counterbore { diameter: Dim::Value(d), .. } => *d,
+        HoleKind::Tapped { major: Dim::Value(m), .. } => *m,
+        _ => match h.diameter {
+            Dim::Value(d) => d,
+            Dim::Expr(_) => 6.0,
+        },
+    };
+    let angle = h.size.as_ref().map_or(hole::CSINK_ANGLE, |z| z.standard.csink_angle());
+    Some(hole::Sink { diameter: Dim::Value(bore + 1.0), angle: Dim::Value(angle) })
+}
+
 /// The sketch tools, in command-bar order.
-const SKETCH_TOOLS: [Tool; 7] =
-    [Tool::Select, Tool::Line, Tool::Centerline, Tool::Rectangle, Tool::Circle, Tool::Arc, Tool::Dimension];
+const SKETCH_TOOLS: [Tool; 8] = [
+    Tool::Select,
+    Tool::Line,
+    Tool::Centerline,
+    Tool::Rectangle,
+    Tool::Circle,
+    Tool::Arc,
+    Tool::Point,
+    Tool::Dimension,
+];
 
 fn tool_icon(t: Tool) -> Icon {
     match t {
@@ -3083,6 +3386,7 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Rectangle => Icon::Rectangle,
         Tool::Circle => Icon::Circle,
         Tool::Arc => Icon::Arc,
+        Tool::Point => Icon::Point,
         Tool::Dimension => Icon::Dimension,
     }
 }
@@ -3285,6 +3589,74 @@ mod ui_tests {
             Geom::Line { a, b } => (sk.pos(a), sk.pos(b)),
             _ => panic!("not a line"),
         }
+    }
+
+    /// A 40 x 40 x 20 block from a sketch on the Front plane.
+    fn block(h: &mut Harness) -> u32 {
+        h.app.start_sketch(PlaneRef::Front);
+        h.step(vec![]);
+        let id = h.app.sketch.as_ref().unwrap().feature;
+        h.app.doc.sketch_mut(id).unwrap().sketch.add_rectangle(v2(-20.0, -20.0), v2(20.0, 20.0));
+        h.app.exit_sketch();
+        h.app.cmd_extrude(BodyOp::Boss);
+        h.step(vec![]);
+        let ex = h.app.doc.features.last().unwrap().id;
+        if let Some(FeatureKind::Extrude(e)) = h.app.doc.feature_mut(ex).map(|f| &mut f.kind) {
+            e.depth = Dim::Value(20.0);
+        }
+        h.app.finish_editor(true);
+        h.step(vec![]);
+        ex
+    }
+
+    #[test]
+    fn hole_on_a_selected_face_then_more_points() {
+        let mut h = Harness::new();
+        let ex = block(&mut h);
+        let full = 40.0 * 40.0 * 20.0;
+
+        // Hole on the top face: one M6 clearance hole through, at the face's middle.
+        h.app.selection = Selection::Face(FaceId { feature: ex, index: FaceId::END_CAP });
+        h.app.cmd_hole();
+        h.step(vec![]);
+        assert!(matches!(h.app.editor, Some(Editor::Feature { .. })), "the hole editor opens");
+        h.app.finish_editor(true);
+        h.step(vec![]);
+        let st = &h.app.state;
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        let one = std::f64::consts::PI * 3.3 * 3.3 * 20.0;
+        let v = st.body.mass_properties().volume;
+        assert!((v - (full - one)).abs() / full < 1e-3, "{v}");
+        let hole = h.app.doc.features.last().unwrap().id;
+        let Some(FeatureKind::Hole(hf)) = h.app.doc.feature(hole).map(|f| f.kind.clone()) else {
+            panic!("expected a hole")
+        };
+        let centre = h.app.state.frames[&hf.sketch]
+            .to_world(hole::positions(&h.app.doc.sketch(hf.sketch).unwrap().sketch)[0]);
+        assert!((centre - Vec3 { x: 0.0, y: 0.0, z: 20.0 }).length() < 1e-9, "{centre:?}");
+
+        // Add a second point with the Point tool: the hole feature cuts two holes.
+        h.app.edit_sketch(hf.sketch);
+        h.step(vec![]);
+        h.tool(Tool::Point);
+        let p = h.screen(10.0, 10.0);
+        h.click(p);
+        h.app.exit_sketch();
+        h.step(vec![]);
+        assert_eq!(hole::positions(&h.app.doc.sketch(hf.sketch).unwrap().sketch).len(), 2);
+        let v = h.app.state.body.mass_properties().volume;
+        assert!((v - (full - 2.0 * one)).abs() / full < 1e-3, "{v}");
+    }
+
+    #[test]
+    fn hole_needs_a_face_or_points() {
+        let mut h = Harness::new();
+        block(&mut h);
+        h.app.selection = Selection::None;
+        let n = h.app.doc.features.len();
+        h.app.cmd_hole();
+        assert_eq!(h.app.doc.features.len(), n);
+        assert!(h.app.message.as_ref().is_some_and(|(_, m)| m.contains("planar face")));
     }
 
     #[test]

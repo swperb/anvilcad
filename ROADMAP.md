@@ -13,8 +13,9 @@ when they are in the code and tested.
    sealed hollows (a second shell inside a solid), and walls thick enough to change a
    part's shape; freeform faces that touch other surfaces without crossing them, and
    results that would touch themselves at a single point.
-2. Features: a hole feature with standard sizes (ISO and ANSI clearance, tapped,
-   counterbored and countersunk holes), mirror, sweep, loft, multi-body parts, sheet metal
+2. Features: more hole options (up-to-surface and offset end conditions, far-side and
+   under-head countersinks, slots, tapered taps, modelled and cosmetic threads, holes on
+   curved faces), mirror, sweep, loft, multi-body parts, sheet metal
    (base and edge flanges, bends, unfold to a flat pattern).
 3. Assemblies with mates; drawings with views, dimensions and title blocks fed by custom
    properties.

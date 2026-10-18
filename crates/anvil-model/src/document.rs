@@ -364,6 +364,7 @@ pub enum FeatureKind {
     Fillet(FilletFeature),
     Chamfer(ChamferFeature),
     Shell(ShellFeature),
+    Hole(crate::hole::HoleFeature),
 }
 
 impl FeatureKind {
@@ -382,6 +383,7 @@ impl FeatureKind {
             FeatureKind::Fillet(_) => "Fillet",
             FeatureKind::Chamfer(_) => "Chamfer",
             FeatureKind::Shell(_) => "Shell",
+            FeatureKind::Hole(_) => "Hole",
         }
     }
 
@@ -396,6 +398,7 @@ impl FeatureKind {
             FeatureKind::Sketch(s) => plane_dep(&s.plane),
             FeatureKind::Extrude(e) => vec![e.sketch],
             FeatureKind::Revolve(r) => vec![r.sketch],
+            FeatureKind::Hole(h) => vec![h.sketch],
             FeatureKind::Plane(p) => plane_dep(&p.base),
             FeatureKind::LinearPattern(p) => p.features.clone(),
             FeatureKind::CircularPattern(p) => p.features.clone(),
