@@ -161,6 +161,15 @@ fn trimmed(s: &Seg2, d: f64, a: Vec2, b: Vec2) -> Result<Seg2, OffsetError> {
     }
 }
 
+fn retag(s: Seg2, add: u32) -> Seg2 {
+    match s {
+        Seg2::Line { a, b, source } => Seg2::Line { a, b, source: source.wrapping_add(add) },
+        Seg2::Arc { center, radius, start, sweep, source } => {
+            Seg2::Arc { center, radius, start, sweep, source: source.wrapping_add(add) }
+        }
+    }
+}
+
 fn round(a: Vec2, b: Vec2, c: Vec2, d: f64, source: u32) -> Seg2 {
     let start = (a - c).angle();
     let end = (b - c).angle();
@@ -226,18 +235,22 @@ pub fn offset_chain(segs: &[Seg2], closed: bool, d: f64) -> Result<Vec<Seg2>, Of
 /// The wall of a thin feature: the chain thickened `left` to its left and `right` to
 /// its right (either may be zero, not both). An open chain gives one closed loop, capped
 /// square across its ends; a closed chain gives two loops, the region between them.
+/// Segments on the right keep their sources; those on the left have `left_tag` added,
+/// and the caps across the ends are `cap_source` and `cap_source + 1`, so every face of
+/// the wall can be named apart.
 pub fn thin_wall(
     segs: &[Seg2],
     closed: bool,
     left: f64,
     right_d: f64,
     cap_source: u32,
+    left_tag: u32,
 ) -> Result<Vec<Loop2>, OffsetError> {
     if left < 0.0 || right_d < 0.0 || left + right_d <= EPS {
         return Err(OffsetError::Collapsed);
     }
     let r = offset_chain(segs, closed, right_d)?;
-    let l = offset_chain(segs, closed, -left)?;
+    let l: Vec<Seg2> = offset_chain(segs, closed, -left)?.into_iter().map(|s| retag(s, left_tag)).collect();
     if closed {
         return Ok(vec![Loop2::new(r), Loop2::new(l)]);
     }
@@ -302,20 +315,20 @@ mod tests {
     fn thin_wall_of_an_open_l() {
         // An L of legs 20 and 10, thickened 2 to the left (inside the turn).
         let l = vec![line((0.0, 0.0), (20.0, 0.0), 0), line((20.0, 0.0), (20.0, 10.0), 1)];
-        let w = thin_wall(&l, false, 2.0, 0.0, 10).unwrap();
+        let w = thin_wall(&l, false, 2.0, 0.0, 10, 100).unwrap();
         assert_eq!(w.len(), 1);
         assert!(w[0].is_closed(1e-9));
         // Area of an L wall: 2 * (20 + 10 - 2).
         assert!((w[0].signed_area().abs() - 56.0).abs() < 1e-9, "{}", w[0].signed_area());
         // Mid-plane, 1 each side: 2 * (20 + 10) exactly, the corner adds and removes 1.
-        let w = thin_wall(&l, false, 1.0, 1.0, 10).unwrap();
+        let w = thin_wall(&l, false, 1.0, 1.0, 10, 100).unwrap();
         assert!((w[0].signed_area().abs() - 60.0).abs() < 1e-9, "{}", w[0].signed_area());
     }
 
     #[test]
     fn thin_wall_of_a_circle_is_a_ring() {
         let c = Loop2::circle(v2(0.0, 0.0), 10.0, 0);
-        let w = thin_wall(&c.segs, true, 0.0, 2.0, 5).unwrap();
+        let w = thin_wall(&c.segs, true, 0.0, 2.0, 5, 100).unwrap();
         assert!((area(w) - PI * (144.0 - 100.0)).abs() < 1e-9);
     }
 

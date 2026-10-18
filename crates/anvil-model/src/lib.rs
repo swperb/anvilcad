@@ -8,10 +8,12 @@ pub mod dfm;
 pub mod document;
 pub mod equations;
 pub mod exact;
+mod extrude;
 pub mod hole;
 pub mod material;
 pub mod rebuild;
 pub mod step;
+pub mod thin;
 
 pub use document::*;
 pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};
@@ -62,6 +64,7 @@ mod tests {
             depth: Dim::Value(10.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         (doc, sk, ex)
     }
@@ -90,6 +93,7 @@ mod tests {
             depth: Dim::Value(1.0),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }));
         let st = part.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -132,6 +136,7 @@ mod tests {
             depth: Dim::Value(0.0),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -157,6 +162,7 @@ mod tests {
             depth: 5.0.into(),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         // One hole at x = 20, patterned 6 times about Z.
         let mut hf = SketchFeature::new(PlaneRef::Front);
@@ -169,6 +175,7 @@ mod tests {
             depth: 0.0.into(),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }));
         doc.add_feature(FeatureKind::CircularPattern(CircularPatternFeature {
             features: vec![cut],
@@ -237,6 +244,7 @@ mod tests {
             axis,
             angle: 360.0.into(),
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -305,6 +313,7 @@ mod import_tests {
             depth: Dim::Value(0.0),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
@@ -328,6 +337,7 @@ mod import_tests {
             depth: Dim::Value(2.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         doc.add_feature(FeatureKind::CircularPattern(CircularPatternFeature {
             features: vec![ex],
@@ -363,6 +373,7 @@ mod exact_shell {
             depth: Dim::Value(20.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let side = |e: u32| FaceId::side(base, e);
         let corners = (0..4).map(|i| EdgeRef::new(side(i), side((i + 1) % 4))).collect();
@@ -424,6 +435,7 @@ mod exact_round_fillets {
             depth: Dim::Value(5.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let top = FaceId { feature: base, index: FaceId::END_CAP };
         let edges = entities.iter().map(|&e| EdgeRef::new(top, FaceId::side(base, e as u32))).collect();
@@ -472,6 +484,7 @@ mod exact_rolling_fillets {
             depth: Dim::Value(40.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let mut sf = SketchFeature::new(PlaneRef::Front);
         let c = sf.sketch.add_point(v2(0.0, 20.0));
@@ -483,6 +496,7 @@ mod exact_rolling_fillets {
             depth: Dim::Value(0.0),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }));
         let before = doc.rebuild().body.mass_properties().volume;
         let rim =
@@ -537,6 +551,7 @@ mod exact_freeform_chamfers {
             depth: Dim::Value(40.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let mut sf = SketchFeature::new(PlaneRef::Front);
         let c = sf.sketch.add_point(v2(0.0, 20.0));
@@ -548,6 +563,7 @@ mod exact_freeform_chamfers {
             depth: Dim::Value(0.0),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }));
         let before = doc.rebuild().body.mass_properties().volume;
         let rim =
@@ -586,6 +602,7 @@ mod chamfer_kinds {
             depth: Dim::Value(10.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let top = FaceId { feature: base, index: FaceId::END_CAP };
         let edge = EdgeRef::new(top, FaceId::side(base, sides[0] as u32));
@@ -733,6 +750,7 @@ mod exact_rolling_runs {
             depth: Dim::Value(50.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         // The boss: a slot (half circles of radius 3, 8 apart) on the top plane, 16 tall.
         let mut sf = SketchFeature::new(PlaneRef::Top);
@@ -755,6 +773,7 @@ mod exact_rolling_runs {
             depth: Dim::Value(16.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let before = doc.rebuild();
         assert_eq!(before.faceted_from, None);
@@ -814,6 +833,7 @@ mod revolve_open_profile {
             axis,
             angle: Dim::Value(360.0),
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);

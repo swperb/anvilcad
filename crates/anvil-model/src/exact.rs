@@ -65,6 +65,24 @@ pub fn extrude(
     Ok(tools)
 }
 
+/// Extruded tool bodies with draft (see [`anvil_brep::taper`]), one per region.
+pub fn extrude_drafted(
+    profiles: &[Profile],
+    f: &Frame,
+    z0: f64,
+    z1: f64,
+    taper: f64,
+    feature: u32,
+) -> Result<Vec<brep::Solid>, String> {
+    let regions = regions(profiles)?;
+    let mut tools = brep::taper::extrude_regions_drafted(&frame(f), &regions, z0, z1, taper)
+        .map_err(|e| e.to_string())?;
+    for t in &mut tools {
+        t.set_owner(feature);
+    }
+    Ok(tools)
+}
+
 /// Revolved tool bodies, one per region, owned by `feature`: the profiles turned by
 /// `angle` radians about the sketch line through `axis_point` along `axis_dir`.
 pub fn revolve(

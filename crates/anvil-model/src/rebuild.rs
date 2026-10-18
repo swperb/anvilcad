@@ -13,7 +13,7 @@
 use crate::document::*;
 use crate::exact;
 use anvil_kernel::blend::{blend_edges, EdgeTreatment};
-use anvil_kernel::build::{extrude, revolve};
+use anvil_kernel::build::revolve;
 use anvil_kernel::shell::shell;
 use anvil_kernel::{FaceId, FaceTag, Frame, MassProperties, Polygon, Solid, SurfaceKind, Vec3};
 use anvil_sketch::{Geom, SolveResult};
@@ -30,7 +30,7 @@ pub struct BuildState {
     pub variables: BTreeMap<String, f64>,
     pub variable_errors: BTreeMap<String, String>,
     /// The tool body each solid feature contributed, used by patterns.
-    tools: HashMap<u32, (Solid, BodyOp)>,
+    pub(crate) tools: HashMap<u32, (Solid, BodyOp)>,
     /// Exact bodies, while every feature so far was built exactly.
     pub exact: Option<Vec<anvil_brep::Solid>>,
     /// Features that were built on the exact kernel.
@@ -38,7 +38,7 @@ pub struct BuildState {
     /// The first feature that moved the part to the faceted kernel, and why.
     pub faceted_from: Option<(u32, String)>,
     /// The exact tool bodies each solid feature contributed, used by patterns.
-    exact_tools: HashMap<u32, (Vec<anvil_brep::Solid>, BodyOp)>,
+    pub(crate) exact_tools: HashMap<u32, (Vec<anvil_brep::Solid>, BodyOp)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -190,7 +190,7 @@ impl BuildState {
     /// Runs one feature on the exact kernel. On success the faceted body is regenerated
     /// from the exact result and `true` is returned. On failure the part moves to the
     /// faceted kernel for good and the caller builds the feature there.
-    fn exact_step(
+    pub(crate) fn exact_step(
         &mut self,
         id: u32,
         build: impl FnOnce(&[anvil_brep::Solid]) -> Result<Vec<anvil_brep::Solid>, String>,
@@ -237,7 +237,7 @@ fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), String> {
 }
 
 impl Document {
-    fn resolve_plane(&self, p: &PlaneRef, st: &BuildState) -> Result<Frame, String> {
+    pub(crate) fn resolve_plane(&self, p: &PlaneRef, st: &BuildState) -> Result<Frame, String> {
         if let Some(f) = p.standard_frame() {
             return Ok(f);
         }
@@ -311,35 +311,11 @@ impl Document {
                 st.frames.insert(id, f);
             }
             FeatureKind::Extrude(ef) => {
-                let (frame, profiles) = self.sketch_profiles(ef.sketch, st)?;
-                let dir = match (ef.op, ef.reverse) {
-                    (BodyOp::Boss, false) | (BodyOp::Cut, true) => 1.0,
-                    _ => -1.0,
-                };
-                let (z0, z1) = match ef.end {
-                    EndCondition::Blind => (0.0, dir * num(&ef.depth, "depth")?),
-                    EndCondition::MidPlane => {
-                        let d = num(&ef.depth, "depth")?;
-                        (-d / 2.0, d / 2.0)
-                    }
-                    EndCondition::ThroughAll | EndCondition::ThroughAllBoth => {
-                        let b = st.body.bounds();
-                        let reach = if b.is_empty() {
-                            100.0
-                        } else {
-                            b.diagonal() + (b.center() - frame.origin).length() + 1.0
-                        };
-                        if ef.end == EndCondition::ThroughAll {
-                            (0.0, dir * reach)
-                        } else {
-                            (-reach, reach)
-                        }
-                    }
-                };
-                let tool = extrude(&profiles, &frame, z0, z1, id).map_err(|e| e.to_string())?;
+                let plan = self.plan_extrude(&ef, st)?;
+                let tool = plan.faceted(id)?;
                 let mut exact_tools = None;
                 let done = st.exact_step(id, |bodies| {
-                    let tools = exact::extrude(&profiles, &frame, z0, z1, id)?;
+                    let tools = plan.exact(id)?;
                     let mut out = bodies.to_vec();
                     for t in &tools {
                         out = exact::combine(&out, t, ef.op)?;

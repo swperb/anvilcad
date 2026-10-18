@@ -915,6 +915,7 @@ mod tests {
             depth: Dim::Value(depth.abs()),
             reverse: false,
             op,
+            ..Default::default()
         }))
     }
 

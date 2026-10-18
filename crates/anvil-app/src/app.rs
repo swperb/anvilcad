@@ -691,6 +691,7 @@ impl AnvilApp {
                 depth: Dim::Value(10.0),
                 reverse: false,
                 op,
+                ..Default::default()
             }))
         });
     }
@@ -709,6 +710,7 @@ impl AnvilApp {
                     axis,
                     angle: Dim::Value(360.0),
                     op,
+                    ..Default::default()
                 })),
                 None => {
                     err = Some("A revolve needs a line in the sketch to use as its axis. Add a centerline.");
@@ -3870,6 +3872,7 @@ mod ui_tests {
             depth: Dim::Value(10.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         (doc, ex)
     }

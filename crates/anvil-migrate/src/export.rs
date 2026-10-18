@@ -699,6 +699,7 @@ impl Ctx<'_> {
                             depth: Dim::Value(depth),
                             reverse: r,
                             op,
+                            ..Default::default()
                         }));
                     }
                 }
@@ -727,7 +728,15 @@ impl Ctx<'_> {
                 let sketch = info.id;
                 Ok([angle, -angle]
                     .into_iter()
-                    .map(|a| FeatureKind::Revolve(RevolveFeature { sketch, axis, angle: Dim::Value(a), op }))
+                    .map(|a| {
+                        FeatureKind::Revolve(RevolveFeature {
+                            sketch,
+                            axis,
+                            angle: Dim::Value(a),
+                            op,
+                            ..Default::default()
+                        })
+                    })
                     .collect())
             }
             "LPattern" => with_selections(&data, &self.model, || {

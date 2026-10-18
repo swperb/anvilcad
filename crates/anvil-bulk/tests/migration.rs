@@ -48,6 +48,7 @@ fn block_step(w: f64, h: f64, d: f64) -> String {
         depth: Dim::Value(d),
         reverse: false,
         op: BodyOp::Boss,
+        ..Default::default()
     }));
     let st = doc.rebuild();
     assert!(st.errors.is_empty(), "{:?}", st.errors);

@@ -556,6 +556,7 @@ mod tests {
             depth: Dim::Value(20.0),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let mut sf = SketchFeature::new(PlaneRef::Face(FaceId { feature: ex, index: FaceId::END_CAP }));
         for &(x, y) in at {

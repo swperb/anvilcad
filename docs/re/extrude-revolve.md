@@ -652,7 +652,8 @@ corners (0, 0) and (20, 10), area 200. "Block" is a box 40 × 40 × 20, x and y 
     rectangle moved by (5, 0, 8.66025).
 21. Thin, closed rectangle, One-Direction (outward) 1 mm, Blind 10: wall area
     22 × 12 − 200 = 64, volume **640**. With Reverse (inward): 200 − 18 × 8 = 56, volume
-    **560**. Mid-Plane 2 mm: 21 × 11 − 19 × 9 = 60, volume **600**. Two-Direction, 1 out
+    **560**. Mid-Plane 1 mm (half each side): 21 × 11 − 19 × 9 = 60, volume **600**
+    (corrected during implementation: the figures are for 1 mm in all, not 2 mm). Two-Direction, 1 out
     and 2 in: 22 × 12 − 16 × 6 = 168, volume **1680**.
 22. Thin, closed rectangle, inward 1 mm, Blind 10, Cap ends 1 mm: the outer box 2000
     minus the cavity 18 × 8 × 8 = 1152 gives **848**. The body is closed (no open faces).

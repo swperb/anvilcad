@@ -50,6 +50,7 @@ pub fn sample_part() -> Document {
         depth: Dim::Expr("thickness".into()),
         reverse: false,
         op: BodyOp::Boss,
+        ..Default::default()
     }));
     let top = PlaneRef::Face(FaceId { feature: base, index: FaceId::END_CAP });
 
@@ -65,6 +66,7 @@ pub fn sample_part() -> Document {
         depth: Dim::Value(0.0),
         reverse: false,
         op: BodyOp::Cut,
+        ..Default::default()
     }));
 
     // Central boss.
@@ -81,6 +83,7 @@ pub fn sample_part() -> Document {
         depth: Dim::Value(18.0),
         reverse: false,
         op: BodyOp::Boss,
+        ..Default::default()
     }));
 
     // Bore through the boss.
@@ -96,6 +99,7 @@ pub fn sample_part() -> Document {
         depth: Dim::Value(0.0),
         reverse: false,
         op: BodyOp::Cut,
+        ..Default::default()
     }));
 
     // Slots on the front edge, patterned.
@@ -114,6 +118,7 @@ pub fn sample_part() -> Document {
         depth: Dim::Value(60.0),
         reverse: false,
         op: BodyOp::Cut,
+        ..Default::default()
     }));
     doc.add_feature(FeatureKind::LinearPattern(LinearPatternFeature {
         features: vec![slot],
@@ -196,6 +201,7 @@ mod exact_tests {
             depth: Dim::Value(height),
             reverse: false,
             op: BodyOp::Boss,
+            ..Default::default()
         }));
         let mut sf = SketchFeature::new(PlaneRef::Front);
         super::circle(&mut sf.sketch, 0.0, 20.0, 2.0 * small);
@@ -206,6 +212,7 @@ mod exact_tests {
             depth: Dim::Value(60.0),
             reverse: false,
             op: BodyOp::Cut,
+            ..Default::default()
         }));
         let st = doc.rebuild();
         assert!(st.errors.is_empty(), "{:?}", st.errors);
