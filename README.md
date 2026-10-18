@@ -30,6 +30,7 @@ system are still ahead; see the roadmap.
   conflicting relations highlighted)
 - Drag points and circles while relations stay satisfied
 - Construction geometry
+- Convert Entities: a face's edges copied into a sketch as fixed curves
 
 **Features**
 - Extruded Boss/Base and Extruded Cut: Blind, Mid Plane, Through All, Through All - Both,
@@ -46,8 +47,12 @@ system are still ahead; see the roadmap.
   (instance or equal spacing, both ways, skipped instances, about any axis or reference
   axis), sketch-driven patterns, and Mirror of features or the whole body in one or two
   planes, all exact ([spec](docs/re/mirror-and-patterns.md))
-- Draft (neutral plane, with outer, inner or all-loop propagation) and Dome
+- Draft (neutral plane, with outer, inner or all-loop propagation), Dome (spherical or
+  elliptical) and Rib (parallel or normal to the sketch, open or closed contours)
   ([spec](docs/re/rib-draft-dome.md))
+- Lofts between two profiles (exact ruled faces) or through three or more
+- Multibody parts: Combine (add, subtract, common), Move/Copy, Delete/Keep, Split and Scale,
+  and extrusions that leave a separate body ([spec](docs/re/multibody.md))
 - Fillet (constant radius, with a circular, conic rho, conic radius or
   curvature-continuous profile, and tangent propagation to the edges that run smoothly on
   from those selected) and Chamfer (equal distance, angle and distance, or offset
@@ -68,7 +73,8 @@ system are still ahead; see the roadmap.
 **Evaluate**
 - Measure: lengths, radii, arc and chord lengths, areas and perimeters of edges and faces,
   and distances (minimum, centre or maximum for round entities), normal distances and
-  angles between two picks, exact on exact parts ([spec](docs/re/measure-and-section.md))
+  angles between two picks, exact on exact parts; Section View with one to three planes,
+  which shows the part cut open without changing it ([spec](docs/re/measure-and-section.md))
 
 **Parameters and properties**
 - Global variables with equations (`width = 80`, `depth = width / 2`, functions like
