@@ -54,6 +54,22 @@ impl Entity {
             Geom::Arc { c, a, b } => vec![c, a, b],
         }
     }
+    /// Renames the entity's points through `f`.
+    pub fn remap_points(&mut self, f: &dyn Fn(PointId) -> PointId) {
+        match &mut self.geom {
+            Geom::Line { a, b } => {
+                *a = f(*a);
+                *b = f(*b);
+            }
+            Geom::Circle { c, .. } => *c = f(*c),
+            Geom::Arc { c, a, b } => {
+                *c = f(*c);
+                *a = f(*a);
+                *b = f(*b);
+            }
+        }
+    }
+
     pub fn is_line(&self) -> bool {
         matches!(self.geom, Geom::Line { .. })
     }
@@ -185,6 +201,92 @@ pub enum Constraint {
         axis: EntityId,
         value: f64,
     },
+    // The relations below were added for the sketch entity and editing tools; see
+    // `docs/re/sketch-tools.md` ("Every 2D relation") and `docs/re/sketch-entities.md`.
+    /// Two lines on one infinite line.
+    Collinear {
+        a: EntityId,
+        b: EntityId,
+    },
+    /// Two circles or arcs with the same centre and the same radius.
+    Coradial {
+        a: EntityId,
+        b: EntityId,
+    },
+    /// Points `p` and `q` are mirror images across the infinite line through `line`.
+    Symmetric {
+        p: PointId,
+        q: PointId,
+        line: EntityId,
+    },
+    /// Two circles or arcs touch: inside one another when `inside` is set, otherwise
+    /// outside. The side is chosen from the geometry when the relation is made, so the
+    /// solver never jumps to the other one.
+    TangentCircles {
+        a: EntityId,
+        b: EntityId,
+        inside: bool,
+    },
+    /// The point stays where the infinite lines through `a` and `b` cross.
+    Intersection {
+        p: PointId,
+        a: EntityId,
+        b: EntityId,
+    },
+    /// A line held on its infinite line: through (`x`, `y`) at `degrees` from the x axis.
+    /// Its end points can still slide along it.
+    FixLine {
+        line: EntityId,
+        x: f64,
+        y: f64,
+        degrees: f64,
+    },
+    /// A circle or arc whose centre stays at (`x`, `y`) and whose radius stays `r`. An
+    /// arc's end points can still slide round its circle.
+    FixRound {
+        entity: EntityId,
+        x: f64,
+        y: f64,
+        r: f64,
+    },
+    /// An offset dimension: `entity` lies `value` from `base`. For lines the distance is
+    /// signed, positive to the left of `base` walked from its first point, and both of
+    /// `entity`'s points keep it (so the lines stay parallel). For circles and arcs it is
+    /// the radius of `entity` less the radius of `base`, and the centres stay together.
+    Offset {
+        base: EntityId,
+        entity: EntityId,
+        value: f64,
+    },
+    /// `entity` lies as far from `base` as `like_entity` lies from `like_base`, measured
+    /// as for [`Constraint::Offset`] (negated when `flip` is set). One offset dimension
+    /// drives a whole offset chain through these.
+    SameOffset {
+        base: EntityId,
+        entity: EntityId,
+        like_base: EntityId,
+        like_entity: EntityId,
+        flip: bool,
+    },
+    /// A linear sketch pattern instance: `inst` = `seed` + `i` times the vector of line
+    /// `d1` + `j` times the vector of line `d2`.
+    PatternPoint {
+        seed: PointId,
+        inst: PointId,
+        d1: EntityId,
+        i: u32,
+        d2: EntityId,
+        j: u32,
+    },
+    /// A circular sketch pattern instance: `inst` is `seed` turned `k` steps about the
+    /// first point of line `k0`, one step being the angle from line `k0` to line `k1`.
+    RotatedPoint {
+        seed: PointId,
+        inst: PointId,
+        k0: EntityId,
+        k1: EntityId,
+        k: u32,
+    },
 }
 
 impl Constraint {
@@ -200,7 +302,8 @@ impl Constraint {
             | Diameter { value, .. }
             | PointLineDistance { value, .. }
             | ArcLength { value, .. }
-            | AxisDiameter { value, .. } => Some(value),
+            | AxisDiameter { value, .. }
+            | Offset { value, .. } => Some(value),
             Angle { degrees, .. } | RayAngle { degrees, .. } => Some(degrees),
             _ => None,
         }
@@ -212,6 +315,12 @@ impl Constraint {
         match self {
             HDistance { value, .. } | VDistance { value, .. } => {
                 *value = if *value < 0.0 { -v.abs() } else { v.abs() }
+            }
+            // A typed minus sign moves an offset to the other side (sketch-tools.md,
+            // "Relation and dimension", S14).
+            Offset { value, .. } => {
+                let side = if *value < 0.0 { -1.0 } else { 1.0 };
+                *value = if v < 0.0 { -side * v.abs() } else { side * v };
             }
             Distance { value, .. }
             | Length { value, .. }
@@ -230,7 +339,7 @@ impl Constraint {
     pub fn set_measured(&mut self, v: f64) {
         use Constraint::*;
         match self {
-            HDistance { value, .. } | VDistance { value, .. } => *value = v,
+            HDistance { value, .. } | VDistance { value, .. } | Offset { value, .. } => *value = v,
             _ => self.set_value(v),
         }
     }
@@ -265,6 +374,15 @@ impl Constraint {
             ArcLength { .. } => "Arc length",
             RayAngle { .. } => "Angle",
             AxisDiameter { .. } => "Diameter about axis",
+            Collinear { .. } => "Collinear",
+            Coradial { .. } => "Coradial",
+            Symmetric { .. } => "Symmetric",
+            TangentCircles { .. } => "Tangent",
+            Intersection { .. } => "Intersection",
+            FixLine { .. } | FixRound { .. } => "Fixed",
+            Offset { .. } => "Offset",
+            SameOffset { .. } => "Offset",
+            PatternPoint { .. } | RotatedPoint { .. } => "Patterned",
         }
     }
 
@@ -282,7 +400,10 @@ impl Constraint {
             | PointOnCircle { p, .. }
             | Midpoint { p, .. }
             | PointLineDistance { p, .. }
-            | AxisDiameter { p, .. } => vec![p],
+            | AxisDiameter { p, .. }
+            | Intersection { p, .. } => vec![p],
+            Symmetric { p, q, .. } => vec![p, q],
+            PatternPoint { seed, inst, .. } | RotatedPoint { seed, inst, .. } => vec![seed, inst],
             _ => vec![],
         }
     }
@@ -302,11 +423,25 @@ impl Constraint {
             AxisDiameter { axis, .. } => vec![axis],
             PointOnCircle { entity, .. } => vec![entity],
             Tangent { line, entity } => vec![line, entity],
+            Collinear { a, b }
+            | Coradial { a, b }
+            | TangentCircles { a, b, .. }
+            | Intersection { a, b, .. } => {
+                vec![a, b]
+            }
+            Symmetric { line, .. } | FixLine { line, .. } => vec![line],
+            FixRound { entity, .. } => vec![entity],
+            Offset { base, entity, .. } => vec![base, entity],
+            SameOffset { base, entity, like_base, like_entity, .. } => {
+                vec![base, entity, like_base, like_entity]
+            }
+            PatternPoint { d1, d2, .. } => vec![d1, d2],
+            RotatedPoint { k0, k1, .. } => vec![k0, k1],
             _ => vec![],
         }
     }
 
-    fn remap(&mut self, pm: &dyn Fn(PointId) -> PointId, em: &dyn Fn(EntityId) -> EntityId) {
+    pub(crate) fn remap(&mut self, pm: &dyn Fn(PointId) -> PointId, em: &dyn Fn(EntityId) -> EntityId) {
         use Constraint::*;
         match self {
             Fix { p, .. } => *p = pm(*p),
@@ -348,9 +483,129 @@ impl Constraint {
                 *line = em(*line);
                 *entity = em(*entity);
             }
+            Collinear { a, b } | Coradial { a, b } | TangentCircles { a, b, .. } => {
+                *a = em(*a);
+                *b = em(*b);
+            }
+            Intersection { p, a, b } => {
+                *p = pm(*p);
+                *a = em(*a);
+                *b = em(*b);
+            }
+            Symmetric { p, q, line } => {
+                *p = pm(*p);
+                *q = pm(*q);
+                *line = em(*line);
+            }
+            FixLine { line, .. } => *line = em(*line),
+            FixRound { entity, .. } => *entity = em(*entity),
+            Offset { base, entity, .. } => {
+                *base = em(*base);
+                *entity = em(*entity);
+            }
+            SameOffset { base, entity, like_base, like_entity, .. } => {
+                *base = em(*base);
+                *entity = em(*entity);
+                *like_base = em(*like_base);
+                *like_entity = em(*like_entity);
+            }
+            PatternPoint { seed, inst, d1, d2, .. } => {
+                *seed = pm(*seed);
+                *inst = pm(*inst);
+                *d1 = em(*d1);
+                *d2 = em(*d2);
+            }
+            RotatedPoint { seed, inst, k0, k1, .. } => {
+                *seed = pm(*seed);
+                *inst = pm(*inst);
+                *k0 = em(*k0);
+                *k1 = em(*k1);
+            }
         }
     }
 }
+
+/// Where indices went in an edit that removed points, entities or constraints: entry `i`
+/// of each list is the new index of old item `i`, or `None` if it was removed. Callers
+/// that keep their own references into a sketch (expression bindings on dimensions, a
+/// selection) use it to follow the edit.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Renumbering {
+    pub points: Vec<Option<PointId>>,
+    pub entities: Vec<Option<EntityId>>,
+    pub constraints: Vec<Option<usize>>,
+}
+
+impl Renumbering {
+    /// Every index stays where it is.
+    pub fn identity(sk: &Sketch) -> Renumbering {
+        Renumbering {
+            points: (0..sk.points.len()).map(Some).collect(),
+            entities: (0..sk.entities.len()).map(Some).collect(),
+            constraints: (0..sk.constraints.len()).map(Some).collect(),
+        }
+    }
+
+    /// This renumbering followed by `next`.
+    pub fn then(self, next: Renumbering) -> Renumbering {
+        let compose = |a: Vec<Option<usize>>, b: &[Option<usize>]| -> Vec<Option<usize>> {
+            a.into_iter().map(|i| i.and_then(|j| b.get(j).copied().flatten())).collect()
+        };
+        Renumbering {
+            points: compose(self.points, &next.points),
+            entities: compose(self.entities, &next.entities),
+            constraints: compose(self.constraints, &next.constraints),
+        }
+    }
+
+    /// True if nothing moved or went.
+    pub fn is_identity(&self) -> bool {
+        let same = |v: &[Option<usize>]| v.iter().enumerate().all(|(i, j)| *j == Some(i));
+        same(&self.points) && same(&self.entities) && same(&self.constraints)
+    }
+
+    /// The new index of point `p`.
+    pub fn point(&self, p: PointId) -> Option<PointId> {
+        self.points.get(p).copied().flatten()
+    }
+
+    /// The new index of entity `e`.
+    pub fn entity(&self, e: EntityId) -> Option<EntityId> {
+        self.entities.get(e).copied().flatten()
+    }
+}
+
+/// Why a sketch tool could not do what it was asked. The sketch is left unchanged.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SketchError {
+    /// A point or entity that is not in the sketch.
+    Missing,
+    /// The picks do not make the shape: points coincide or line up, or a size is zero.
+    Degenerate,
+    /// The tool does not work on this kind of entity, or on this many.
+    Unsupported(&'static str),
+    /// A fillet, chamfer or offset larger than the entities allow.
+    TooLarge,
+    /// The entities do not meet and cannot be made to.
+    NoIntersection,
+    /// A count outside the allowed range, such as a polygon's number of sides.
+    OutOfRange(&'static str),
+}
+
+impl std::fmt::Display for SketchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SketchError::Missing => write!(f, "that point or curve is not in the sketch"),
+            SketchError::Degenerate => write!(f, "the picks do not make a shape: points coincide or line up"),
+            SketchError::Unsupported(what) => write!(f, "{what}"),
+            SketchError::TooLarge => write!(f, "the size is larger than the curves allow"),
+            SketchError::NoIntersection => write!(f, "the curves do not meet"),
+            SketchError::OutOfRange(what) => write!(f, "{what}"),
+        }
+    }
+}
+
+impl std::error::Error for SketchError {}
 
 /// How one dimension is shown and whether it drives the sketch.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -479,37 +734,156 @@ impl Sketch {
         }
     }
 
-    /// Removes entities, the constraints that reference them, and any points no longer used.
-    /// Returns where each old constraint index went (`None` if it was removed).
+    /// Removes entities, the constraints that reference them, and the points only they
+    /// used. Points that no entity used before, such as lone sketch points and virtual
+    /// sharps, stay. Returns where each old constraint index went (`None` if it was
+    /// removed).
     pub fn delete_entities(&mut self, ids: &[EntityId]) -> Vec<Option<usize>> {
-        let mut keep_e: Vec<bool> = vec![true; self.entities.len()];
+        self.delete_entities_renumbered(ids).constraints
+    }
+
+    /// [`Sketch::delete_entities`], reporting how points and entities were renumbered too.
+    pub fn delete_entities_renumbered(&mut self, ids: &[EntityId]) -> Renumbering {
+        let (n_p, n_e, n_c) = (self.points.len(), self.entities.len(), self.constraints.len());
+        let mut doomed = vec![false; n_e];
         for &e in ids {
-            if e < keep_e.len() {
-                keep_e[e] = false;
+            if e < n_e {
+                doomed[e] = true;
             }
         }
-        let mut map = self.retain_constraints(|c| c.entities().iter().all(|&e| keep_e[e]));
-        let mut e_map = vec![usize::MAX; self.entities.len()];
+        let mut used_by_kept = vec![false; n_p];
+        let mut used_by_doomed = vec![false; n_p];
+        for (i, e) in self.entities.iter().enumerate() {
+            for p in e.points() {
+                if p < n_p {
+                    if doomed[i] {
+                        used_by_doomed[p] = true;
+                    } else {
+                        used_by_kept[p] = true;
+                    }
+                }
+            }
+        }
+        let orphans: Vec<PointId> = (0..n_p).filter(|&p| used_by_doomed[p] && !used_by_kept[p]).collect();
+        let cmap = self.retain_constraints(|c| c.entities().iter().all(|&e| e < n_e && !doomed[e]));
+        let mut e_map = vec![None; n_e];
         let mut n = 0;
-        for (i, k) in keep_e.iter().enumerate() {
-            if *k {
-                e_map[i] = n;
+        for (i, d) in doomed.iter().enumerate() {
+            if !*d {
+                e_map[i] = Some(n);
                 n += 1;
             }
         }
         let mut i = 0;
         self.entities.retain(|_| {
             i += 1;
-            keep_e[i - 1]
+            !doomed[i - 1]
         });
         for c in &mut self.constraints {
-            c.remap(&|p| p, &|e| e_map[e]);
+            c.remap(&|p| p, &|e| e_map.get(e).copied().flatten().unwrap_or(e));
         }
-        let second = self.remove_unused_points();
-        for m in &mut map {
-            *m = m.and_then(|i| second[i]);
+        let first = Renumbering { points: (0..n_p).map(Some).collect(), entities: e_map, constraints: cmap };
+        debug_assert_eq!(first.constraints.len(), n_c);
+        first.then(self.remove_points(&orphans))
+    }
+
+    /// Removes the given points and the constraints on them. The origin, and points an
+    /// entity still uses, are never removed.
+    pub fn remove_points(&mut self, ids: &[PointId]) -> Renumbering {
+        let n_p = self.points.len();
+        let mut gone = vec![false; n_p];
+        for &p in ids {
+            if p < n_p && p != ORIGIN {
+                gone[p] = true;
+            }
         }
-        map
+        for e in &self.entities {
+            for p in e.points() {
+                if p < n_p {
+                    gone[p] = false;
+                }
+            }
+        }
+        let cmap = self.retain_constraints(|c| c.points().iter().all(|&p| p < n_p && !gone[p]));
+        let mut p_map = vec![None; n_p];
+        let mut n = 0;
+        for (i, g) in gone.iter().enumerate() {
+            if !*g {
+                p_map[i] = Some(n);
+                n += 1;
+            }
+        }
+        let mut i = 0;
+        self.points.retain(|_| {
+            i += 1;
+            !gone[i - 1]
+        });
+        let pm = |p: PointId| p_map.get(p).copied().flatten().unwrap_or(p);
+        for e in &mut self.entities {
+            e.remap_points(&pm);
+        }
+        for c in &mut self.constraints {
+            c.remap(&pm, &|e| e);
+        }
+        Renumbering {
+            points: p_map,
+            entities: (0..self.entities.len()).map(Some).collect(),
+            constraints: cmap,
+        }
+    }
+
+    /// Makes `gone` and `keep` one point: everything that used `gone` uses `keep`, and
+    /// `gone` is removed. Constraints that would then relate `keep` to itself are dropped.
+    /// The origin always survives a merge.
+    pub fn merge_points(&mut self, keep: PointId, gone: PointId) -> Result<Renumbering, SketchError> {
+        let n_p = self.points.len();
+        if keep >= n_p || gone >= n_p {
+            return Err(SketchError::Missing);
+        }
+        if keep == gone {
+            return Ok(Renumbering::identity(self));
+        }
+        let (keep, gone) = if gone == ORIGIN { (gone, keep) } else { (keep, gone) };
+        let swap = |p: PointId| if p == gone { keep } else { p };
+        for e in &mut self.entities {
+            e.remap_points(&swap);
+        }
+        for c in &mut self.constraints {
+            c.remap(&swap, &|e| e);
+        }
+        let cmap = self.retain_constraints(|c| {
+            let pts = c.points();
+            !(pts.len() == 2 && pts[0] == pts[1])
+        });
+        let first = Renumbering {
+            points: (0..n_p).map(Some).collect(),
+            entities: (0..self.entities.len()).map(Some).collect(),
+            constraints: cmap,
+        };
+        Ok(first.then(self.remove_points(&[gone])))
+    }
+
+    /// The entities that use point `p` as a line or arc end point (not as a centre).
+    pub fn entities_ending_at(&self, p: PointId) -> Vec<EntityId> {
+        self.entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| match e.geom {
+                Geom::Line { a, b } | Geom::Arc { a, b, .. } => a == p || b == p,
+                Geom::Circle { .. } => false,
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The entities that use point `p` in any role.
+    pub fn entities_using(&self, p: PointId) -> Vec<EntityId> {
+        self.entities.iter().enumerate().filter(|(_, e)| e.points().contains(&p)).map(|(i, _)| i).collect()
+    }
+
+    /// True if some constraint mentions point `p`.
+    pub fn point_is_constrained(&self, p: PointId) -> bool {
+        self.constraints.iter().any(|c| c.points().contains(&p))
     }
 
     /// Removes points referenced by no entity (except the origin) along with their
@@ -688,8 +1062,26 @@ impl Sketch {
                 let w = if flip_b { b0 - b1 } else { b1 - b0 };
                 ccw_angle(u, w).to_degrees()
             }
+            Offset { base, entity, .. } => self.signed_offset(base, entity)?,
             _ => return None,
         })
+    }
+
+    /// The signed offset of `entity` from `base`, as [`Constraint::Offset`] measures it:
+    /// for two lines the distance of `entity`'s first point from `base`'s infinite line,
+    /// positive on its left; for two circles or arcs the difference of their radii.
+    pub fn signed_offset(&self, base: EntityId, entity: EntityId) -> Option<f64> {
+        let pos = |p: PointId| self.points.get(p).map(|q| q.pos());
+        match (self.entities.get(base)?.geom, self.entities.get(entity)?.geom) {
+            (Geom::Line { a, b }, Geom::Line { a: ea, .. }) => {
+                let (pa, pb, q) = (pos(a)?, pos(b)?, pos(ea)?);
+                let d = pb - pa;
+                let len = d.length();
+                (len > 1e-12).then(|| d.cross(q - pa) / len)
+            }
+            (Geom::Line { .. }, _) | (_, Geom::Line { .. }) => None,
+            _ => Some(self.radius(entity) - self.radius(base)),
+        }
     }
 
     /// Nearest point within `radius`, if any.
