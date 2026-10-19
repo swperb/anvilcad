@@ -965,6 +965,24 @@ mod tests {
         assert!(model > 200, "only {model} model pixels in the viewport");
     }
 
+    /// Every Windows install has WARP, Direct3D 12's software rasteriser, so on Windows the
+    /// render above must never be skipped. eframe leaves wgpu's DX12 backend out, which
+    /// anvil-app's Cargo.toml puts back; without it a machine with no Vulkan driver (a VM,
+    /// Remote Desktop, CI) has no adapter at all.
+    #[cfg(windows)]
+    #[test]
+    fn windows_always_renders() {
+        assert!(
+            wgpu::Instance::enabled_backend_features().contains(wgpu::Backends::DX12),
+            "wgpu was built without its DX12 backend"
+        );
+        let mut h = Headless::with_size(vec2(320.0, 200.0), 1.0);
+        h.app.open_sample();
+        h.settle();
+        let img = h.render().expect("Windows always has WARP through DX12");
+        assert_eq!((img.width, img.height), (320, 200));
+    }
+
     /// Configure the sample's base depth, make a thicker configuration from the table,
     /// switch back, and make a derived configuration that inherits the depth.
     #[test]

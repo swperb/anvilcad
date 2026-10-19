@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+# Drives the Windows 11 test VM from macOS or Linux: power and snapshots through the
+# TrueNAS middleware, and builds, tests, the headless harness and the real windowed app
+# over SSH. See docs/WINDOWS_VM.md.
+#
+# Usage: scripts/winvm/winvm <command> [args...]   (scripts/winvm/winvm help for the list)
+set -euo pipefail
+
+CONFIG="${WINVM_CONFIG:-$HOME/.config/anvilcad/winvm.env}"
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && source "$CONFIG"
+TRUENAS_HOST="${TRUENAS_HOST:-truenas-scale-1}"
+TRUENAS_USER="${TRUENAS_USER:-truenas_admin}"
+WINVM_NAME="${WINVM_NAME:-anvilwin11}"
+WINVM_ZVOL="${WINVM_ZVOL:-nas1/vms/anvil-win11}"
+WINVM_USER="${WINVM_USER:-anvil}"
+WINVM_MAC="${WINVM_MAC:-}"
+WINVM_HOST="${WINVM_HOST:-}"
+# The VM is on the NAS's LAN; by default it is reached by jumping through the NAS, which
+# works from anywhere on the Tailnet. Set WINVM_JUMP= (empty) to connect directly.
+WINVM_JUMP="${WINVM_JUMP-$TRUENAS_USER@$TRUENAS_HOST}"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
+# Each checkout (main, or a worktree) gets its own source tree and target dir in the VM,
+# so several agents can use the VM at once without rebuilding each other's work.
+SLUG="$(basename "$REPO" | tr -c 'A-Za-z0-9_.\n-' '_')"
+VM_ROOT='C:\anvil'
+VM_SRC="$VM_ROOT\\src\\$SLUG"
+VM_TARGET="$VM_ROOT\\target\\$SLUG"
+LOCAL_OUT="$REPO/target/winvm"
+
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new)
+VM_SSH_OPTS=("${SSH_OPTS[@]}")
+# TrueNAS turns off sshd's TCP forwarding, so ProxyJump is refused; nc on the NAS relays instead.
+[ -n "$WINVM_JUMP" ] && VM_SSH_OPTS+=(-o "ProxyCommand=ssh -o BatchMode=yes $WINVM_JUMP nc %h %p")
+
+die() { echo "winvm: $*" >&2; exit 1; }
+
+nas() { ssh "${SSH_OPTS[@]}" -l "$TRUENAS_USER" "$TRUENAS_HOST" "$@"; }
+
+# Calls a TrueNAS middleware method. Arguments after the method are JSON values.
+midclt() {
+  local q="" a
+  for a in "$@"; do q+=" $(printf '%q' "$a")"; done
+  nas "midclt call$q"
+}
+
+vm_id() {
+  midclt vm.query "[[\"name\",\"=\",\"$WINVM_NAME\"]]" '{"get":true,"select":["id"]}' |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
+}
+
+vm_state() {
+  midclt vm.query "[[\"name\",\"=\",\"$WINVM_NAME\"]]" '{"get":true}' |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["state"])'
+}
+
+# The VM's MAC address, from the config or from its NIC device.
+vm_mac() {
+  if [ -n "$WINVM_MAC" ]; then echo "$WINVM_MAC"; return; fi
+  midclt vm.query "[[\"name\",\"=\",\"$WINVM_NAME\"]]" '{"get":true}' |
+    python3 -c 'import json,sys
+for d in json.load(sys.stdin)["devices"]:
+    if d["dtype"] == "NIC": print(d["attributes"]["mac"]); break'
+}
+
+# The VM's LAN address: WINVM_HOST if set, otherwise found in the NAS's neighbour table.
+vm_ip() {
+  if [ -n "$WINVM_HOST" ]; then echo "$WINVM_HOST"; return; fi
+  local mac ip
+  mac="$(vm_mac | tr 'A-F' 'a-f')"
+  [ -n "$mac" ] || die "the VM has no NIC with a MAC address"
+  ip="$(nas "ip -4 neigh show dev br0 | awk '\$3==\"lladdr\" && tolower(\$4)==\"$mac\" {print \$1; exit}'")"
+  if [ -z "$ip" ]; then
+    # The neighbour entry appears once the NAS has talked to the VM; ping the subnet once.
+    nas 'n=$(ip -4 -o addr show br0 | awk "{print \$4}" | cut -d. -f1-3); for i in $(seq 1 254); do ping -c1 -W1 "$n.$i" >/dev/null 2>&1 & done; wait' || true
+    ip="$(nas "ip -4 neigh show dev br0 | awk '\$3==\"lladdr\" && tolower(\$4)==\"$mac\" {print \$1; exit}'")"
+  fi
+  [ -n "$ip" ] || die "could not find the VM's IP (MAC $mac). Is it running? Set WINVM_HOST in $CONFIG to skip the lookup."
+  echo "$ip"
+}
+
+HOST_CACHE=""
+host() { [ -n "$HOST_CACHE" ] || HOST_CACHE="$(vm_ip)"; echo "$HOST_CACHE"; }
+
+# Runs a PowerShell command in the VM and returns its exit code. The command is sent as
+# -EncodedCommand because Windows' OpenSSH passes it through a command line that would
+# otherwise strip embedded double quotes.
+vm() {
+  local script enc
+  script="\$ErrorActionPreference='Stop'; \$ProgressPreference='SilentlyContinue'; $*; exit \$LASTEXITCODE"
+  enc="$(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
+  ssh "${VM_SSH_OPTS[@]}" "$WINVM_USER@$(host)" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc"
+}
+
+# Copies a file from the VM to the local machine.
+vm_pull() { scp -q "${VM_SSH_OPTS[@]}" "$WINVM_USER@$(host):$1" "$2"; }
+
+# Copies a local file into the VM.
+vm_push() { scp -q "${VM_SSH_OPTS[@]}" "$1" "$WINVM_USER@$(host):$2"; }
+
+# Quotes a value for a single-quoted PowerShell string.
+psq() { printf "'%s'" "${1//\'/\'\'}"; }
+
+# The environment every cargo command in the VM runs with.
+cargo_env() {
+  printf '%s' "\$env:Path = \"\$env:USERPROFILE\\.cargo\\bin;\$env:Path\"; \$env:CARGO_TARGET_DIR = '$VM_TARGET'; Set-Location '$VM_SRC';"
+}
+
+# Copies the working tree (tracked and untracked, not ignored, uncommitted edits included)
+# into the VM. The source tree is replaced each time; the target dir is kept, so builds
+# stay incremental.
+cmd_sync() {
+  local list tarball
+  list="$(mktemp)"; tarball="$(mktemp).tar.gz"
+  (cd "$REPO" && git ls-files -co --exclude-standard -z |
+    while IFS= read -r -d '' f; do if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\0' "$f"; fi; done) > "$list"
+  (cd "$REPO" && COPYFILE_DISABLE=1 tar --no-recursion --null -T "$list" -czf "$tarball")
+  vm "New-Item -ItemType Directory -Force '$VM_ROOT\\incoming','$VM_TARGET' | Out-Null"
+  vm_push "$tarball" "C:/anvil/incoming/$SLUG.tar.gz"
+  vm "if (Test-Path '$VM_SRC') { Remove-Item -Recurse -Force '$VM_SRC' }; New-Item -ItemType Directory -Force '$VM_SRC' | Out-Null; tar.exe -xf '$VM_ROOT\\incoming\\$SLUG.tar.gz' -C '$VM_SRC'; Remove-Item '$VM_ROOT\\incoming\\$SLUG.tar.gz'"
+  echo "winvm: synced $(tr -cd '\0' < "$list" | wc -c | tr -d ' ') files to $VM_SRC"
+  rm -f "$list" "$tarball"
+}
+
+cmd_cargo() {
+  [ "${WINVM_NO_SYNC:-}" = 1 ] || cmd_sync
+  local args="" a
+  for a in "$@"; do args+=" $(psq "$a")"; done
+  vm "$(cargo_env) cargo$args"
+}
+
+# The checks CLAUDE.md asks for, run on Windows (rustfmt is the same everywhere, so it runs
+# locally instead).
+cmd_check() {
+  cmd_sync
+  WINVM_NO_SYNC=1 cmd_cargo clippy --workspace --all-targets
+  WINVM_NO_SYNC=1 cmd_cargo test --workspace
+}
+
+# Runs anvilcad-agent in the VM. Paths in its arguments are relative to the synced source
+# tree; write screenshots under target/winvm-out/, which is copied back to target/winvm/.
+cmd_agent() {
+  cmd_sync
+  local args="" a
+  for a in "$@"; do args+=" $(psq "$a")"; done
+  local rc=0
+  vm "$(cargo_env) New-Item -ItemType Directory -Force 'target\\winvm-out' | Out-Null; cargo run -q -p anvil-app --bin anvilcad-agent --$args" || rc=$?
+  pull_out
+  return $rc
+}
+
+# Copies target\winvm-out from the VM's source tree to target/winvm/ locally.
+pull_out() {
+  mkdir -p "$LOCAL_OUT"
+  local zip="C:/anvil/incoming/$SLUG-out.zip"
+  if vm "if (Test-Path '$VM_SRC\\target\\winvm-out\\*') { Compress-Archive -Force '$VM_SRC\\target\\winvm-out\\*' '$zip'; exit 0 } else { exit 3 }"; then
+    vm_pull "$zip" "$LOCAL_OUT/out.zip"
+    (cd "$LOCAL_OUT" && unzip -oq out.zip && rm out.zip)
+    vm "Remove-Item '$zip'"
+    echo "winvm: copied the VM's target\\winvm-out to $LOCAL_OUT"
+  fi
+}
+
+# Runs a session.ps1 action on the VM's interactive desktop (the console session the
+# auto-logon user owns), where real windows, DPI scaling and native dialogs can be seen.
+session() {
+  vm_push "$HERE/session.ps1" "C:/anvil/session.ps1"
+  vm "& 'C:\\anvil\\session.ps1' $*"
+}
+
+cmd_gui() {
+  [ $# -ge 1 ] || die "usage: winvm gui <launch|shot|click|type|key|windows|close|resolution> ..."
+  local action="$1"; shift
+  case "$action" in
+    launch)
+      # Builds the windowed app and starts it on the VM's desktop.
+      [ "${WINVM_NO_SYNC:-}" = 1 ] || cmd_sync
+      vm "$(cargo_env) cargo build -q -p anvil-app --bin anvilcad"
+      local list="" a
+      for a in "$@"; do list+="${list:+,}$(psq "$a")"; done
+      session -Action launch -Exe "$(psq "$VM_TARGET\\debug\\anvilcad.exe")" -WorkDir "$(psq "$VM_SRC")" ${list:+-ArgList "$list"}
+      ;;
+    shot)
+      local out="${1:-$LOCAL_OUT/desktop.png}"
+      mkdir -p "$(dirname "$out")"
+      session -Action shot -Path "'C:\\anvil\\desktop.png'"
+      vm_pull "C:/anvil/desktop.png" "$out"
+      echo "winvm: saved the VM's desktop to $out"
+      ;;
+    click) session -Action click -X "$1" -Y "$2" ${3:+-Button "$3"} ;;
+    type) session -Action type -Text "$(psq "$1")" ;;
+    key) session -Action key -Text "$(psq "$1")" ;;
+    windows) session -Action windows ;;
+    close) session -Action close -Name "$(psq "${1:-anvilcad}")" ;;
+    resolution) session -Action resolution -Width "${1%x*}" -Height "${1#*x}" ;;
+    *) die "unknown gui action '$action'" ;;
+  esac
+}
+
+cmd_snapshot() {
+  local name="${1:-$(date -u +%Y%m%d-%H%M%S)}"
+  midclt zfs.snapshot.create "{\"dataset\":\"$WINVM_ZVOL\",\"name\":\"$name\"}" >/dev/null
+  echo "winvm: snapshot $WINVM_ZVOL@$name"
+}
+
+cmd_snapshots() {
+  midclt zfs.snapshot.query "[[\"dataset\",\"=\",\"$WINVM_ZVOL\"]]" '{"select":["name"]}' |
+    python3 -c 'import json,sys; [print(s["name"]) for s in json.load(sys.stdin)]'
+}
+
+# Rolls the VM's disk back to a snapshot. Later snapshots are destroyed, as with zfs rollback -r.
+cmd_rollback() {
+  [ $# -eq 1 ] || die "usage: winvm rollback <snapshot name>"
+  local id; id="$(vm_id)"
+  [ "$(vm_state)" = RUNNING ] && { midclt -j 1 vm.stop "$id" '{"force_after_timeout":true}' >/dev/null; }
+  midclt zfs.snapshot.rollback "$WINVM_ZVOL@$1" '{"recursive":true,"force":true}' >/dev/null
+  midclt vm.start "$id" >/dev/null
+  echo "winvm: rolled back to $WINVM_ZVOL@$1 and started the VM; run 'winvm wait' before using it"
+}
+
+# Waits until SSH answers in the VM.
+cmd_wait() {
+  local deadline=$(( $(date +%s) + ${1:-900} ))
+  until ssh "${VM_SSH_OPTS[@]}" -o ConnectTimeout=5 "$WINVM_USER@$(host)" 'exit 0' 2>/dev/null; do
+    [ "$(date +%s)" -lt "$deadline" ] || die "timed out waiting for SSH"
+    HOST_CACHE=""; sleep 10
+  done
+  echo "winvm: $(host) is up"
+}
+
+cmd_status() {
+  echo "vm:    $WINVM_NAME ($(vm_state))"
+  local ip; ip="$(vm_ip 2>/dev/null || true)"
+  echo "ip:    ${ip:-unknown}"
+  if [ -n "$ip" ] && HOST_CACHE="$ip" vm "Write-Output ('ssh:   ok, ' + (Get-CimInstance Win32_OperatingSystem).Caption + ' ' + [Environment]::OSVersion.Version); \$l = Get-CimInstance SoftwareLicensingProduct -Filter \"PartialProductKey IS NOT NULL AND Name LIKE 'Windows%'\"; Write-Output ('licence: ' + @('unlicensed','licensed','OOB grace','OOT grace','non-genuine grace','notification','extended grace')[\$l.LicenseStatus]); \$rc = Get-Command rustc -ErrorAction SilentlyContinue; if (Test-Path \"\$env:USERPROFILE\\.cargo\\bin\\rustc.exe\") { Write-Output ('rust:  ' + (& \"\$env:USERPROFILE\\.cargo\\bin\\rustc.exe\" --version)) } else { Write-Output 'rust:  not installed (winvm provision)' }; exit 0" 2>/dev/null; then :; else
+    echo "ssh:   not answering"
+  fi
+}
+
+cmd_provision() {
+  vm "New-Item -ItemType Directory -Force '$VM_ROOT' | Out-Null"
+  vm_push "$HERE/provision.ps1" "C:/anvil/provision.ps1"
+  vm "& 'C:\\anvil\\provision.ps1' -Password $(psq "${WIN_PASS:-}")"
+}
+
+usage() {
+  cat <<'EOF'
+winvm: drive the AnvilCAD Windows 11 test VM
+
+Power and state
+  status                 VM state, IP, Windows version, licence, Rust version
+  ip                     print the VM's LAN address
+  start | stop | restart power the VM through TrueNAS
+  wait [seconds]         wait until SSH answers (default 900 s)
+  snapshot [name]        snapshot the VM's disk (default name: UTC timestamp)
+  snapshots              list snapshots
+  rollback <name>        stop, roll the disk back to a snapshot, start again
+  provision              install or update Git, Rust and the VS Build Tools in the VM
+
+Build and test (the working tree, uncommitted edits included, is synced first)
+  sync                   copy the working tree into the VM
+  cargo <args...>        run cargo in the VM, e.g. winvm cargo test -p anvil-io
+  check                  cargo clippy --workspace --all-targets and cargo test --workspace
+  agent <args...>        run anvilcad-agent in the VM; write screenshots under
+                         target/winvm-out/ and they are copied back to target/winvm/
+
+The real windowed app, on the VM's desktop
+  gui launch [args...]   build and start anvilcad.exe on the desktop
+  gui shot [out.png]     screenshot the desktop (default target/winvm/desktop.png)
+  gui click X Y [right]  click at desktop pixel X,Y
+  gui type TEXT          type text into the focused window
+  gui key KEYS           send keys in SendKeys syntax, e.g. '^s' or '{ENTER}'
+  gui windows            list top-level windows with their titles and rectangles
+  gui close [process]    close the app (default anvilcad)
+  gui resolution WxH     change the desktop size, e.g. 1920x1080
+
+Shell
+  ssh [command]          open a PowerShell session, or run one command
+EOF
+}
+
+main() {
+  local c="${1:-help}"; shift || true
+  case "$c" in
+    status) cmd_status ;;
+    ip) vm_ip ;;
+    start) midclt vm.start "$(vm_id)" >/dev/null; echo "winvm: started" ;;
+    stop) midclt -j 1 vm.stop "$(vm_id)" '{"force_after_timeout":true}' >/dev/null; echo "winvm: stopped" ;;
+    restart) midclt -j 1 vm.restart "$(vm_id)" >/dev/null; echo "winvm: restarted" ;;
+    wait) cmd_wait "$@" ;;
+    snapshot) cmd_snapshot "$@" ;;
+    snapshots) cmd_snapshots ;;
+    rollback) cmd_rollback "$@" ;;
+    provision) cmd_provision ;;
+    sync) cmd_sync ;;
+    cargo) cmd_cargo "$@" ;;
+    check) cmd_check ;;
+    agent) cmd_agent "$@" ;;
+    gui) cmd_gui "$@" ;;
+    ssh) if [ $# -eq 0 ]; then exec ssh "${VM_SSH_OPTS[@]/BatchMode=yes/BatchMode=no}" -t "$WINVM_USER@$(host)"; else vm "$*"; fi ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 2 ;;
+  esac
+}
+
+main "$@"

@@ -33,3 +33,10 @@ rfd = "0.15"
 png = "0.17"
 pollster = "0.4"
 serde_json.workspace = true
+
+# eframe builds wgpu without its DX12 backend, which leaves Windows with only Vulkan and
+# OpenGL: a machine with no Vulkan driver (a VM, Remote Desktop, an older GPU) then finds no
+# adapter at all, for the window or for headless screenshots. DX12 also brings WARP, the
+# software rasteriser every Windows install has. This only adds a feature to eframe's wgpu.
+[target.'cfg(windows)'.dependencies]
+wgpu = { version = "24.0.5", default-features = false, features = ["dx12"] }

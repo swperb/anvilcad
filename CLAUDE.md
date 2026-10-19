@@ -118,6 +118,24 @@ to recover more, as long as nothing is gated behind it.
   (`cargo run -p anvil-app`) opens a real window; don't.
 - Save harness screenshots under `target/` and look at them before you describe them.
 
+## Testing on Windows: use the Windows VM
+
+A Windows 11 Pro VM on the maintainer's TrueNAS box is the sandbox for anything that
+touches Windows: builds, tests, the headless harness and the real windowed app. Drive it
+with `scripts/winvm/winvm` (see [docs/WINDOWS_VM.md](docs/WINDOWS_VM.md)); it syncs the
+working tree over SSH, so nothing needs committing first.
+
+- Before finishing a change that could behave differently on Windows (paths, file I/O,
+  dialogs, rendering, the `windows-gnu` build, `anvil-migrate`, Document Manager), run
+  `scripts/winvm/winvm check` and say in the pull request whether it passed.
+- Use `winvm agent ... --screenshot target/winvm-out/x.png` for headless screenshots, and
+  `winvm gui launch` / `winvm gui shot` to see the real window. Running the windowed app
+  inside the VM is fine; it never touches the host's screen or input.
+- Take a `winvm snapshot` before anything that changes the VM itself (installers, registry,
+  drivers) and `winvm rollback` afterwards.
+- If `winvm status` shows the VM is unreachable, say so and carry on with local checks;
+  CI's `windows-latest` job still covers the build.
+
 ## Engineering standards
 
 - Stability and performance come first. Library code never panics on bad input; it returns
