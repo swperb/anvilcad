@@ -17,10 +17,12 @@ and never touches the host's mouse or keyboard.
 
 The VM's settings live outside the repository in `~/.config/anvilcad/winvm.env`
 (`TRUENAS_HOST`, `TRUENAS_USER`, `WINVM_NAME`, `WINVM_ZVOL`, `WINVM_USER`, `WINVM_MAC`,
-optionally `WINVM_HOST` to skip the IP lookup, and `WIN_PASS` for `provision`). Keep that
+optionally `WINVM_HOST` to skip the IP lookup and `WINVM_JUMP` to change the SSH relay, and `WIN_PASS` for `provision`). Keep that
 file at mode 600. The harness reaches TrueNAS as `truenas_admin` over SSH and calls its
 middleware (`midclt`) for power and snapshots; it reaches Windows over SSH with your
-`~/.ssh/id_ed25519` key.
+`~/.ssh/id_ed25519` key, relayed through `nc` on the NAS (TrueNAS turns off SSH port
+forwarding, so `ProxyJump` is refused). That works from anywhere on the Tailnet; set
+`WINVM_JUMP=` (empty) to connect straight to the VM when you are on its LAN.
 
 ## Everyday use
 
@@ -72,7 +74,8 @@ scripts/winvm/winvm gui shot target/winvm/desktop.png
 
 `gui windows` lists windows with their rectangles in desktop pixels, `gui click X Y`
 clicks, `gui type TEXT` types, `gui key '^s'` sends keys in SendKeys syntax and
-`gui close` quits the app. Each action runs as a scheduled task in the signed-in session.
+`gui close` quits the app. `gui resolution 1920x1080` changes the desktop size (it
+starts at 1024x768, smaller than the app's default window). Each action runs as a scheduled task in the signed-in session.
 If someone left that session through Remote Desktop, the harness moves it back to the
 console first.
 
@@ -138,6 +141,10 @@ The Home Assistant VM's `haos.img` moves the same way, as a file copy.
 
 - The VM shares a 4-core, 16 GB NAS with other services, so a cold `cargo test --workspace`
   is slow (expect tens of minutes); incremental runs are much quicker.
-- There is no GPU, so rendering is WARP only. Hardware-specific driver bugs still need a
-  real machine.
+- There is no GPU, so rendering is WARP only (DX12 on Microsoft's software rasteriser).
+  Hardware-specific driver bugs still need a real machine. The NAS has an RTX 3060, but it
+  cannot be passed through as things stand: it is the host's only GPU (the i5-7500's HD 630
+  is off in the firmware) and TrueNAS keeps one for the host, and its IOMMU group includes
+  the CPU's PCIe root port (`00:01.0`), which TrueNAS 24.10 refuses to isolate. Passing it
+  through would also take it from the host while the VM runs.
 - It is x86-64 only; Windows on Arm is not covered.

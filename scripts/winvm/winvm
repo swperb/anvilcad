@@ -115,7 +115,7 @@ cmd_sync() {
   local list tarball
   list="$(mktemp)"; tarball="$(mktemp).tar.gz"
   (cd "$REPO" && git ls-files -co --exclude-standard -z |
-    while IFS= read -r -d '' f; do [ -f "$f" ] && [ ! -L "$f" ] && printf '%s\0' "$f"; done) > "$list"
+    while IFS= read -r -d '' f; do if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\0' "$f"; fi; done) > "$list"
   (cd "$REPO" && COPYFILE_DISABLE=1 tar --no-recursion --null -T "$list" -czf "$tarball")
   vm "New-Item -ItemType Directory -Force '$VM_ROOT\\incoming','$VM_TARGET' | Out-Null"
   vm_push "$tarball" "C:/anvil/incoming/$SLUG.tar.gz"
@@ -171,7 +171,7 @@ session() {
 }
 
 cmd_gui() {
-  [ $# -ge 1 ] || die "usage: winvm gui <launch|shot|click|type|key|windows|close> ..."
+  [ $# -ge 1 ] || die "usage: winvm gui <launch|shot|click|type|key|windows|close|resolution> ..."
   local action="$1"; shift
   case "$action" in
     launch)
@@ -194,6 +194,7 @@ cmd_gui() {
     key) session -Action key -Text "$(psq "$1")" ;;
     windows) session -Action windows ;;
     close) session -Action close -Name "$(psq "${1:-anvilcad}")" ;;
+    resolution) session -Action resolution -Width "${1%x*}" -Height "${1#*x}" ;;
     *) die "unknown gui action '$action'" ;;
   esac
 }
@@ -273,6 +274,7 @@ The real windowed app, on the VM's desktop
   gui key KEYS           send keys in SendKeys syntax, e.g. '^s' or '{ENTER}'
   gui windows            list top-level windows with their titles and rectangles
   gui close [process]    close the app (default anvilcad)
+  gui resolution WxH     change the desktop size, e.g. 1920x1080
 
 Shell
   ssh [command]          open a PowerShell session, or run one command

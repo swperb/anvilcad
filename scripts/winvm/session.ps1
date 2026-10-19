@@ -5,11 +5,11 @@
 # it wrote. If someone left that session through Remote Desktop, it is first moved back to
 # the console so that it has a screen to draw on.
 param(
-  [Parameter(Mandatory)][ValidateSet('launch', 'shot', 'click', 'type', 'key', 'windows', 'close')]
+  [Parameter(Mandatory)][ValidateSet('launch', 'shot', 'click', 'type', 'key', 'windows', 'close', 'resolution')]
   [string]$Action,
   [string]$Exe, [string]$WorkDir, [string[]]$ArgList = @(),
   [string]$Path, [int]$X, [int]$Y, [ValidateSet('left', 'right')][string]$Button = 'left',
-  [string]$Text, [string]$Name,
+  [string]$Text, [string]$Name, [int]$Width, [int]$Height,
   [switch]$InSession, [string]$OutFile
 )
 $ErrorActionPreference = 'Stop'
@@ -49,6 +49,7 @@ if (-not $InSession) {
   }
   if ($ArgList.Count) { $argsList += '-ArgList ' + (($ArgList | ForEach-Object { "'$($_ -replace "'", "''")'" }) -join ',') }
   if ($PSBoundParameters.ContainsKey('X')) { $argsList += "-X $X -Y $Y -Button $Button" }
+  if ($PSBoundParameters.ContainsKey('Width')) { $argsList += "-Width $Width -Height $Height" }
   $cmd = "& '$PSCommandPath' $($argsList -join ' ')"
   $interactive = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
   $result = Invoke-AsTask "AnvilWinvm-$PID" $cmd $interactive
@@ -74,6 +75,18 @@ public static class WinvmUser32 {
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+    public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields;
+    public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+    public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+    public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+    public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+  }
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool EnumDisplaySettings(string d, int mode, ref DEVMODE dm);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int ChangeDisplaySettings(ref DEVMODE dm, int flags);
 }
 '@
   # Physical pixels, so screenshots and click positions agree at any display scaling.
@@ -81,7 +94,9 @@ public static class WinvmUser32 {
 
   $result = switch ($Action) {
     'launch' {
-      $p = Start-Process -FilePath $Exe -ArgumentList $ArgList -WorkingDirectory $WorkDir -PassThru
+      $start = @{ FilePath = $Exe; WorkingDirectory = $WorkDir; PassThru = $true }
+      if ($ArgList.Count) { $start.ArgumentList = $ArgList }
+      $p = Start-Process @start
       Start-Sleep -Seconds 3
       if ($p.HasExited) { "exited at once with code $($p.ExitCode)" } else { "started pid $($p.Id)" }
     }
@@ -128,6 +143,16 @@ public static class WinvmUser32 {
       }
       [WinvmUser32]::EnumWindows($cb, [IntPtr]::Zero) | Out-Null
       $lines -join "`n"
+    }
+    'resolution' {
+      $dm = New-Object WinvmUser32+DEVMODE
+      $dm.dmSize = [System.Runtime.InteropServices.Marshal]::SizeOf($dm)
+      [WinvmUser32]::EnumDisplaySettings($null, -1, [ref]$dm) | Out-Null
+      $dm.dmPelsWidth = $Width; $dm.dmPelsHeight = $Height; $dm.dmFields = 0x180000
+      # CDS_UPDATEREGISTRY, so the size survives a reboot.
+      $r = [WinvmUser32]::ChangeDisplaySettings([ref]$dm, 1)
+      if ($r -ne 0) { throw "ChangeDisplaySettings returned $r (the display driver may not offer ${Width}x$Height)" }
+      "display set to ${Width}x$Height"
     }
     'close' {
       $procs = Get-Process -Name $Name -ErrorAction SilentlyContinue
