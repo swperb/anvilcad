@@ -10,9 +10,10 @@ and never touches the host's mouse or keyboard.
 | | |
 |---|---|
 | Host | TrueNAS SCALE 24.10 at `truenas-scale-1` (on the Tailnet), VM `anvilwin11` |
-| Hardware | 4 vCPUs (host passthrough, Intel i5-7500), 8 GB RAM, 160 GB VirtIO disk on the zvol `nas1/vms/anvil-win11`, UEFI (OVMF) and a TPM 2.0; no Secure Boot, because TrueNAS 24.10's libvirt setup cannot start the Secure Boot firmware, so the install bypasses that check |
+| Hardware | 4 vCPUs (host passthrough, Intel i5-7500), 8 GB RAM of which 6 GB is guaranteed (the VirtIO balloon driver returns the rest when the NAS needs it; alongside Home Assistant the NAS can promise only about 8 GB, so a fixed 8 GB sometimes failed to start), 160 GB VirtIO disk on the zvol `nas1/vms/anvil-win11`, UEFI (OVMF) and a TPM 2.0; no Secure Boot, because TrueNAS 24.10's libvirt setup cannot start the Secure Boot firmware, so the install bypasses that check |
 | Network | VirtIO NIC bridged to the LAN (`br0`), so it gets its own DHCP address on 192.168.1.0/24 |
-| Access | OpenSSH (key only, PowerShell shell) and Remote Desktop, account `anvil` |
+| Access | OpenSSH (key only, PowerShell shell) and Remote Desktop, local account `anvil` |
+| Licence | Windows 11 Pro, activated with the owner's licence |
 | Toolchain | Rust stable (x86_64-pc-windows-msvc, as in CI) with rustfmt and clippy, Visual Studio Build Tools (C++), Git |
 
 The VM's settings live outside the repository in `~/.config/anvilcad/winvm.env`
@@ -92,13 +93,20 @@ scripts/winvm/winvm rollback before-installer-test
 ```
 
 `rollback` stops the VM, rolls the disk back (destroying later snapshots) and starts it
-again; `winvm wait` blocks until SSH answers. A `provisioned` snapshot is taken once the
-toolchain is installed.
+again; `winvm wait` blocks until SSH answers. Roll back to `activated`: it has the
+toolchain and the activated licence. The older `fresh-install` and `provisioned` snapshots
+predate activation, so rolling back to them (which also destroys every later snapshot)
+means activating Windows again.
 
 ### By hand
 
 `scripts/winvm/winvm ssh` opens PowerShell in the VM. `scripts/winvm/winvm ip` prints its
-address for Remote Desktop.
+address for Remote Desktop. Sign in as `.\anvil` (the `.\` marks a local account) with the
+password in `WIN_PASS`. If the client hangs at "Configuring remote PC", it is waiting on
+you: look for a hidden prompt to trust the VM's self-signed certificate, and save the
+credentials with the PC so it has nothing left to ask. Remote Desktop takes over the
+auto-logon desktop session; after you disconnect, the next `winvm gui` action moves that
+session back to the console.
 
 ## How it was built
 
@@ -115,7 +123,8 @@ The VM was installed unattended from Microsoft's Windows 11 multi-edition ISO:
 - `winvm provision` then installs the Visual Studio Build Tools, Rust and Git, turns on
   persistent auto-logon, and excludes `C:\anvil` and the Rust directories from Defender.
 
-Windows is activated by the owner with their own licence.
+Windows was then activated by the owner with their own licence, and the `activated`
+snapshot taken.
 
 ## Moving the VM to NVMe
 
