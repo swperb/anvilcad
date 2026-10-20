@@ -68,6 +68,7 @@ pub struct Body {
 /// A body the file stores as triangles (AP242 tessellated geometry).
 #[derive(Debug, Clone, Default)]
 pub struct TessBody {
+    pub id: u64,
     pub name: String,
     pub vertices: Vec<DVec3>,
     /// Per face: whether it lies on a plane, and its triangles.
@@ -146,9 +147,12 @@ impl<'a> Reader<'a> {
             Some(r) => self.direction(r)?,
             None => DVec3::Z,
         };
+        // Without a ref_direction, x is world x projected onto the plane, or world y
+        // when z is along x (ISO 10303-42, first_proj_axis).
         let x = match p.get(3).and_then(Param::as_ref) {
             Some(r) => self.direction(r)?,
-            None => z.any_orthonormal_vector(),
+            None if z.cross(DVec3::X).length() < 1e-9 => DVec3::Y,
+            None => DVec3::X,
         };
         let x = if x.cross(z).length() < 1e-9 { z.any_orthonormal_vector() } else { x };
         Frame::new(origin, z, x).map_err(|e| format!("#{id}: {e}"))
@@ -503,7 +507,7 @@ impl Reader<'_> {
     fn tess_body(&mut self, id: u64) -> Result<TessBody, String> {
         let e = self.entity(id)?;
         let mut body =
-            TessBody { name: name_of(e), solid: e.name() == "TESSELLATED_SOLID", ..TessBody::default() };
+            TessBody { id, name: name_of(e), solid: e.name() == "TESSELLATED_SOLID", ..TessBody::default() };
         let items = e.params().get(1).and_then(Param::as_list).ok_or("tessellated body without items")?;
         let mut index: HashMap<(u64, usize), u32> = HashMap::new();
         for item in items {
@@ -611,6 +615,12 @@ impl Reader<'_> {
         body.faces.push((planar, tris));
         Ok(())
     }
+}
+
+/// Reads an AXIS2_PLACEMENT_3D as a frame, with lengths in millimetres.
+pub(crate) fn frame(ex: &Exchange, scale: f64, id: u64) -> Result<Frame, String> {
+    let r = Reader { ex, scale, angle: 1.0, model: Model::default(), curves: HashMap::new() };
+    r.placement(id)
 }
 
 /// Millimetres per unit for a length unit entity, following conversion-based units.
