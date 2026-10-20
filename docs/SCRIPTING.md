@@ -96,8 +96,8 @@ User commands appear in the command palette and the Tools menu, and keys can bin
 name. **Ctrl+Shift+P** (Cmd+Shift+P on macOS) opens the command palette, which finds any
 built-in or user command by typing part of its name or description.
 
-Built-in commands, by the names the toolbar and menus use: New, Open, Save, Save As, Save as
-Part Template, Export, Open Sample Part, Undo, Redo, Rebuild, Delete, Extruded Boss/Base,
+Built-in commands, by the names the toolbar and menus use: New, New Assembly, Insert
+Component, Mate, Bill of Materials, Open, Save, Save As, Save as Part Template, Export, Open Sample Part, Undo, Redo, Rebuild, Delete, Extruded Boss/Base,
 Revolved Boss/Base, Extruded Cut, Revolved Cut, Linear Pattern, Circular Pattern, Mirror,
 Fillet, Chamfer, Shell, Hole, Sweep, Loft, Draft, Dome, Rib, Combine, Move/Copy Bodies,
 Delete/Keep Bodies, Split, Scale, Plane, Axis, Point, Coordinate System, Sketch, Exit Sketch,

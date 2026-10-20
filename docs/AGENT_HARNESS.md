@@ -74,7 +74,7 @@ sketch tool on the command bar and in the sketch panel, count as one.
 
 | Command | Fields | Reply |
 |---|---|---|
-| `state` | | `state`: title, path, unsaved changes, status bar, active tab, selection, features (id, name, kind, suppressed, rolled back, rebuild error, sketch status), body (volume, surface area, centroid, bounds, open edges, whether it is exact, triangle count), material, variables, configurations (each one's name, parent and whether it is active) and configured parameters with their value in each configuration, the open sketch (tool, solver status, degrees of freedom, counts), the open feature editor, open windows, the message dialog, the pending confirmation, undo and redo depth, and the viewport rectangle |
+| `state` | | `state`: title, path, unsaved changes, status bar, active tab, selection, features (id, name, kind, suppressed, rolled back, rebuild error, sketch status), body (volume, surface area, centroid, bounds, open edges, whether it is exact, triangle count), material, variables, configurations (each one's name, parent and whether it is active) and configured parameters with their value in each configuration, the open sketch (tool, solver status, degrees of freedom, counts), the open feature editor, open windows, the message dialog, the pending confirmation, undo and redo depth, the viewport rectangle, and `assembly` when an assembly is open (each component's name, path, placement and how well it is defined, each mate's state, and the Mate panel's picks) |
 | `document` | | `document`: the whole part, as saved in `.anvprt` |
 | `widgets` | `filter`, `role` | `widgets`: each one's `label` or `value`, `role`, `rect`, `center`, and `disabled`, `checked` and `selected` where they apply |
 | `find` | `label`, `role`, `index` | `widget` |
@@ -88,7 +88,7 @@ sketch tool on the command bar and in the sketch panel, count as one.
 | `screenshot` | `path`, and `label` or `region` `[x0,y0,x1,y1]` to crop | `path`, `width`, `height`, `adapter` |
 | `resize` | `width`, `height` (points), `scale` | |
 | `file_dialog` | `path`, or `null` to cancel; answers the next dialog | |
-| `open` | `path` (part, template or STEP file) | |
+| `open` | `path` (part, template, assembly or STEP file) | |
 | `sample`, `new` | | |
 | `frames` | `n` | |
 | `wait` | `seconds` of virtual time, for example for hover tooltips | |

@@ -17,8 +17,10 @@ when they are in the code and tested.
    under-head countersinks, slots, tapered taps, modelled and cosmetic threads, holes on
    curved faces), mirror, sweep, loft, multi-body parts, sheet metal
    (base and edge flanges, bends, unfold to a flat pattern).
-3. Assemblies with mates; drawings with views, dimensions and title blocks fed by custom
-   properties.
+3. Assemblies: dragging components within their remaining freedom, subassemblies,
+   component patterns and mirrors, interference detection, limit, width and mechanical
+   mates, and choosing which mate breaks when a new one conflicts. Drawings with views,
+   dimensions and title blocks fed by custom properties.
 4. STEP: assembly placement, colours and names; AP242 product structure and PMI.
 5. A scripting and plugin API.
 

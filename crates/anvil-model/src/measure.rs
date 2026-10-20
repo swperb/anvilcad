@@ -168,6 +168,75 @@ pub fn measure(st: &BuildState, picks: &[Pick], opts: &MeasureOptions) -> Result
     Ok(m)
 }
 
+/// The analytic shape of one pick, as assembly mates use it. Directions are unit length;
+/// a planar face's normal points out of the material.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Shape {
+    Point(Vec3),
+    /// A straight edge or axis: a point on it and its direction.
+    Line {
+        origin: Vec3,
+        dir: Vec3,
+    },
+    Plane {
+        origin: Vec3,
+        normal: Vec3,
+    },
+    /// A circular edge (or arc): its centre, the normal of its plane and its radius.
+    Circle {
+        center: Vec3,
+        normal: Vec3,
+        radius: f64,
+    },
+    /// A cylindrical face: a point on its axis, the axis direction and the radius.
+    Cylinder {
+        origin: Vec3,
+        axis: Vec3,
+        radius: f64,
+    },
+    Sphere {
+        center: Vec3,
+        radius: f64,
+    },
+}
+
+/// Finds the analytic shape of a pick on a rebuilt part: a point, a straight or circular
+/// edge, or a planar, cylindrical or spherical face. Other edges and faces are an error.
+pub fn shape_of(st: &BuildState, pick: &Pick) -> Result<Shape, String> {
+    let ent = Resolver::new(st).resolve(pick)?;
+    if let Geo::Point(p) = ent.geo {
+        return Ok(Shape::Point(v3(p)));
+    }
+    if let Some((o, d)) = ent.line() {
+        return Ok(Shape::Line { origin: v3(o), dir: v3(d) });
+    }
+    if let Some((o, n)) = ent.plane() {
+        // An exact plane's frame need not face out of the material; the faceted body's
+        // polygons do.
+        let n = match pick {
+            Pick::Face(id) => match st.body.face_polygons(*id).next() {
+                Some(poly) if d3(poly.normal).dot(n) < 0.0 => -n,
+                _ => n,
+            },
+            _ => n,
+        };
+        return Ok(Shape::Plane { origin: v3(o), normal: v3(n.normalize()) });
+    }
+    match ent.round() {
+        Some(Round::Circle { c, n, r }) => {
+            Ok(Shape::Circle { center: v3(c), normal: v3(n.normalize()), radius: r })
+        }
+        Some(Round::Cyl { o, dir, r, .. }) => {
+            Ok(Shape::Cylinder { origin: v3(o), axis: v3(dir.normalize()), radius: r })
+        }
+        Some(Round::Sphere { c, r }) => Ok(Shape::Sphere { center: v3(c), radius: r }),
+        None => {
+            Err("pick a point, a straight or circular edge, or a planar, cylindrical or spherical face"
+                .into())
+        }
+    }
+}
+
 /// The measurement as label and value pairs for display: lengths in millimetres to three
 /// decimal places, angles in degrees to two, deltas as absolute values.
 pub fn summary_lines(m: &Measurement) -> Vec<(String, String)> {

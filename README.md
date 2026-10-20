@@ -70,6 +70,20 @@ system are still ahead; see the roadmap.
 - Sketch on Front/Top/Right planes, reference planes, or any planar model face
 - Edit, suppress, rename, delete (with dependents), roll back
 
+**Assemblies**
+- Assemblies (`.anvasm`) of part files placed as components, each instance named
+  `part<n>`; the first component is fixed, later ones float; fix, float, hide and show
+- Mates: coincident, concentric, parallel, perpendicular, tangent, distance, angle and
+  lock, between faces, straight and circular edges, and the standard planes and origins of
+  components and of the assembly, with aligned, anti-aligned or closest alignment; a new
+  distance or angle starts at what the components measure now
+- A solver that places components from their mates (damped least squares over rigid
+  placements) and reports each component as fixed `(f)`, under defined `(-)` with the
+  motions left, fully defined, or over defined `(+)`; mates that conflict, or a distance or
+  angle another mate already fixes, are flagged ([spec](docs/re/assemblies-and-mates.md))
+- Bill of materials: one row per part and configuration, with part number, description
+  and quantity
+
 **Evaluate**
 - Measure: lengths, radii, arc and chord lengths, areas and perimeters of edges and faces,
   and distances (minimum, centre or maximum for round entities), normal distances and
@@ -104,7 +118,8 @@ system are still ahead; see the roadmap.
 - Part templates (`.anvprtdot`)
 
 **Files**
-- Native part format `.anvprt` (versioned JSON, written atomically)
+- Native part format `.anvprt` and assembly format `.anvasm` (versioned JSON, written
+  atomically; assemblies keep part paths relative to themselves)
 - STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
   B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes,
   cylinders, cones, tori, spheres and B-spline surfaces import as exact solids, so features added to them build exactly
