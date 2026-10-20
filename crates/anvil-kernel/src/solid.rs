@@ -545,7 +545,7 @@ mod tests {
     /// boolean must not break the tie toward Y, or sketches on the face turn 90 degrees.
     #[test]
     fn face_frame_ignores_noise_in_the_normal() {
-        let mut s = crate::build::block(v3(0.0, 0.0, 0.0), v3(80.0, 50.0, 8.0), 2);
+        let mut s = crate::build::block(v3(0.0, 0.0, 0.0), v3(80.0, 50.0, 8.0), 2).unwrap();
         let cap = FaceId { feature: 2, index: FaceId::END_CAP };
         let clean = s.planar_face_frame(cap).expect("the end cap is planar");
         assert_eq!((clean.x, clean.y, clean.z), (Vec3::X, Vec3::Y, Vec3::Z));
