@@ -150,7 +150,15 @@ windows)
 
   name="anvilcad-$version-windows-x64"
   mkdir -p "$stage/$name"
-  for b in "${bins[@]}"; do cp "target/release/$b.exe" "$stage/$name/"; done
+  for b in "${bins[@]}"; do
+    # .cargo/config.toml links the C runtime statically; a RUSTFLAGS variable would drop
+    # that, and the programs would then not start without the VC++ Redistributable.
+    if LC_ALL=C grep -aqi 'vcruntime140\.dll' "target/release/$b.exe"; then
+      echo "$b.exe imports VCRUNTIME140.dll; build with -C target-feature=+crt-static" >&2
+      exit 1
+    fi
+    cp "target/release/$b.exe" "$stage/$name/"
+  done
   docs_into "$stage/$name"
   rm -f "$dist/$name.zip"
   (cd "$stage" && 7z a -tzip -bso0 "$dist/$name.zip" "$name")

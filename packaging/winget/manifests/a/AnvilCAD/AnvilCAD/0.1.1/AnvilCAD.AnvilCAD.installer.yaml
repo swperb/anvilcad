@@ -14,6 +14,9 @@ Commands:
 - anvil-bulk
 - anvil-migrate
 ReleaseDate: 2026-10-20
+Dependencies:
+  PackageDependencies:
+  - PackageIdentifier: Microsoft.VCRedist.2015+.x64
 AppsAndFeaturesEntries:
 - ProductCode: '{1B48E18B-21FE-4397-8B39-227184AFF5A9}'
   UpgradeCode: '{F808BDF8-B9BD-439F-8E65-78DC89274DC8}'

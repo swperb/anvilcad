@@ -7,7 +7,7 @@
   packages and `SHA256SUMS.txt` to a GitHub Release. A manual run, or a pull request that
   changes this folder, builds them as a dry run.
 - `update-package-managers.sh VERSION` writes the Homebrew cask and the winget manifest for
-  a published release. It needs `gh` and `msiinfo` (msitools).
+  a published release. It needs `gh`, and `msiinfo` and `msiextract` (msitools).
 - `icons/` holds the app icon (`anvilcad.svg` is the source) and `macos/`, `linux/` and
   `windows/` hold the bundle metadata, `.desktop` file and AppRun, and WiX source.
 
@@ -24,7 +24,17 @@
    [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) adding the folder
    `winget/manifests/a/AnvilCAD/AnvilCAD/<version>/` at
    `manifests/a/AnvilCAD/AnvilCAD/<version>/`. Its bots validate the manifest and test
-   the installer, and a moderator merges it.
+   the installer, and a moderator merges it. If the PR is labelled with a validation
+   error, the "10. Validation Completed" check on the PR links a zip of the validation
+   logs; `InstallationVerification_Result.json` in it shows how each installed program
+   ran (`ExeRunInfo`).
+
+Windows builds link the C runtime statically (`.cargo/config.toml`), and `package.sh`
+refuses to package a program that imports `VCRUNTIME140.dll`. 0.1.0 and 0.1.1 were built
+with the dynamic runtime, so their programs exit with `STATUS_DLL_NOT_FOUND` on a Windows
+without the Visual C++ Redistributable; their winget manifests depend on
+`Microsoft.VCRedist.2015+.x64`, which `update-package-managers.sh` adds when it finds the
+import.
 
 The macOS app is signed with a Developer ID and notarized by `package.sh` when the signing
 secrets are set (see `macos/sign.sh` and the header of `.github/workflows/release.yml`);

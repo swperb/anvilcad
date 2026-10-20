@@ -1,0 +1,8 @@
+# Link the C runtime statically into Windows (MSVC) builds, so the programs start on a
+# Windows that has no Visual C++ Redistributable installed. Without this they import
+# VCRUNTIME140.dll and exit with STATUS_DLL_NOT_FOUND (0xC0000135) before main, which is
+# why winget's validation flagged the 0.1.0 installer. The bundled Lua is compiled by the
+# cc crate, which follows this setting (/MT). A RUSTFLAGS environment variable replaces
+# these flags, so packaging/package.sh checks the release binaries as well.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
