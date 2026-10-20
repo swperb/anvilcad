@@ -543,7 +543,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "add_sketch",
         title: "Add sketch",
-        description: "Add a sketch of rectangles and circles and return its feature id. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on an extrusion's end (or start) face instead.",
+        description: "Add a sketch of rectangles and circles and return its feature id. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on a boss extrusion's end (or start) face instead, with the sketch's x along world X (world Y on a face normal to X) and its origin at the world origin projected onto the face. A cut's faces cannot be sketched on; use the boss's face or a plane.",
         properties: r#"{
             "plane": { "type": "string", "enum": ["front", "top", "right"], "description": "Default front" },
             "on_feature": { "type": "integer", "description": "Sketch on this extrusion's face instead of a plane" },

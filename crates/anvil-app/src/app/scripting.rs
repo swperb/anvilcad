@@ -933,7 +933,25 @@ impl Host for AppHost<'_> {
             let p = sf.sketch.add_point(anvil_kernel::v2(c[0], c[1]));
             sf.sketch.add_circle(p, c[2]);
         }
-        Ok(self.app.doc.add_feature(FeatureKind::Sketch(sf)))
+        let before = self.app.doc.clone();
+        let id = self.app.doc.add_feature(FeatureKind::Sketch(sf));
+        // Rebuild now, so a face that cannot carry a sketch fails here rather than at the
+        // extrusion that uses it.
+        self.app.rebuild();
+        if let Some(e) = self.app.state.errors.get(&id).cloned() {
+            self.app.doc = before;
+            self.app.rebuild();
+            let hint = match spec.plane {
+                PlaneSpec::Face { feature, start } => format!(
+                    " (feature {feature} has no planar {} face in the body; sketch on a boss's \
+                     face or a standard plane instead)",
+                    if start { "start" } else { "end" }
+                ),
+                _ => String::new(),
+            };
+            return Err(format!("anvil.sketch: {e}{hint}"));
+        }
+        Ok(id)
     }
 
     fn add_extrude(&mut self, spec: &ExtrudeSpec) -> Result<u32, String> {

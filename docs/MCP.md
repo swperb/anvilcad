@@ -50,7 +50,7 @@ server writes are created as needed.
 | `save_part` | `path` | saves as `.anvprt`, to `path` or the part's file |
 | `list_features` | | the feature tree: id, name, kind, rebuild error and settable dimensions (value and equation) of each feature, and the global variables |
 | `get_state` | | everything the harness's `state` command reports |
-| `add_sketch` | `plane` (`front`, `top`, `right`) or `on_feature` and `face` (`end`, `start`); `rects` `[[x0, y0, x1, y1], ...]`; `circles` `[[x, y, r], ...]` | adds a sketch and returns its id. Front is the XY plane, top XZ and right YZ |
+| `add_sketch` | `plane` (`front`, `top`, `right`) or `on_feature` and `face` (`end`, `start`); `rects` `[[x0, y0, x1, y1], ...]`; `circles` `[[x, y, r], ...]` | adds a sketch and returns its id, or fails at once if the face cannot carry a sketch (a cut's faces cannot). Front is the XY plane, top XZ and right YZ. On a face, the sketch's x is world X (world Y on a face normal to X) and its origin is the world origin projected onto the face |
 | `add_extrude` | `sketch`, `depth` (mm, an equation, or `"through"`), `cut`, `reverse` | extrudes a boss, or a cut; returns its id and the body after the rebuild, with a `warning` if the body did not change. A boss goes along the plane's normal (+Z from front, +Y from top, +X from right, out of a face); a cut goes the other way (into a face); `reverse` flips either |
 | `delete_feature` | `feature` (id or name) | deletes the feature and those that depend on it (a sketch takes its extrusion with it); returns the ids removed |
 | `set_variable` | `name`, `value` (number or equation) | sets or adds a global variable and rebuilds |

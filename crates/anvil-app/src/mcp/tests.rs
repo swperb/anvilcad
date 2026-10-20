@@ -439,3 +439,16 @@ fn open_part_reports_the_material() {
     assert_eq!(r["material"], "6061 Alloy");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A second live agent sketched a hole on a pocket cut's end face. The sketch was accepted and
+/// only the extrusion failed; now the sketch itself fails, and adds nothing.
+#[test]
+fn a_sketch_on_a_face_that_is_not_there_fails_at_once() {
+    let mut s = server();
+    let id = block(&mut s);
+    let sk = call(&mut s, "add_sketch", json!({ "on_feature": id, "rects": [[2, 2, 8, 8]] }));
+    let cut = call(&mut s, "add_extrude", json!({ "sketch": sk["sketch"], "depth": 5, "cut": true }));
+    let e = call_err(&mut s, "add_sketch", json!({ "on_feature": cut["feature"], "circles": [[5, 5, 1]] }));
+    assert!(e.contains("no planar end face"), "{e}");
+    assert_eq!(call(&mut s, "list_features", json!({}))["features"].as_array().unwrap().len(), 4);
+}
