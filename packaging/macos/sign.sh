@@ -48,8 +48,11 @@ macos_sign() {
 # log says why, and the build stops.
 macos_notarize() {
   local out id status
+  # notarytool writes the plist to stderr instead of stdout when it fails, for example when
+  # the wait times out, so read both and keep the plist.
   out="$(xcrun notarytool submit "$1" --keychain-profile "$macos_profile" \
-    ${macos_keychain[@]+"${macos_keychain[@]}"} --wait --timeout 1h --output-format plist)" || true
+    ${macos_keychain[@]+"${macos_keychain[@]}"} --wait --timeout 2h --output-format plist 2>&1 \
+    | sed -n '/^<?xml/,$p')" || true
   id="$(plutil -extract id raw -o - - <<<"$out" 2>/dev/null || true)"
   status="$(plutil -extract status raw -o - - <<<"$out" 2>/dev/null || true)"
   echo "notarization of $(basename "$1"): ${status:-no answer} (submission ${id:-none})"
