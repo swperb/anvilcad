@@ -40,9 +40,8 @@ cat >packaging/homebrew/anvilcad.rb <<EOF
 #
 #   brew install --cask swperb/tap/anvilcad
 #
-# Published in https://github.com/swperb/homebrew-tap rather than homebrew/cask, because
-# the app is not signed with an Apple Developer ID and homebrew/cask no longer takes apps
-# that fail Gatekeeper.
+# Published in https://github.com/swperb/homebrew-tap. The app is signed with a Developer ID
+# and notarized, so it opens without a Gatekeeper prompt.
 cask "anvilcad" do
   version "$version"
   sha256 "$dmg_sha"
@@ -64,16 +63,6 @@ cask "anvilcad" do
   binary "#{appdir}/AnvilCAD.app/Contents/MacOS/anvil-bulk"
 
   zap trash: "~/.config/anvilcad"
-
-  caveats <<~EOS
-    AnvilCAD is not signed with an Apple Developer ID yet. The first time you open it,
-    macOS says it cannot verify the developer: click Done, then open System Settings >
-    Privacy & Security and click Open Anyway next to AnvilCAD.
-
-    Until then macOS also stops anvilcad-agent and anvil-bulk in a terminal. To trust
-    the app and its tools in one step:
-      xattr -dr com.apple.quarantine #{appdir}/AnvilCAD.app
-  EOS
 end
 EOF
 

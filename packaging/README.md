@@ -28,7 +28,6 @@
 
 The macOS app is signed with a Developer ID and notarized by `package.sh` when the signing
 secrets are set (see `macos/sign.sh` and the header of `.github/workflows/release.yml`);
-0.1.0 was the last unsigned release. The cask's caveat about Open Anyway and
-`xattr -dr com.apple.quarantine` is for that release and can be dropped when the cask moves
-to a notarized one. The Windows and Linux packages are not code-signed. The cask lives in a
-tap of our own because Homebrew's cask repository did not take the unsigned 0.1.0 app.
+0.1.0 was the last unsigned release. The Windows and Linux packages are not code-signed.
+The cask lives in a tap of our own because Homebrew's cask repository did not take the
+unsigned 0.1.0 app.
