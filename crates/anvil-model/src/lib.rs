@@ -5,6 +5,7 @@
 //! [`Document::rebuild`] regenerates the solid. A part can have several configurations
 //! (see [`config`]).
 
+pub mod assembly;
 pub mod bodies;
 pub mod config;
 pub mod convert;
@@ -16,6 +17,7 @@ mod extrude;
 pub mod hole;
 pub mod loft;
 pub mod material;
+pub mod mates;
 pub mod measure;
 pub mod modify;
 mod pattern;
