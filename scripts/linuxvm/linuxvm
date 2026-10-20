@@ -225,6 +225,9 @@ Power and state
                          down the other test VM if memory is short)
   wait [seconds]         wait until SSH answers (default 900 s)
   snapshot [name]        snapshot the VM's disk (default name: UTC timestamp)
+  snapshot delete [--force] <name>...
+                         delete snapshots; the baseline ones (fresh-install, provisioned,
+                         activated) need --force
   snapshots              list snapshots
   rollback <name>        stop, roll the disk back to a snapshot, start again
   provision              install or update Rust and the session helper in the VM

@@ -68,7 +68,8 @@ are 1:1.
 
 ### Snapshots
 
-As with Windows: `linuxvm snapshot NAME`, `linuxvm snapshots` and `linuxvm rollback NAME`.
+As with Windows: `linuxvm snapshot NAME`, `linuxvm snapshots`, `linuxvm rollback NAME` and
+`linuxvm snapshot delete NAME`.
 `fresh-install` is the system as installed; `provisioned` adds Rust and the session helpers.
 
 ## Memory: one VM at a time, or both at once
