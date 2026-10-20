@@ -98,6 +98,10 @@ toolchain and the activated licence. The older `fresh-install` and `provisioned`
 predate activation, so rolling back to them (which also destroys every later snapshot)
 means activating Windows again.
 
+Delete a snapshot you no longer need with `winvm snapshot delete NAME` (several names may
+follow). The baseline snapshots, `fresh-install`, `provisioned` and `activated`, are only
+deleted with `--force`.
+
 ### By hand
 
 `scripts/winvm/winvm ssh` opens PowerShell in the VM. `scripts/winvm/winvm ip` prints its
