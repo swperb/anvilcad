@@ -1418,7 +1418,7 @@ impl AnvilApp {
             });
             let pal = Palette::of(ui);
             let y = ui.cursor().top();
-            ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, pal.border));
+            ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0_f32, pal.border));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.set_min_height(62.0);
@@ -1438,7 +1438,7 @@ impl AnvilApp {
         });
         let pal = Palette::of(ui);
         let y = ui.cursor().top();
-        ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, pal.border));
+        ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0_f32, pal.border));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.set_min_height(62.0);
@@ -2981,7 +2981,7 @@ impl AnvilApp {
         self.draw_model_sketches(&painter, rect);
         self.draw_picked_edges(&painter, rect);
         if let Some(s) = &self.asm {
-            let stroke = Stroke::new(3.0, pal.accent);
+            let stroke = Stroke::new(3.0_f32, pal.accent);
             for seg in s.highlighted_edges() {
                 let (a, b) = (self.camera.project(seg[0], rect), self.camera.project(seg[1], rect));
                 painter.line_segment([a, b], stroke);
@@ -3001,7 +3001,7 @@ impl AnvilApp {
 
         // Axis triad, drawn back to front so the axis nearest the viewer is on top.
         let o = rect.left_bottom() + egui::vec2(46.0, -46.0);
-        painter.circle(o, 34.0, pal.float_fill.gamma_multiply(0.7), Stroke::new(1.0, pal.border));
+        painter.circle(o, 34.0, pal.float_fill.gamma_multiply(0.7), Stroke::new(1.0_f32, pal.border));
         let (r, g, b) = if pal.dark {
             (
                 Color32::from_rgb(240, 100, 100),
@@ -3057,7 +3057,7 @@ impl AnvilApp {
             Stroke::NONE,
             egui::StrokeKind::Outside,
         );
-        painter.rect(bar, 10.0, pal.float_fill, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+        painter.rect(bar, 10.0, pal.float_fill, Stroke::new(1.0_f32, pal.border), egui::StrokeKind::Inside);
         let mut child = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(bar.shrink2(egui::vec2(8.0, 4.0)))
@@ -3082,7 +3082,7 @@ impl AnvilApp {
             self.fit_pending = true;
         }
         let (r, _) = ui.allocate_exact_size(egui::vec2(7.0, 20.0), Sense::hover());
-        ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0, pal.border));
+        ui.painter().vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, pal.border));
         if theme::icon_button(
             ui,
             Icon::Edges,
@@ -4875,7 +4875,7 @@ impl AnvilApp {
                     ui.label(RichText::new(&self.status).size(12.5));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         egui::Frame::NONE
-                            .stroke(Stroke::new(1.0, pal.border))
+                            .stroke(Stroke::new(1.0_f32, pal.border))
                             .corner_radius(4)
                             .inner_margin(egui::Margin::symmetric(6, 1))
                             .show(ui, |ui| {

@@ -1380,7 +1380,9 @@ fn tessellate_display(faces: &[Disp], mesh: &mut MeshBuilder) -> ComResult<()> {
     for face in faces {
         let t = face.call("GetTessTriangles", &[true.into()])?.floats();
         let tris = t
-            .chunks_exact(9)
+            .as_chunks::<9>()
+            .0
+            .iter()
             .map(|tri| [mesh.vertex(&tri[0..3]), mesh.vertex(&tri[3..6]), mesh.vertex(&tri[6..9])])
             .collect();
         mesh.face(is_planar(face), tris);
