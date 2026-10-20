@@ -1,0 +1,119 @@
+name: Release
+
+# Builds the installable packages (packaging/package.sh) on each platform.
+#
+# - Pushing a tag such as v0.2.0 builds them and attaches them to a GitHub Release for
+#   that tag.
+# - A manual run (Actions > Release > Run workflow) and pull requests that change the
+#   packaging build them as a dry run: the packages are kept as workflow artifacts for a
+#   week and nothing is published.
+#
+# Cost: nothing. It uses only the standard GitHub-hosted runners (ubuntu-latest,
+# windows-latest, macos-latest), which are free for public repositories, and free tools
+# (WiX Toolset 5, appimagetool). It signs nothing, so no certificates are needed, and it
+# calls no paid service. It runs only for a tag, a manual run, or a pull request that
+# touches the packaging, not on every push.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # A tag names the version; other runs use the version in Cargo.toml.
+  VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - run: bash packaging/package.sh macos "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+          retention-days: 7
+
+  # Built in an Ubuntu 22.04 container (on the free ubuntu-latest runner) so the binaries
+  # need only glibc 2.35 and run on older distributions too.
+  linux:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - name: Build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl file git pkg-config \
+            libgtk-3-dev libwayland-dev libxkbcommon-dev
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash packaging/package.sh linux "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+          retention-days: 7
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to WiX 5 (MS-RL, free). From version 6 the WiX project asks companies that
+      # earn money from it for a maintenance fee, so this stays on 5.
+      - name: WiX Toolset
+        run: |
+          dotnet tool install --global wix --version 5.0.2
+          echo "$USERPROFILE/.dotnet/tools" >> "$GITHUB_PATH"
+      - run: bash packaging/package.sh windows "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+          retention-days: 7
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            pre=""
+            case "$TAG" in *-*) pre="--prerelease" ;; esac
+            gh release create "$TAG" dist/* --verify-tag --generate-notes --title "AnvilCAD ${TAG#v}" $pre
+          fi

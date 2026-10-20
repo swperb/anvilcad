@@ -179,6 +179,12 @@ pub trait Host {
     /// Sets (or adds) a global variable, then rebuilds.
     fn set_variable(&mut self, name: &str, expr: &str) -> Result<(), String>;
     fn set_material(&mut self, name: &str) -> Result<(), String>;
+    /// Sets a feature's dimension (`depth`, `angle`, `radius`...) to a number or an
+    /// equation, then rebuilds. `feature` is the feature's id or its name.
+    fn set_dimension(&mut self, feature: &str, dimension: &str, value: &str) -> Result<(), String>;
+    /// Deletes a feature (by id or name) and the features that depend on it, then rebuilds.
+    /// Returns the ids of every feature removed.
+    fn delete_feature(&mut self, feature: &str) -> Result<Vec<u32>, String>;
     /// Adds a sketch and returns its feature id.
     fn add_sketch(&mut self, spec: &SketchSpec) -> Result<u32, String>;
     /// Adds an extrusion and returns its feature id.
@@ -386,12 +392,49 @@ impl Engine {
         self.with_host(host, |lua| lua.load(source).set_name(format!("@{name}")).exec())
     }
 
+    /// Runs a script like [`Engine::run_script`] and returns what it gave back: the chunk's
+    /// first return value as JSON, and the lines it printed (which go nowhere else).
+    pub fn eval_script(
+        &self,
+        source: &str,
+        name: &str,
+        host: &mut dyn Host,
+    ) -> Result<(serde_json::Value, Vec<String>), String> {
+        let printed = std::rc::Rc::new(RefCell::new(Vec::<String>::new()));
+        let mut value = serde_json::Value::Null;
+        let globals = self.lua.globals();
+        let old_print: Value = globals.get("print").map_err(lua_err)?;
+        let sink = printed.clone();
+        let print = self
+            .lua
+            .create_function(move |lua, args: mlua::MultiValue| {
+                let tostring: Function = lua.globals().get("tostring")?;
+                let parts =
+                    args.into_iter().map(|v| tostring.call::<String>(v)).collect::<mlua::Result<Vec<_>>>()?;
+                sink.borrow_mut().push(parts.join("\t"));
+                Ok(())
+            })
+            .map_err(lua_err)?;
+        globals.set("print", print).map_err(lua_err)?;
+        let result = self.with_host(host, |lua| {
+            let ret: Value = lua.load(source).set_name(format!("@{name}")).eval()?;
+            // Functions, userdata and cyclic tables have no JSON form; say what they are.
+            value = lua.from_value(ret.clone()).unwrap_or_else(|_| serde_json::json!(ret.type_name()));
+            Ok(())
+        });
+        let _ = globals.set("print", old_print);
+        result?;
+        let lines = printed.borrow().clone();
+        Ok((value, lines))
+    }
+
     /// Calls `f` with the model-changing half of the API installed over `host`, then removes it.
     fn with_host(&self, host: &mut dyn Host, f: impl FnOnce(&Lua) -> mlua::Result<()>) -> Result<(), String> {
         let host = RefCell::new(host);
         let anvil = self.anvil()?;
         let names = [
-            "run", "state", "new", "open", "save", "export", "var", "material", "sketch", "extrude", "status",
+            "run", "state", "new", "open", "save", "export", "var", "dim", "delete", "material", "sketch",
+            "extrude", "status",
         ];
         let result = self.guarded(|lua| {
             lua.scope(|scope| {
@@ -445,6 +488,36 @@ impl Engine {
                             }
                         };
                         h.borrow_mut().set_variable(&name, &expr).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "dim",
+                    scope.create_function(move |_, (feature, dim, value): (Value, String, Value)| {
+                        let usage = "anvil.dim(feature, dimension, value): feature is an id or a name, \
+                                     value a number or an equation";
+                        let text = |v: &Value| match v {
+                            Value::Integer(i) => Some(i.to_string()),
+                            Value::Number(n) => Some(n.to_string()),
+                            Value::String(s) => Some(s.to_string_lossy()),
+                            _ => None,
+                        };
+                        let (Some(feature), Some(value)) = (text(&feature), text(&value)) else {
+                            return Err(fail(usage.into()));
+                        };
+                        h.borrow_mut().set_dimension(&feature, &dim, &value).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "delete",
+                    scope.create_function(move |_, feature: Value| {
+                        let feature = match &feature {
+                            Value::Integer(i) => i.to_string(),
+                            Value::String(s) => s.to_string_lossy(),
+                            _ => {
+                                return Err(fail("anvil.delete(feature): feature is an id or a name".into()))
+                            }
+                        };
+                        h.borrow_mut().delete_feature(&feature).map_err(fail)
                     })?,
                 )?;
                 anvil.set(

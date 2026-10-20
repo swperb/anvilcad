@@ -2,3 +2,4 @@
 *.anvprt.tmp
 /.claude/*
 !/.claude/settings.json
+/dist

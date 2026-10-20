@@ -4,6 +4,46 @@ Thank you for helping. AnvilCAD is free and open-source software, licensed under
 Apache-2.0, and everything in it should be something anyone may use, study, change and
 share.
 
+## Build deliberately: no vibe coding
+
+AnvilCAD is not to be vibe coded, whether you write the code by hand or with an AI
+assistant. People will move their real work onto it, so every change is made on purpose:
+understood before it is written, tested before it is called done, and finished before it is
+merged. Being free is no excuse for being worse. The aim is for AnvilCAD to feel *better* to
+use than the paid tools it replaces, so no one has a reason to go back to them.
+
+- **Understand before you write.** Read the code you are changing and the code that calls
+  it. For anything that touches SOLIDWORKS, follow the interoperability rules below
+  strictly: the `docs/re/` specification comes first and the implementation follows it. Do
+  not submit code you could not explain line by line, and do not paste in patterns you have
+  not checked against this codebase.
+- **Finish what you ship.** No half-built features: no buttons that do nothing, menu items
+  that open nothing, stub dialogs, placeholder text or `todo!()` paths a user can reach. If a
+  feature is too big for one change, land it in slices that each work end to end, and keep
+  unfinished parts where users cannot reach them. Say in the pull request what is not done.
+- **Stable first.** A feature that crashes, loses work or corrupts a file is worse than no
+  feature. Handle bad input, cancelled operations, undo, save and reopen, and large models.
+  A user must never lose data to AnvilCAD.
+- **Usable and consistent.** New UI follows the existing layout, spacing, naming, icons, key
+  bindings and theme. Error messages say what went wrong and what to do about it, in plain
+  words; never show a raw debug string or panic. Long operations show progress and can be
+  cancelled. Defaults are the ones a working engineer would choose.
+- **Look finished.** Check every visible change in the app or the headless harness
+  ([docs/AGENT_HARNESS.md](docs/AGENT_HARNESS.md)), in each theme and at more than one
+  window size, before calling it done. Misaligned controls, clipped text, flicker, and
+  inconsistent units or precision are bugs, not polish.
+- **Feel fast.** Anything that is instant in paid CAD must be instant here. Do not block the
+  UI thread on kernel work or file I/O, and measure before and after when changing a hot
+  path.
+- **Better, not just equal.** When matching a workflow users know from paid tools, keep what
+  works and fix what annoys: fewer clicks, clearer feedback, no licence prompts, open
+  formats. Do not copy their frustrations along with their features.
+- **Small, reviewable changes.** Each pull request does one thing and says why. Do not mix
+  refactors with features, and do not rewrite working code without a stated reason.
+- **When unsure, ask.** If a requirement, design choice or SOLIDWORKS behaviour is unclear,
+  open an issue or ask in the pull request, or record the open question, rather than
+  guessing and moving on.
+
 ## Developer Certificate of Origin
 
 Every commit must be signed off, which certifies the

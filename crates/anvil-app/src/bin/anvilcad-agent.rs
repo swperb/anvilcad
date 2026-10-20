@@ -1,6 +1,7 @@
 //! Drives AnvilCAD with no window, for agents and scripted tests.
 //!
 //! Usage:
+//!   anvilcad-agent mcp
 //!   anvilcad-agent [--open FILE | --sample] [--size WxH] [--scale S]
 //!                  [--config INIT.lua] [--lua SCRIPT.lua]
 //!                  [--script FILE.jsonl] [--keep-going] [--screenshot OUT.png]
@@ -15,9 +16,14 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
-Usage: anvilcad-agent [--open FILE | --sample] [--size WxH] [--scale S]
+Usage: anvilcad-agent mcp
+       anvilcad-agent [--open FILE | --sample] [--size WxH] [--scale S]
                       [--config INIT.lua] [--lua SCRIPT.lua]
                       [--script FILE.jsonl] [--keep-going] [--screenshot OUT.png]
+
+`mcp` serves the Model Context Protocol over stdio, for AI agents such as Claude Code:
+  claude mcp add anvilcad -- anvilcad-agent mcp
+(see docs/MCP.md).
 
 No init.lua is read unless --config names one, so runs are repeatable. --lua runs a Lua
 script (docs/SCRIPTING.md) after the part opens and before any JSON commands.
@@ -27,6 +33,16 @@ line. No window is opened, so it never takes focus or uses the real mouse and ke
 Send {\"cmd\":\"help\"} for the commands; docs/AGENT_HARNESS.md has the details.";
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("mcp") {
+        if let Some(extra) = std::env::args().nth(2) {
+            fail(&format!("mcp takes no arguments, got {extra:?}"));
+        }
+        // Stdout carries the protocol; anything else the app says goes to stderr.
+        if let Err(e) = anvil_app::mcp::serve(std::io::stdin().lock(), std::io::stdout().lock()) {
+            fail(&format!("mcp: {e}"));
+        }
+        return;
+    }
     let mut size = (1400.0, 880.0);
     let mut scale = 1.0;
     let mut open = None;
