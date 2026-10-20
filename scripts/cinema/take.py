@@ -8,6 +8,7 @@ Every frame is a real screenshot of the real app, driven only through the harnes
 protocol. Nothing here opens a window or touches the mouse.
 """
 
+import math
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +21,9 @@ from recorder import ROOT, Recorder  # noqa: E402
 # frame has room for the post-production camera to push in without going soft.
 SIZE = (1920, 1080)
 SCALE = 2.0
+
+# How much slower than the website demos the films run; films.py --pace changes it.
+PACE = [1.25]
 
 # The studio look: a near-black viewport, a cool metal body and quiet edges. It is an
 # ordinary Lua configuration (docs/SCRIPTING.md), so it changes only the colours.
@@ -74,6 +78,11 @@ class Take(Recorder):
         Take.open_takes.append(self)
         self.log = []  # (timeline frame, command) for every command that acts
         self.logging = True
+        self.marks = {}
+        # While tracking, each screenshot also records where the body's bounding box lands
+        # on screen, so hero shots can keep the part centred and framed as it turns.
+        self.track = True
+        self.bounds = {}
         super().__init__(f"cinema-{name}", size=SIZE, scale=scale, sample=sample)
         with self.quietly():
             self.cmd(cmd="config", source=STUDIO if look == "studio" else INTERFACE)
@@ -123,11 +132,54 @@ class Take(Recorder):
         self.mark_at = len(self.timeline)
         return c
 
+    def mark(self, name):
+        """Remember this point in the recording, so a film can cut exactly here."""
+        self.marks[name] = len(self.timeline)
+
+    # -- pacing -------------------------------------------------------------------------
+    # Every pause, pointer move and orbit is stretched by PACE, so the whole film can be
+    # slowed or sped up from one setting (films.py --pace).
+
+    def hold(self, seconds):
+        super().hold(seconds * PACE[0])
+
     def move_to(self, pos, seconds=None):
         # After a hero shot the pointer is hidden; bring it back in from below right.
         if self.cursor is None:
             self.cursor = (min(SIZE[0] - 20, pos[0] + 260), min(SIZE[1] - 20, pos[1] + 180))
-        super().move_to(pos, seconds)
+        if seconds is None:
+            seconds = min(0.75, 0.22 + math.dist(self.cursor, pos) / 1800)
+        super().move_to(pos, seconds * PACE[0])
+
+    def orbit(self, dx, dy, steps=60, **kw):
+        super().orbit(dx, dy, steps=max(1, int(round(steps * PACE[0]))), **kw)
+
+    # -- framing ------------------------------------------------------------------------
+
+    def snap(self, hold=0.0):
+        path = super().snap(hold)
+        if self.track:
+            self.bounds[path] = self.screen_bounds()
+        return path
+
+    def screen_bounds(self):
+        """The screen rectangle (points) that holds the body's bounding box, or None."""
+        was = self.logging
+        self.logging = False
+        try:
+            body = self.cmd(cmd="state")["state"].get("body") or {}
+            b = body.get("bounds")
+            if not b or body.get("empty"):
+                return None
+            lo, hi = b["min"], b["max"]
+            pts = [self.cmd(cmd="project", model=[x, y, z])["at"]
+                   for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])]
+        except (RuntimeError, KeyError, TypeError):
+            return None
+        finally:
+            self.logging = was
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        return (min(xs), min(ys), max(xs), max(ys))
 
     def hide_cursor(self):
         self.cursor = None

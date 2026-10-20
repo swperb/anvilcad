@@ -40,6 +40,10 @@ K_BLACK = 10  # frames of each half of a dip to black
 # the view toolbar above it and the axis triad in its lower left corner.
 STAGE = (375.0, 190.0, 1815.0, 1000.0)
 
+# The part of the screen a hero shot may show: the viewport, below the view toolbar and
+# to the right of the axis triad.
+HERO_REGION = (340.0, 190.0, 1920.0, 1048.0)
+
 INK = (240, 242, 246)
 INK_WEAK = (150, 158, 170)
 
@@ -402,29 +406,79 @@ def run_lengths(timeline):
     return out
 
 
+def moving_average(values, radius):
+    """Smooth a list of numbers with a centred window, shrinking the window at the ends."""
+    out = []
+    for i in range(len(values)):
+        a, b = max(0, i - radius), min(len(values), i + radius + 1)
+        out.append(sum(values[a:b]) / (b - a))
+    return out
+
+
+def hero_camera(clip, tl):
+    """Where a hero shot looks on each frame: (centre x, centre y, crop height) in points.
+
+    By default it frames the part itself: the centre of its bounding box on screen, with
+    the crop sized so the part fills `fill` of the frame, smoothed over about a second so
+    the camera glides as the part turns or grows. `push=(start, end)` then zooms in or out
+    from that framing over the shot, and `focus`/`drift` override or offset the centre."""
+    o = clip.opts
+    region = o.get("region", HERO_REGION)
+    fill = o.get("fill", 0.6)
+    aspect = SIZE[1] / SIZE[0]
+    stage = o.get("stage", STAGE)
+    sx, sy = (stage[0] + stage[2]) / 2, (stage[1] + stage[3]) / 2
+    sh = stage[3] - stage[1]
+    cxs, cys, chs = [], [], []
+    last = None
+    for path, _c, _r in tl:
+        bb = clip.take.bounds.get(path) or last
+        last = bb
+        if bb and o.get("frame", True):
+            cx, cy = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+            ch = max(bb[3] - bb[1], (bb[2] - bb[0]) * aspect) / fill
+        else:
+            cx, cy, ch = sx, sy, sh
+        cxs.append(cx)
+        cys.append(cy)
+        chs.append(ch)
+    rad = o.get("smooth", 15)
+    cxs, cys, chs = moving_average(cxs, rad), moving_average(cys, rad), moving_average(chs, rad)
+    if "focus" in o:
+        cxs = [o["focus"][0]] * len(tl)
+        cys = [o["focus"][1]] * len(tl)
+    max_h = min(region[3] - region[1], (region[2] - region[0]) * aspect)
+    z0, z1 = o.get("push", (1.0, 1.08))
+    dx, dy = o.get("drift", (0.0, 0.0))
+    n = len(tl)
+    cams = []
+    for i in range(n):
+        t = i / max(1, n - 1)
+        h = min(max_h, chs[i] / lerp(z0, z1, ease_in_out(t)))
+        w = h / aspect
+        x0 = cxs[i] + dx * (t - 0.5) - w / 2
+        y0 = cys[i] + dy * (t - 0.5) - h / 2
+        # Stay inside the viewport, so no panel or toolbar slides into a hero shot.
+        x0 = min(max(x0, region[0]), region[2] - w)
+        y0 = min(max(y0, region[1]), region[3] - h)
+        cams.append((x0, y0, w, h))
+    return cams
+
+
 def hero_frames(clip):
     o = clip.opts
     take = clip.take
     tl = take.timeline[clip.start:clip.end]
     n = len(tl)
-    stage = o.get("stage", STAGE)
-    z0, z1 = o.get("push", (1.0, 1.1))
-    fx, fy = o.get("focus", ((stage[0] + stage[2]) / 2, (stage[1] + stage[3]) / 2))
-    dx, dy = o.get("drift", (0.0, 0.0))
+    cams = hero_camera(clip, tl)
     dissolve = o.get("dissolve", 8)
-    sw0, sh0 = stage[2] - stage[0], stage[3] - stage[1]
     sc = take.scale
     loader = Frames()
     runs = run_lengths(tl)
     prev_out, prev_path, blend_from, blend_i = None, None, None, 0
     secs = n / FPS
     for i, (path, _cursor, _ring) in enumerate(tl):
-        t = i / max(1, n - 1)
-        z = lerp(z0, z1, ease_in_out(t))
-        cx, cy = fx + dx * (t - 0.5), fy + dy * (t - 0.5)
-        sw, sh = sw0 / z, sh0 / z
-        x0 = min(max(cx - sw / 2, 0), SIZE[0] - sw)
-        y0 = min(max(cy - sh / 2, 0), SIZE[1] - sh)
+        x0, y0, sw, sh = cams[i]
         src = loader.get(path)
         frame = src.resize((OUT["w"], OUT["h"]), Image.BICUBIC,
                            box=(x0 * sc, y0 * sc, (x0 + sw) * sc, (y0 + sh) * sc))
@@ -440,7 +494,7 @@ def hero_frames(clip):
                 blend_from = None
         prev_out, prev_path = frame, path
         out = frame.copy()
-        decorate(out, clip, i, t * secs, secs)
+        decorate(out, clip, i, i / FPS, secs)
         yield out
 
 
@@ -481,9 +535,18 @@ def ui_frames(clip):
     cx, cy = o.get("start", (SIZE[0] / 2, SIZE[1] / 2))
     target = (cx, cy)
     cams = []
-    for i, (_p, cursor, _r) in enumerate(tl):
+    lean = o.get("lean", 0.45)
+    part = None
+    for i, (path, cursor, _r) in enumerate(tl):
+        bb = take.bounds.get(path)
+        if bb:
+            part = ((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2)
         if cursor is not None:
             target = cursor
+            # Aim between the pointer and the part, so the action and the model it acts
+            # on share the frame.
+            if part is not None:
+                target = (cursor[0] + (part[0] - cursor[0]) * lean, cursor[1] + (part[1] - cursor[1]) * lean)
         if "focus" in o:
             target = o["focus"]
         cx += (target[0] - cx) * follow
