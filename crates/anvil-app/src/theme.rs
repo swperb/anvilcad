@@ -92,9 +92,46 @@ impl Palette {
         }
     }
 
-    /// The palette for the theme `ui` is drawn in.
+    /// The palette for the theme `ui` is drawn in, with the user's colour overrides.
     pub fn of(ui: &Ui) -> Palette {
-        Palette::for_dark(ui.visuals().dark_mode)
+        Palette::for_ctx(ui.ctx(), ui.visuals().dark_mode)
+    }
+
+    /// The light or dark palette with the colour overrides set on `ctx` (`anvil.theme`).
+    pub fn for_ctx(ctx: &egui::Context, dark: bool) -> Palette {
+        let mut p = Palette::for_dark(dark);
+        if let Some(o) = overrides(ctx) {
+            for (name, c) in if dark { &o.dark } else { &o.light } {
+                p.set(name, *c);
+            }
+        }
+        p
+    }
+
+    /// Sets a colour by its field name; false if there is no such colour.
+    pub fn set(&mut self, name: &str, c: Color32) -> bool {
+        let slot = match name {
+            "chrome" => &mut self.chrome,
+            "panel" => &mut self.panel,
+            "inset" => &mut self.inset,
+            "border" => &mut self.border,
+            "text" => &mut self.text,
+            "text_weak" => &mut self.text_weak,
+            "hover" => &mut self.hover,
+            "accent" => &mut self.accent,
+            "on_accent" => &mut self.on_accent,
+            "select_fill" => &mut self.select_fill,
+            "select" => &mut self.select,
+            "error" => &mut self.error,
+            "warning" => &mut self.warning,
+            "ok" => &mut self.ok,
+            "view_top" => &mut self.view_top,
+            "view_bottom" => &mut self.view_bottom,
+            "float_fill" => &mut self.float_fill,
+            _ => return false,
+        };
+        *slot = c;
+        true
     }
 
     pub fn for_dark(dark: bool) -> Palette {
@@ -106,9 +143,55 @@ impl Palette {
     }
 }
 
+fn overrides_id() -> egui::Id {
+    egui::Id::new("anvilcad-theme-overrides")
+}
+
+/// Sets the user's colour overrides on `ctx` (kept per context, so each window, and each
+/// headless session, has its own). Call [`apply`] afterwards to restyle.
+pub fn set_overrides(ctx: &egui::Context, o: crate::script::ThemeOverrides) {
+    ctx.data_mut(|d| d.insert_temp(overrides_id(), std::sync::Arc::new(o)));
+}
+
+fn overrides(ctx: &egui::Context) -> Option<std::sync::Arc<crate::script::ThemeOverrides>> {
+    ctx.data(|d| d.get_temp(overrides_id()))
+}
+
+/// The model's colours in the viewport, with the user's overrides.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneColors {
+    pub body: [f32; 3],
+    pub hover: [f32; 3],
+    pub select: [f32; 3],
+    pub edge: [f32; 3],
+}
+
+impl Default for SceneColors {
+    fn default() -> SceneColors {
+        use crate::render::{BODY_COLOR, EDGE_COLOR, HOVER_COLOR, SELECT_COLOR};
+        SceneColors { body: BODY_COLOR, hover: HOVER_COLOR, select: SELECT_COLOR, edge: EDGE_COLOR }
+    }
+}
+
+pub fn scene_colors(ctx: &egui::Context) -> SceneColors {
+    let mut c = SceneColors::default();
+    if let Some(o) = overrides(ctx) {
+        for (name, rgb) in &o.model {
+            match name.as_str() {
+                "body" => c.body = *rgb,
+                "hover_face" => c.hover = *rgb,
+                "selected_face" => c.select = *rgb,
+                "edge" => c.edge = *rgb,
+                _ => {}
+            }
+        }
+    }
+    c
+}
+
 /// Sets egui's style to AnvilCAD's light or dark theme.
 pub fn apply(ctx: &egui::Context, dark: bool) {
-    let p = Palette::for_dark(dark);
+    let p = Palette::for_ctx(ctx, dark);
     let mut style = (*ctx.style()).clone();
     let mut v = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
 

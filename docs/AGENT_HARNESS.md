@@ -37,6 +37,10 @@ for Retina-sharp screenshots), `--script FILE` to run a file of commands, `--kee
 to keep running a script after a command fails, and `--screenshot OUT.png` to save a
 screenshot at the end.
 
+`--config INIT.lua` loads a Lua configuration and `--lua SCRIPT.lua` runs a Lua script after the
+part opens (see [SCRIPTING.md](SCRIPTING.md)). No `init.lua` is read otherwise, so runs are
+repeatable.
+
 With no `--script`, it reads commands from stdin until `{"cmd":"quit"}` or end of input,
 so an agent can keep one session open and send commands one at a time.
 
@@ -89,6 +93,9 @@ sketch tool on the command bar and in the sketch panel, count as one.
 | `frames` | `n` | |
 | `wait` | `seconds` of virtual time, for example for hover tooltips | |
 | `project` | target | `at`: the screen position, without acting on it |
+| `lua` | `code` | runs a Lua chunk with the `anvil` API ([SCRIPTING.md](SCRIPTING.md)) |
+| `config` | `source` (init.lua text) or `path` | loads a Lua configuration |
+| `command` | `name` | runs a built-in or user command by name |
 | `help` | | the command list |
 | `quit` | | |
 

@@ -4,7 +4,9 @@
 pub mod app;
 mod camera;
 pub mod headless;
+pub mod keymap;
 pub mod render;
 mod sample;
+pub mod script;
 mod sketcher;
 pub mod theme;

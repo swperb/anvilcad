@@ -720,6 +720,32 @@ impl Headless {
                 self.settle();
                 Ok(json!({}))
             }
+            "lua" => {
+                let code = cmd["code"].as_str().ok_or("lua needs \"code\": a Lua chunk")?;
+                let ctx = self.ctx.clone();
+                self.app.run_lua(&ctx, code, "lua")?;
+                self.settle();
+                Ok(json!({}))
+            }
+            "config" => {
+                let ctx = self.ctx.clone();
+                if let Some(src) = cmd["source"].as_str() {
+                    self.app.load_config_source(&ctx, src)?;
+                } else if let Some(path) = cmd["path"].as_str() {
+                    self.app.load_config(&ctx, Some(std::path::PathBuf::from(path)));
+                } else {
+                    return Err("config needs \"source\" (init.lua text) or \"path\"".into());
+                }
+                self.settle();
+                Ok(json!({}))
+            }
+            "command" => {
+                let name = cmd["name"].as_str().ok_or("command needs \"name\", such as \"Fillet\"")?;
+                let ctx = self.ctx.clone();
+                self.app.run_command(&ctx, name)?;
+                self.settle();
+                Ok(json!({}))
+            }
             "new" => {
                 self.app.new_document();
                 self.settle();
@@ -844,6 +870,9 @@ const COMMANDS: &[&str] = &[
     "resize width height [scale]",
     "file_dialog path|null      answer for the next Open/Save/Export dialog",
     "open path | sample | new",
+    "lua code                   run a Lua chunk with the anvil API (docs/SCRIPTING.md)",
+    "config source|path         load an init.lua (none is loaded by default)",
+    "command name               run a built-in or user command by name",
     "frames [n] | wait [seconds]",
     "project TARGET             screen point of a target",
     "TARGET: x,y | label [role] [index] | model:[x,y,z] | sketch:[x,y], plus offset:[dx,dy]",
@@ -1035,5 +1064,232 @@ mod tests {
         run(&mut h, json!({"cmd": "key", "key": "Z", "modifiers": ["cmd"]}));
         let (_, st) = volume(&mut h);
         assert_eq!(st["configurations"].as_array().unwrap().len(), 2, "{st}");
+    }
+
+    // ----- Lua configuration and scripting (docs/SCRIPTING.md) -----------------------------
+
+    fn body(h: &mut Headless) -> Value {
+        run(h, json!({"cmd": "state"}))["state"]["body"].clone()
+    }
+
+    const PLATE: &str = r#"
+        anvil.var("t", 10)
+        local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }
+        local base = anvil.extrude{ sketch = s, depth = "t" }
+        local hole = anvil.sketch{ plane = { on = base }, circles = { { 0, 0, 5 } } }
+        anvil.extrude{ sketch = hole, depth = "through", cut = true }
+    "#;
+
+    /// The plate PLATE makes: 100 x 60 x t, less a 10 mm hole. Volumes are measured on the
+    /// tessellated body, so the hole's polygon leaves a little more material than a true
+    /// circle; 2 mm³ in 59 cm³ allows for that and nothing more.
+    fn assert_plate_volume(v: f64, t: f64) {
+        let exact = 100.0 * 60.0 * t - std::f64::consts::PI * 25.0 * t;
+        assert!(v >= exact && v - exact < 0.2 * t, "volume {v}, exact {exact}");
+    }
+
+    /// A script builds a plate from a variable and cuts a hole through it.
+    #[test]
+    fn lua_scripts_build_exact_geometry() {
+        let mut h = Headless::new();
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }
+            anvil.extrude{ sketch = s, depth = 10 }
+        "#}),
+        );
+        assert_eq!(body(&mut h)["volume"].as_f64(), Some(60000.0));
+        run(&mut h, json!({"cmd": "lua", "code": "anvil.new{ force = true }"}));
+        run(&mut h, json!({"cmd": "lua", "code": PLATE}));
+        let b = body(&mut h);
+        let v = b["volume"].as_f64().unwrap();
+        assert_plate_volume(v, 10.0);
+        assert_eq!(b["bounds"]["min"], json!([-50.0, 0.0, -30.0]), "{b}");
+        assert_eq!(b["bounds"]["max"], json!([50.0, 10.0, 30.0]), "{b}");
+        // Changing the variable from a script drives the depth.
+        run(&mut h, json!({"cmd": "lua", "code": "anvil.var('t', 20)"}));
+        let v = body(&mut h)["volume"].as_f64().unwrap();
+        assert_plate_volume(v, 20.0);
+        // The script sees the same state the harness does.
+        run(&mut h, json!({"cmd": "lua", "code": "assert(anvil.state().body.volume > 100000)"}));
+        // A script's status message outlasts the rebuild that follows it.
+        run(&mut h, json!({"cmd": "lua", "code": "anvil.var('t', 20) anvil.status('done')"}));
+        assert_eq!(run(&mut h, json!({"cmd": "state"}))["state"]["status"], "done");
+        // Mistakes come back as errors, and the part is untouched.
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.extrude{ sketch = 999, depth = 1 }"}));
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap().contains("feature 999 is not a sketch"), "{r}");
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.new()"}));
+        assert!(r["error"].as_str().unwrap().contains("unsaved changes"), "{r}");
+        let v2 = body(&mut h)["volume"].as_f64().unwrap();
+        assert!((v2 - v).abs() < 1e-9);
+        run(&mut h, json!({"cmd": "lua", "code": "anvil.new{ force = true }"}));
+        assert_eq!(body(&mut h)["empty"], true);
+    }
+
+    /// Key bindings from init.lua: a sequence runs a user command, a chord runs a built-in.
+    #[test]
+    fn config_key_bindings_run_commands() {
+        let mut h = Headless::new();
+        let config = format!(
+            r#"
+            anvil.command("Plate", function() {PLATE} end, {{ description = "test plate" }})
+            anvil.key("g p", "Plate")
+            anvil.key("ctrl+shift+d", "Dark Theme")
+            anvil.key("x", function() anvil.status("pressed x") end)
+            "#
+        );
+        run(&mut h, json!({"cmd": "config", "source": config}));
+        run(&mut h, json!({"cmd": "key", "key": "G"}));
+        assert_eq!(body(&mut h)["empty"], true, "g alone waits for the rest of the sequence");
+        run(&mut h, json!({"cmd": "key", "key": "P"}));
+        assert_plate_volume(body(&mut h)["volume"].as_f64().unwrap(), 10.0);
+
+        assert!(!h.ctx.style().visuals.dark_mode);
+        run(&mut h, json!({"cmd": "key", "key": "D", "modifiers": ["ctrl", "shift"]}));
+        assert!(h.ctx.style().visuals.dark_mode);
+
+        run(&mut h, json!({"cmd": "key", "key": "X"}));
+        assert_eq!(run(&mut h, json!({"cmd": "state"}))["state"]["status"], "pressed x");
+
+        // The user command is also reachable by name.
+        run(&mut h, json!({"cmd": "lua", "code": "anvil.new{ force = true }"}));
+        run(&mut h, json!({"cmd": "command", "name": "plate"}));
+        assert_eq!(body(&mut h)["empty"], false);
+    }
+
+    /// Theme colours from init.lua reach the palette, egui's style and the rendered model.
+    #[test]
+    fn config_theme_colours_apply() {
+        let mut h = Headless::with_size(vec2(800.0, 600.0), 1.0);
+        run(
+            &mut h,
+            json!({"cmd": "config", "source": r##"
+                anvil.opt.theme = "dark"
+                anvil.theme.dark.accent = "#00ff00"
+                anvil.theme.dark.panel = "#102030"
+                anvil.theme.body = "#c83020"
+            "##}),
+        );
+        assert!(h.ctx.style().visuals.dark_mode);
+        assert_eq!(crate::theme::Palette::for_ctx(&h.ctx, true).accent, egui::Color32::from_rgb(0, 255, 0));
+        assert_eq!(h.ctx.style().visuals.panel_fill, egui::Color32::from_rgb(0x10, 0x20, 0x30));
+        // The light palette is untouched.
+        assert_eq!(
+            crate::theme::Palette::for_ctx(&h.ctx, false).accent,
+            crate::theme::Palette::light().accent
+        );
+        assert_eq!(crate::theme::scene_colors(&h.ctx).body, [200.0 / 255.0, 48.0 / 255.0, 32.0 / 255.0]);
+
+        h.app.open_sample();
+        h.settle();
+        let Ok(img) = h.render() else {
+            eprintln!("skipping the render check: no GPU or software adapter");
+            return;
+        };
+        let r = h.app.viewport_rect();
+        let mut red = 0;
+        for y in (r.min.y as u32..r.max.y as u32).step_by(4) {
+            for x in (r.min.x as u32..r.max.x as u32).step_by(4) {
+                let i = ((y * img.width + x) * 4) as usize;
+                let (pr, pg, pb) = (img.rgba[i] as i32, img.rgba[i + 1] as i32, img.rgba[i + 2] as i32);
+                if pr > pg + 40 && pr > pb + 40 {
+                    red += 1;
+                }
+            }
+        }
+        assert!(red > 200, "only {red} red model pixels");
+    }
+
+    /// A broken config is reported and the previous one stays in force.
+    #[test]
+    fn a_bad_config_keeps_the_last_good_one() {
+        let mut h = Headless::new();
+        run(&mut h, json!({"cmd": "config", "source": "anvil.opt.theme = 'dark'\nanvil.key('x', 'Fillet')"}));
+        let r =
+            h.command(&json!({"cmd": "config", "source": "anvil.opt.theme = 'dark'\nanvil.opt.thme = 1"}));
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap().contains("unknown option anvil.opt.thme"), "{r}");
+        let st = run(&mut h, json!({"cmd": "state"}))["state"].clone();
+        assert!(st["status"].as_str().unwrap().starts_with("Config error"), "{st}");
+        assert_eq!(st["message"]["title"], "init.lua");
+        assert!(h.ctx.style().visuals.dark_mode);
+    }
+
+    /// New parts take the configured material.
+    #[test]
+    fn config_defaults_apply_to_new_parts() {
+        let mut h = Headless::new();
+        run(&mut h, json!({"cmd": "config", "source": "anvil.opt.material = '6061 Alloy'"}));
+        run(&mut h, json!({"cmd": "new"}));
+        assert_eq!(run(&mut h, json!({"cmd": "state"}))["state"]["material"], "6061 Alloy");
+        let r = h.command(&json!({"cmd": "config", "source": "anvil.opt.material = 'Unobtainium'"}));
+        assert_eq!(r["ok"], true, "an unknown material is reported when a part is made");
+        run(&mut h, json!({"cmd": "new"}));
+        let st = run(&mut h, json!({"cmd": "state"}))["state"].clone();
+        assert_eq!(st["material"], Value::Null);
+        assert!(st["status"].as_str().unwrap().contains("Unobtainium"), "{st}");
+    }
+
+    /// Ctrl/Cmd+Shift+P opens the command palette, typing filters it, Enter runs the match.
+    #[test]
+    fn command_palette_finds_and_runs_commands() {
+        let mut h = Headless::new();
+        run(
+            &mut h,
+            json!({"cmd": "config", "source": "anvil.command('Say Hi', function() anvil.status('hi') end)"}),
+        );
+        run(&mut h, json!({"cmd": "key", "key": "P", "modifiers": ["cmd", "shift"]}));
+        assert!(h.find("Command Palette", Some("Window"), None).is_ok(), "the palette is open");
+        // Mass Properties is on the Evaluate tab, not on screen, so only the palette lists it.
+        assert!(h.find("Mass Properties", None, None).is_ok(), "listed before filtering");
+        run(&mut h, json!({"cmd": "type", "text": "say h"}));
+        assert!(h.find("Say Hi", None, None).is_ok());
+        assert!(h.find("Mass Properties", None, None).is_err(), "filtered out");
+        run(&mut h, json!({"cmd": "key", "key": "Enter"}));
+        assert_eq!(run(&mut h, json!({"cmd": "state"}))["state"]["status"], "hi");
+        assert!(h.find("Command Palette", Some("Window"), None).is_err(), "closed after running");
+    }
+
+    /// Every built-in command name runs without a part open, so bindings to any of them are safe.
+    #[test]
+    fn every_builtin_command_is_wired() {
+        let mut h = Headless::new();
+        h.app.script_file_dialogs();
+        for (name, _) in crate::app::BUILTIN_COMMANDS {
+            if ["Run Script...", "Edit Config", "Reload Config"].contains(name) {
+                continue; // these touch the user's real files
+            }
+            if *name == "Mirror" {
+                // Mirroring the sample part's body about the Right plane, which the part is
+                // symmetric about, never finishes (the union of two coincident bodies). That
+                // is a kernel bug of its own, the same from the toolbar; skip it here until
+                // it is fixed.
+                continue;
+            }
+            let r = h.command(&json!({"cmd": "command", "name": name}));
+            assert_eq!(r["ok"], true, "{name}: {r}");
+        }
+    }
+
+    /// docs/examples/init.lua loads, and its Test Plate command builds the plate it describes.
+    #[test]
+    fn the_documented_example_config_works() {
+        let mut h = Headless::new();
+        let src = include_str!("../../../docs/examples/init.lua");
+        run(&mut h, json!({"cmd": "config", "source": src}));
+        assert!(h.ctx.style().visuals.dark_mode);
+        run(&mut h, json!({"cmd": "command", "name": "Test Plate"}));
+        let st = run(&mut h, json!({"cmd": "state"}))["state"].clone();
+        assert_eq!(st["material"], "6061 Alloy", "{st}");
+        let v = st["body"]["volume"].as_f64().unwrap();
+        let exact = 100.0 * 60.0 * 10.0 - 4.0 * std::f64::consts::PI * 3.3 * 3.3 * 10.0;
+        assert!(v >= exact && v - exact < 4.0, "volume {v}, exact {exact}");
+        // Its <leader>v binding reports the volume.
+        run(&mut h, json!({"cmd": "key", "key": "Space"}));
+        run(&mut h, json!({"cmd": "key", "key": "V"}));
+        let status = run(&mut h, json!({"cmd": "state"}))["state"]["status"].clone();
+        assert!(status.as_str().unwrap().starts_with("Volume: 586"), "{status}");
     }
 }

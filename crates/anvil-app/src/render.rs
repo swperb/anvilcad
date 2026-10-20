@@ -77,18 +77,24 @@ pub struct SceneData {
 }
 
 impl SceneData {
-    pub fn build(mesh: &Mesh, edges: &[[Vec3; 2]], hover: Option<FaceId>, selected: &[FaceId]) -> SceneData {
+    pub fn build(
+        mesh: &Mesh,
+        edges: &[[Vec3; 2]],
+        hover: Option<FaceId>,
+        selected: &[FaceId],
+        colors: &crate::theme::SceneColors,
+    ) -> SceneData {
         let mut tris = Vec::with_capacity(mesh.indices.len() * 27);
         for t in &mesh.indices {
             for &i in t {
                 let i = i as usize;
                 let face = mesh.faces[i];
                 let c = if selected.contains(&face) {
-                    SELECT_COLOR
+                    colors.select
                 } else if hover == Some(face) {
-                    HOVER_COLOR
+                    colors.hover
                 } else {
-                    BODY_COLOR
+                    colors.body
                 };
                 tris.extend_from_slice(&mesh.positions[i].to_f32());
                 tris.extend_from_slice(&mesh.normals[i].to_f32());
@@ -100,7 +106,7 @@ impl SceneData {
             for p in seg {
                 e.extend_from_slice(&p.to_f32());
                 e.extend_from_slice(&[0.0, 0.0, 1.0]);
-                e.extend_from_slice(&EDGE_COLOR);
+                e.extend_from_slice(&colors.edge);
             }
         }
         SceneData { tris, edges: e }

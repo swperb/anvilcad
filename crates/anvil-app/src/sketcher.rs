@@ -371,6 +371,8 @@ pub struct SketchSession {
     entity_picks: Vec<(EntityId, Vec2)>,
     /// The first fillet of a run, which later fillets are made `Equal` to.
     fillet_first: Option<EntityId>,
+    /// The snap and pick radius in pixels.
+    pub pick_px: f64,
     /// The curve and end point a tangent arc starts from.
     tangent_from: Option<(EntityId, PointId)>,
     tangent_zone: Option<TangentZone>,
@@ -388,7 +390,8 @@ pub struct Outcome {
     pub dragging: bool,
 }
 
-const PICK_PX: f64 = 8.0;
+/// The default snap and pick radius, in pixels (`anvil.opt.snap_px` changes it).
+pub const PICK_PX: f64 = 8.0;
 
 /// Moves expression bindings to where their dimensions went in an edit.
 pub fn remap_driven(sf: &mut SketchFeature, map: &[Option<usize>]) {
@@ -427,6 +430,7 @@ impl SketchSession {
             notice: None,
             entity_picks: Vec::new(),
             fillet_first: None,
+            pick_px: PICK_PX,
             tangent_from: None,
             tangent_zone: None,
             swept: 0.0,
@@ -663,7 +667,7 @@ impl SketchSession {
         ctx: &egui::Context,
     ) -> Outcome {
         let mut out = Outcome::default();
-        let radius = PICK_PX / cam.pixels_per_unit(rect);
+        let radius = self.pick_px / cam.pixels_per_unit(rect);
         let hover_screen = resp.hover_pos();
         self.mouse = hover_screen.and_then(|s| self.to_sketch(cam, rect, s));
         self.hover = match (hover_screen, self.mouse) {
@@ -1778,7 +1782,7 @@ impl SketchSession {
         let to = |p: Vec2| cam.project(self.frame.to_world(p), rect);
         let preview_color = Color32::from_rgb(80, 120, 255);
         let preview = Stroke::new(1.2_f32, preview_color);
-        let radius = PICK_PX / cam.pixels_per_unit(rect);
+        let radius = self.pick_px / cam.pixels_per_unit(rect);
         let new_entities = |tmp: &Sketch, first: usize| {
             for e in first..tmp.entities.len() {
                 let pts = entity_polyline(tmp, e, &to);
