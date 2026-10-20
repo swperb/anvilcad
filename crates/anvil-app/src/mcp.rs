@@ -176,11 +176,15 @@ impl Server {
                 let mut tree = self.h.app.feature_list();
                 tree["path"] = s["path"].clone();
                 tree["body"] = s["body"].clone();
+                tree["material"] = s["material"].clone();
                 tree["message"] = json!(message.map(|(_, text)| text));
                 tree
             }
             "save_part" => {
-                let path = a.opt_path("path")?;
+                let path = match a.opt_path("path")? {
+                    Some(_) => Some(a.out_path("path")?),
+                    None => None,
+                };
                 self.host(|h| h.save(path.as_deref()))?;
                 json!({ "path": self.h.app.snapshot()["path"] })
             }
@@ -207,9 +211,20 @@ impl Server {
                     cut: a.bool("cut")?,
                     reverse: a.bool("reverse")?,
                 };
+                let before = self.h.app.snapshot()["body"]["volume"].as_f64();
                 let id = self.host(|h| h.add_extrude(&spec))?;
                 let mut s = self.summary();
                 s["feature"] = json!(id);
+                let after = s["body"]["volume"].as_f64();
+                if let (Some(b), Some(a)) = (before, after) {
+                    if (a - b).abs() <= 1e-9 * b.abs().max(1.0) {
+                        let way = if spec.reverse { "without reverse" } else { "with reverse: true" };
+                        s["warning"] = json!(format!(
+                            "the {} did not change the body: it may point away from it; try {way}",
+                            if spec.cut { "cut" } else { "extrusion" }
+                        ));
+                    }
+                }
                 s
             }
             "set_variable" => {
@@ -226,6 +241,13 @@ impl Server {
                 let value = a.number_or_text("value")?;
                 self.host(|h| h.set_dimension(&feature, dimension, &value))?;
                 self.summary()
+            }
+            "delete_feature" => {
+                let feature = a.number_or_text("feature")?;
+                let gone = self.host(|h| h.delete_feature(&feature))?;
+                let mut s = self.summary();
+                s["deleted"] = json!(gone);
+                s
             }
             "set_material" => {
                 let name = a.req_str("name")?;
@@ -254,10 +276,13 @@ impl Server {
             "run_lua" => {
                 let code = a.req_str("code")?;
                 let ctx = self.h.ctx.clone();
-                let r = self.h.app.run_lua(&ctx, code, "mcp");
+                let r = self.h.app.eval_lua(&ctx, code, "mcp");
                 self.h.settle();
-                r?;
-                self.summary()
+                let (value, printed) = r?;
+                let mut s = self.summary();
+                s["result"] = value;
+                s["printed"] = json!(printed);
+                s
             }
             "run_command" => {
                 let name = a.req_str("name")?;
@@ -532,7 +557,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "add_extrude",
         title: "Add extrusion",
-        description: "Extrude a sketch into a boss, or cut with cut=true. Returns the feature id and the body's volume and bounds after the rebuild.",
+        description: "Extrude a sketch into a boss, or cut with cut=true. A boss goes along the sketch plane's normal (+Z for front, +Y for top, +X for right, out of a face); a cut goes the opposite way (into a face); reverse flips either. Returns the feature id and the body after the rebuild, with a warning if the body did not change.",
         properties: r#"{
             "sketch": { "type": "integer", "description": "The sketch's feature id" },
             "depth": { "type": ["number", "string"], "description": "mm, an equation such as \"thickness * 2\", or \"through\" (through all)" },
@@ -563,6 +588,14 @@ const TOOLS: &[Tool] = &[
         read_only: false,
     },
     Tool {
+        name: "delete_feature",
+        title: "Delete feature",
+        description: "Delete a feature, by id or name, together with the features that depend on it (such as the extrusion of a deleted sketch). Returns the ids removed and the body after the rebuild.",
+        properties: r#"{ "feature": { "type": ["integer", "string"], "description": "The feature's id or name" } }"#,
+        required: &["feature"],
+        read_only: false,
+    },
+    Tool {
         name: "set_material",
         title: "Set material",
         description: "Assign a library material, so mass_properties reports mass.",
@@ -581,7 +614,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "mass_properties",
         title: "Mass properties",
-        description: "Measure the body: volume (mm^3), surface area (mm^2), centroid, bounding box and size (mm), and mass (g) and principal moments when a material is set.",
+        description: "Measure the body: volume (mm^3), surface area (mm^2), centroid, bounding box and size (mm), and mass (g) and principal moments when a material is set. These come from the tessellated body, so curved faces make them slightly approximate; exact says whether STEP export can write an exact B-rep.",
         properties: "{}",
         required: &[],
         read_only: true,
@@ -613,7 +646,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "run_lua",
         title: "Run Lua",
-        description: "Run Lua with AnvilCAD's anvil API (anvil.sketch, anvil.extrude, anvil.var, anvil.dim, anvil.run, anvil.state, anvil.export...; see docs/SCRIPTING.md), for anything the other tools do not cover.",
+        description: "Run Lua with AnvilCAD's anvil API (anvil.sketch, anvil.extrude, anvil.var, anvil.dim, anvil.delete, anvil.run, anvil.state, anvil.export...; see docs/SCRIPTING.md), for anything the other tools do not cover. Returns the chunk's return value as result, the lines it printed, and the body.",
         properties: r#"{ "code": { "type": "string" } }"#,
         required: &["code"],
         read_only: false,
