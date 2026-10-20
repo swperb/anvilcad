@@ -100,7 +100,8 @@ disables safety functions without declaring it and explaining why.
 - Run `cargo fmt --all`, `cargo clippy --workspace --all-targets` and
   `cargo test --workspace` before opening a pull request. Changes that affect Linux or
   Windows should also pass `cargo check --workspace --target x86_64-unknown-linux-gnu` and
-  `--target x86_64-pc-windows-msvc`.
+  `--target x86_64-pc-windows-msvc`: `scripts/cross-check.sh` runs both from any host
+  (it needs [zig](https://ziglang.org) to compile the bundled Lua for those targets).
 - Write comments and documentation in plain, direct prose.
 - Add tests that would fail without your change, ideally against exact values (volumes,
   areas, positions) rather than "it runs".
