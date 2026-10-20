@@ -151,7 +151,9 @@ pub fn edge_midpoint(edge: &Disp) -> Option<Vec3> {
 /// A point on a SOLIDWORKS face (mm): the centre of the largest display triangle.
 pub fn face_point(face: &Disp) -> Option<Vec3> {
     let t = face.call("GetTessTriangles", &[true.into()]).ok()?.floats();
-    t.chunks_exact(9)
+    t.as_chunks::<9>()
+        .0
+        .iter()
         .map(|c| {
             let (a, b, d) = (v3(c[0], c[1], c[2]), v3(c[3], c[4], c[5]), v3(c[6], c[7], c[8]));
             ((b - a).cross(d - a).length(), (a + b + d) * (M_TO_MM / 3.0))

@@ -199,7 +199,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     v.override_text_color = Some(p.text);
     v.panel_fill = p.panel;
     v.window_fill = p.panel;
-    v.window_stroke = Stroke::new(1.0, p.border);
+    v.window_stroke = Stroke::new(1.0_f32, p.border);
     v.window_corner_radius = CornerRadius::same(10);
     v.menu_corner_radius = CornerRadius::same(8);
     v.window_shadow = Shadow {
@@ -221,41 +221,41 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     v.error_fg_color = p.error;
     v.warn_fg_color = p.warning;
     v.selection.bg_fill = p.select_fill;
-    v.selection.stroke = Stroke::new(1.0, p.select);
+    v.selection.stroke = Stroke::new(1.0_f32, p.select);
     v.striped = false;
     v.slider_trailing_fill = true;
 
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.panel;
     w.noninteractive.weak_bg_fill = p.panel;
-    w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
-    w.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
+    w.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
+    w.noninteractive.fg_stroke = Stroke::new(1.0_f32, p.text);
     w.noninteractive.corner_radius = r6;
 
     w.inactive.bg_fill = p.inset;
     w.inactive.weak_bg_fill = p.inset;
-    w.inactive.bg_stroke = Stroke::new(1.0, p.border);
-    w.inactive.fg_stroke = Stroke::new(1.0, p.text);
+    w.inactive.bg_stroke = Stroke::new(1.0_f32, p.border);
+    w.inactive.fg_stroke = Stroke::new(1.0_f32, p.text);
     w.inactive.corner_radius = r6;
 
     w.hovered.bg_fill = p.hover;
     w.hovered.weak_bg_fill = p.hover;
-    w.hovered.bg_stroke = Stroke::new(1.0, p.text_weak);
-    w.hovered.fg_stroke = Stroke::new(1.0, p.text);
+    w.hovered.bg_stroke = Stroke::new(1.0_f32, p.text_weak);
+    w.hovered.fg_stroke = Stroke::new(1.0_f32, p.text);
     w.hovered.corner_radius = r6;
     w.hovered.expansion = 0.0;
 
     w.active.bg_fill = p.select_fill;
     w.active.weak_bg_fill = p.select_fill;
-    w.active.bg_stroke = Stroke::new(1.0, p.select);
-    w.active.fg_stroke = Stroke::new(1.0, p.text);
+    w.active.bg_stroke = Stroke::new(1.0_f32, p.select);
+    w.active.fg_stroke = Stroke::new(1.0_f32, p.text);
     w.active.corner_radius = r6;
     w.active.expansion = 0.0;
 
     w.open.bg_fill = p.hover;
     w.open.weak_bg_fill = p.hover;
-    w.open.bg_stroke = Stroke::new(1.0, p.border);
-    w.open.fg_stroke = Stroke::new(1.0, p.text);
+    w.open.bg_stroke = Stroke::new(1.0_f32, p.border);
+    w.open.fg_stroke = Stroke::new(1.0_f32, p.text);
     w.open.corner_radius = r6;
 
     style.visuals = v;
@@ -963,7 +963,12 @@ pub fn command_button(ui: &mut Ui, icon: Icon, label: &str, selected: Option<boo
         let painter = ui.painter();
         painter.rect(rect, CornerRadius::same(7), fill, Stroke::NONE, StrokeKind::Inside);
         if on {
-            painter.rect_stroke(rect, CornerRadius::same(7), Stroke::new(1.0, p.select), StrokeKind::Inside);
+            painter.rect_stroke(
+                rect,
+                CornerRadius::same(7),
+                Stroke::new(1.0_f32, p.select),
+                StrokeKind::Inside,
+            );
         }
         let ink = if resp.enabled() { p.text } else { p.text_weak };
         let icon_rect =
@@ -1021,7 +1026,7 @@ pub fn group_rule(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(Vec2::new(9.0, 62.0), Sense::hover());
     ui.painter().line_segment(
         [Pos2::new(rect.center().x, rect.top() + 6.0), Pos2::new(rect.center().x, rect.bottom() - 6.0)],
-        Stroke::new(1.0, p.border),
+        Stroke::new(1.0_f32, p.border),
     );
 }
 
