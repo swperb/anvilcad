@@ -7,8 +7,8 @@
 #   packaging/homebrew/anvilcad.rb                        (copy to Casks/ in swperb/homebrew-tap)
 #   packaging/winget/manifests/a/AnvilCAD/AnvilCAD/<v>/   (submit to microsoft/winget-pkgs)
 #
-# Needs: gh, shasum, and msiinfo (msitools: brew install msitools / apt install msitools)
-# to read the .msi's ProductCode. Run it after the release workflow has published the tag,
+# Needs: gh, shasum, and msiinfo and msiextract (msitools: brew install msitools / apt install
+# msitools) to read the .msi's ProductCode and check which runtime its programs need. Run it after the release workflow has published the tag,
 # commit the result, then publish both (see packaging/README.md).
 set -euo pipefail
 
@@ -33,6 +33,21 @@ product_code="$(msiinfo export "$tmp/$msi" Property | awk -F'\t' '$1 == "Product
 upgrade_code="$(msiinfo export "$tmp/$msi" Property | awk -F'\t' '$1 == "UpgradeCode" { print $2 }' | tr -d '\r')"
 release_date="$(gh release view "$tag" -R "$repo" --json publishedAt -q '.publishedAt[:10]')"
 [ -n "$product_code" ] && [ -n "$upgrade_code" ] || { echo "could not read the MSI's codes" >&2; exit 1; }
+
+# Releases up to 0.1.1 were built against the dynamic Visual C++ runtime, so their programs
+# do not start (STATUS_DLL_NOT_FOUND) on a Windows without the VC++ Redistributable, such
+# as winget's validation machine. Later releases link it statically (.cargo/config.toml).
+# Declare the dependency whenever the installed anvilcad.exe still imports VCRUNTIME140.dll.
+msiextract -C "$tmp/msi" "$tmp/$msi" >/dev/null
+exe="$(find "$tmp/msi" -iname anvilcad.exe | head -n 1)"
+[ -n "$exe" ] || { echo "anvilcad.exe not found in $msi" >&2; exit 1; }
+dependencies=""
+if LC_ALL=C grep -aqi 'vcruntime140\.dll' "$exe"; then
+  dependencies="Dependencies:
+  PackageDependencies:
+  - PackageIdentifier: Microsoft.VCRedist.2015+.x64
+"
+fi
 
 mkdir -p packaging/homebrew
 cat >packaging/homebrew/anvilcad.rb <<EOF
@@ -108,7 +123,7 @@ Commands:
 - anvil-bulk
 - anvil-migrate
 ReleaseDate: $release_date
-AppsAndFeaturesEntries:
+${dependencies}AppsAndFeaturesEntries:
 - ProductCode: '$product_code'
   UpgradeCode: '$upgrade_code'
 Installers:
