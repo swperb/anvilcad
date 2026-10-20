@@ -1120,12 +1120,12 @@ impl Document {
 
     /// The part as saved: with the tree's values recorded into the active configuration,
     /// and the oldest format version that holds everything it uses.
-    pub fn to_json(&self) -> String {
+    pub fn to_json(&self) -> Result<String, FileError> {
         let mut d = self.clone();
         d.capture_configuration();
         d.format_version =
             if d.uses_configurations() { PART_FORMAT_VERSION } else { PART_FORMAT_VERSION_BASE };
-        serde_json::to_string_pretty(&d).expect("document serializes")
+        Ok(serde_json::to_string_pretty(&d)?)
     }
 
     pub fn from_json(s: &str) -> Result<Document, FileError> {
@@ -1148,7 +1148,7 @@ impl Document {
     pub fn save(&self, path: &std::path::Path) -> Result<(), FileError> {
         // Write to a temporary file first so a crash never leaves a half-written part.
         let tmp = path.with_extension("anvprt.tmp");
-        std::fs::write(&tmp, self.to_json())?;
+        std::fs::write(&tmp, self.to_json()?)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -1184,7 +1184,11 @@ impl Document {
     }
 
     fn unique_name(&self, prefix: &str) -> String {
-        (1..).map(|i| format!("{prefix}{i}")).find(|n| !self.features.iter().any(|f| &f.name == n)).unwrap()
+        // There are fewer features than names, so a free one is always found.
+        (1..=self.features.len() + 1)
+            .map(|i| format!("{prefix}{i}"))
+            .find(|n| !self.features.iter().any(|f| &f.name == n))
+            .unwrap_or_else(|| format!("{prefix}{}", self.features.len() + 1))
     }
 
     /// Appends a feature (or inserts it at the rollback bar) and returns its id.

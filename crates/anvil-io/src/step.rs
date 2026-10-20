@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn cube_structure() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1).unwrap();
         let s = super::write(&b, "cube");
         assert!(s.starts_with("ISO-10303-21;"));
         assert!(s.trim_end().ends_with("END-ISO-10303-21;"));

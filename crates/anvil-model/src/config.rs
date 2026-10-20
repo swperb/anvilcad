@@ -988,7 +988,7 @@ mod tests {
     #[test]
     fn saving_records_the_active_values_and_the_format_version() {
         let plain = Document::new();
-        let v: serde_json::Value = serde_json::from_str(&plain.to_json()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&plain.to_json().unwrap()).unwrap();
         assert_eq!(v["format_version"], 1, "a part without configurations stays readable by older builds");
 
         let (mut doc, ex) = plate();
@@ -998,7 +998,7 @@ mod tests {
         doc.configuration_mut(deep).unwrap().description = "Deep plate".into();
         // Edited and not yet captured: saving must still record it.
         set_depth(&mut doc, ex, 40.0);
-        let text = doc.to_json();
+        let text = doc.to_json().unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["format_version"], 2);
         let mut back = Document::from_json(&text).unwrap();
@@ -1009,7 +1009,7 @@ mod tests {
         assert!(close(volume(&mut back), 8000.0));
 
         // A file from before configurations opens with one "Default".
-        let mut old: serde_json::Value = serde_json::from_str(&plain.to_json()).unwrap();
+        let mut old: serde_json::Value = serde_json::from_str(&plain.to_json().unwrap()).unwrap();
         let o = old.as_object_mut().unwrap();
         o.remove("configurations");
         o.remove("active_configuration");

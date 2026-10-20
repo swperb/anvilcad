@@ -787,7 +787,7 @@ mod tests {
         doc.add_feature(FeatureKind::Hole(
             HoleFeature::standard(sk, 2, Standard::IsoMetric, "M5", Fit::Close).expect("M5"),
         ));
-        let back = Document::from_json(&doc.to_json()).expect("load");
+        let back = Document::from_json(&doc.to_json().unwrap()).expect("load");
         assert_eq!(back.features, doc.features);
     }
 }

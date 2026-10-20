@@ -423,7 +423,7 @@ impl Ctx<'_> {
     /// Chooses the most associative reference for a sketch frame.
     fn resolve_plane(&self, frame: &Frame) -> PlaneRef {
         for p in [PlaneRef::Front, PlaneRef::Top, PlaneRef::Right] {
-            if frames_equal(&p.standard_frame().unwrap(), frame) {
+            if p.standard_frame().is_some_and(|f| frames_equal(&f, frame)) {
                 return p;
             }
         }
@@ -1513,7 +1513,7 @@ fn dimension(s: &Sketch, rel: &Disp, ty: i64, r: &[Ref]) -> ComResult<Option<(Co
             }
         }
         (1, [Line(l), x]) | (1, [x, Line(l)]) if pt(x).is_some() => {
-            let p = pt(x).unwrap();
+            let Some(p) = pt(x) else { return Err(ComError("unsupported dimension".into())) };
             C::PointLineDistance { p, line: *l, value: pl_dist(p, *l) }
         }
         (1, [Line(a), Line(b)]) => {
@@ -1521,7 +1521,9 @@ fn dimension(s: &Sketch, rel: &Disp, ty: i64, r: &[Ref]) -> ComResult<Option<(Co
             C::PointLineDistance { p, line: *a, value: pl_dist(p, *a) }
         }
         (1, [x, y]) if pt(x).is_some() && pt(y).is_some() => {
-            let (p, q) = (pt(x).unwrap(), pt(y).unwrap());
+            let (Some(p), Some(q)) = (pt(x), pt(y)) else {
+                return Err(ComError("unsupported dimension".into()));
+            };
             match dtype {
                 11 => C::HDistance { p, q, value: s.pos(q).x - s.pos(p).x },
                 12 => C::VDistance { p, q, value: s.pos(q).y - s.pos(p).y },

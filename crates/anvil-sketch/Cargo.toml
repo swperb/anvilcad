@@ -11,3 +11,11 @@ anvil-kernel.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

@@ -5,6 +5,10 @@
 //! name through IDispatch reaches all of it without generated bindings. Nothing from
 //! Dassault is linked or shipped: the objects come from the user's own installation.
 
+// COM calls through the `windows` crate are FFI and need `unsafe`; this module is the
+// only place in anvil-io allowed to use it.
+#![allow(unsafe_code)]
+
 use std::mem::ManuallyDrop;
 use windows::core::{Interface, BSTR, GUID, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{VARIANT_BOOL, VARIANT_FALSE, VARIANT_TRUE};

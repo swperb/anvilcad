@@ -41,7 +41,7 @@ impl Sketch {
     fn point_roots(&self) -> Vec<PointId> {
         let n = self.points.len();
         let mut parent: Vec<usize> = (0..n).collect();
-        fn find(p: &mut Vec<usize>, mut i: usize) -> usize {
+        fn find(p: &mut [usize], mut i: usize) -> usize {
             while p[i] != i {
                 p[i] = p[p[i]];
                 i = p[i];

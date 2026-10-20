@@ -248,7 +248,7 @@ mod tests {
         let (mut doc, _, _) = sample_doc();
         doc.material = Some(Material::library().remove(0));
         doc.custom_properties[0].value = "Mounting plate".into();
-        let json = doc.to_json();
+        let json = doc.to_json().unwrap();
         let back = Document::from_json(&json).unwrap();
         assert_eq!(doc, back);
         let st = doc.rebuild();
@@ -351,7 +351,7 @@ mod import_tests {
         let hole = std::f64::consts::PI * 4.0 * 10.0;
         assert!((v - (1000.0 - hole)).abs() / 1000.0 < 0.01, "{v}");
         // Round-trips through the file format.
-        assert_eq!(Document::from_json(&doc.to_json()).unwrap(), doc);
+        assert_eq!(Document::from_json(&doc.to_json().unwrap()).unwrap(), doc);
     }
 
     #[test]
@@ -753,7 +753,7 @@ mod chamfer_kinds {
     #[test]
     fn older_parts_load_as_equal_distance() {
         let (doc, id) = block(ChamferKind::OffsetFace, 2.0);
-        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json()).expect("json");
+        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).expect("json");
         // Remove the kind, as a part saved before it existed would have none.
         fn strip(v: &mut serde_json::Value) {
             match v {
@@ -1018,7 +1018,7 @@ mod fillet_profiles {
     #[test]
     fn older_parts_load_as_circular() {
         let (doc, id) = block(FilletProfile::CurvatureContinuous);
-        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json()).expect("json");
+        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).expect("json");
         // Remove the profile, as a part saved before it existed would have none.
         fn strip(v: &mut serde_json::Value) {
             match v {
@@ -1168,7 +1168,7 @@ mod tangent_propagation {
             profile: FilletProfile::Circular,
             tangent_propagation: true,
         }));
-        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json()).expect("json");
+        let mut json: serde_json::Value = serde_json::from_str(&doc.to_json().unwrap()).expect("json");
         fn strip(v: &mut serde_json::Value) {
             match v {
                 serde_json::Value::Object(m) => {

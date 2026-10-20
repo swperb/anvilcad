@@ -156,7 +156,7 @@ pub fn face_point(face: &Disp) -> Option<Vec3> {
             let (a, b, d) = (v3(c[0], c[1], c[2]), v3(c[3], c[4], c[5]), v3(c[6], c[7], c[8]));
             ((b - a).cross(d - a).length(), (a + b + d) * (M_TO_MM / 3.0))
         })
-        .max_by(|x, y| x.0.partial_cmp(&y.0).unwrap())
+        .max_by(|x, y| x.0.total_cmp(&y.0))
         .map(|x| x.1)
 }
 

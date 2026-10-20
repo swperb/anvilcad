@@ -1541,8 +1541,7 @@ impl AnvilApp {
                         });
                         ui.add_space(8.0);
                         ui.weak("Select a plane or planar face, then click Sketch.");
-                    } else {
-                        let s = self.sketch.as_mut().unwrap();
+                    } else if let Some(s) = self.sketch.as_mut() {
                         theme::command_group(ui, "Draw", |ui| {
                             tool_family_button(ui, s, &[Tool::Select]);
                             for family in sketcher::DRAW_FAMILIES {
@@ -1717,7 +1716,8 @@ impl AnvilApp {
                 if *rid == id {
                     let r = ui.text_edit_singleline(buf);
                     if r.lost_focus() {
-                        let (rid, buf) = self.rename.take().unwrap();
+                        let (rid, buf) = (*rid, std::mem::take(buf));
+                        self.rename = None;
                         if !buf.trim().is_empty() {
                             if let Some(f) = self.doc.feature_mut(rid) {
                                 f.name = buf.trim().to_string();
@@ -2966,14 +2966,18 @@ impl AnvilApp {
             let hover = if self.sketch.is_some() { None } else { self.hover_face };
             let colors = crate::theme::scene_colors(ui.ctx());
             let data = SceneData::build(&self.mesh, &self.edges, hover, &selected, &colors);
-            self.renderer.lock().unwrap().set_scene(data);
+            self.renderer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_scene(data);
             self.scene_dirty = false;
         }
         let mvp = self.camera.mvp(rect);
         let view = self.camera.back;
         let light = self.camera.back * 1.0 + self.camera.up * 0.45 + self.camera.right * 0.25;
         let edges = self.show_edges;
-        let cb = self.renderer.lock().unwrap().callback(rect, mvp, view, light, edges);
+        let cb = self
+            .renderer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .callback(rect, mvp, view, light, edges);
         painter.add(cb);
 
         // Overlays: planes, sketches, edges picked for a fillet or chamfer.
@@ -3028,7 +3032,7 @@ impl AnvilApp {
         painter.circle_filled(o, 2.5, pal.text_weak);
 
         self.view_toolbar(ui, rect);
-        if let Some(e) = &self.renderer.lock().unwrap().error {
+        if let Some(e) = &self.renderer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).error {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -3980,19 +3984,26 @@ impl AnvilApp {
             })
         });
         if let Some(img) = shot {
-            let file = std::fs::File::create(&path).expect("create screenshot");
-            let mut enc =
-                png::Encoder::new(std::io::BufWriter::new(file), img.size[0] as u32, img.size[1] as u32);
-            enc.set_color(png::ColorType::Rgba);
-            enc.set_depth(png::BitDepth::Eight);
-            let mut w = enc.write_header().expect("png header");
-            w.write_image_data(img.as_raw()).expect("png data");
-            drop(w);
+            if let Err(e) = write_png(&path, &img) {
+                eprintln!("anvilcad: could not write screenshot {}: {e}", path.display());
+            }
             self.allow_close = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ctx.request_repaint();
     }
+}
+
+/// Writes an egui screenshot as an RGBA PNG.
+fn write_png(path: &std::path::Path, img: &egui::ColorImage) -> Result<(), Box<dyn std::error::Error>> {
+    let file = std::fs::File::create(path)?;
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), img.size[0] as u32, img.size[1] as u32);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut w = enc.write_header()?;
+    w.write_image_data(img.as_raw())?;
+    w.finish()?;
+    Ok(())
 }
 
 // ----- headless harness API --------------------------------------------------------------

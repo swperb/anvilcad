@@ -113,7 +113,8 @@ impl Sketch {
         };
         let radius = |e: usize| -> f64 {
             match self.entities[e].geom {
-                Geom::Circle { .. } => x[l.radius_var[e].unwrap()],
+                // The layout gives every circle a radius variable; fall back to the stored radius.
+                Geom::Circle { r, .. } => l.radius_var[e].map_or(r, |v| x[v]),
                 Geom::Arc { c, a, .. } => p(a).distance(p(c)),
                 Geom::Line { a, b } => p(a).distance(p(b)),
             }
@@ -511,8 +512,7 @@ fn center_point(g: Geom) -> PointId {
 fn solve_dense(a: &mut [f64], b: &[f64], n: usize) -> Option<Vec<f64>> {
     let mut x = b.to_vec();
     for col in 0..n {
-        let piv =
-            (col..n).max_by(|&i, &j| a[i * n + col].abs().partial_cmp(&a[j * n + col].abs()).unwrap())?;
+        let piv = (col..n).max_by(|&i, &j| a[i * n + col].abs().total_cmp(&a[j * n + col].abs()))?;
         if a[piv * n + col].abs() < 1e-300 {
             return None;
         }

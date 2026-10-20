@@ -295,8 +295,8 @@ impl Solid {
         let origin = n * p.w;
         let hint = [Vec3::X, Vec3::Y, Vec3::Z]
             .into_iter()
-            .min_by(|a, b| a.dot(n).abs().partial_cmp(&b.dot(n).abs()).unwrap())
-            .unwrap();
+            .min_by(|a, b| a.dot(n).abs().total_cmp(&b.dot(n).abs()))
+            .unwrap_or(Vec3::X);
         Some(Frame::from_normal(origin, n, hint))
     }
 
@@ -452,7 +452,7 @@ impl Solid {
         let sorted: Vec<Vec<usize>> = (0..3)
             .map(|axis| {
                 let mut idx: Vec<usize> = (0..verts.len()).collect();
-                idx.sort_by(|&a, &b| coord(verts[a], axis).partial_cmp(&coord(verts[b], axis)).unwrap());
+                idx.sort_by(|&a, &b| coord(verts[a], axis).total_cmp(&coord(verts[b], axis)));
                 idx
             })
             .collect();
@@ -471,7 +471,7 @@ impl Solid {
                 }
                 // Search along the axis where the edge is shortest: the narrowest window.
                 let ext = [d.x.abs(), d.y.abs(), d.z.abs()];
-                let axis = (0..3).min_by(|&x, &y| ext[x].partial_cmp(&ext[y]).unwrap()).unwrap();
+                let axis = (0..3).min_by(|&x, &y| ext[x].total_cmp(&ext[y])).unwrap_or(0);
                 let (lo, hi) =
                     (coord(a, axis).min(coord(b, axis)) - EPS, coord(a, axis).max(coord(b, axis)) + EPS);
                 let list = &sorted[axis];
@@ -491,7 +491,7 @@ impl Solid {
                     }
                 }
                 if !on_edge.is_empty() {
-                    on_edge.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+                    on_edge.sort_by(|x, y| x.0.total_cmp(&y.0));
                     let mut last = a;
                     for &(_, v) in &on_edge {
                         if v.distance(last) > EPS {
@@ -512,7 +512,8 @@ impl Solid {
             let s = 1e5;
             ((v.x * s).round() as i64, (v.y * s).round() as i64, (v.z * s).round() as i64)
         };
-        let mut count: HashMap<((i64, i64, i64), (i64, i64, i64)), i32> = HashMap::new();
+        type Key = (i64, i64, i64);
+        let mut count: HashMap<(Key, Key), i32> = HashMap::new();
         for p in &self.polygons {
             let k = p.verts.len();
             for i in 0..k {

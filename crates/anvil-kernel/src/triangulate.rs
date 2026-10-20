@@ -39,7 +39,7 @@ pub fn triangulate(outer: &[Vec2], holes: &[Vec<Vec2>]) -> (Vec<Vec2>, Vec<[usiz
         hole_rings.push(idx);
     }
     let max_x = |r: &Vec<usize>| r.iter().map(|&i| pts[i].x).fold(f64::NEG_INFINITY, f64::max);
-    hole_rings.sort_by(|a, b| max_x(b).partial_cmp(&max_x(a)).unwrap());
+    hole_rings.sort_by(|a, b| max_x(b).total_cmp(&max_x(a)));
     for h in &hole_rings {
         ring = bridge_hole(&pts, ring, h);
     }
@@ -50,8 +50,10 @@ pub fn triangulate(outer: &[Vec2], holes: &[Vec<Vec2>]) -> (Vec<Vec2>, Vec<[usiz
 
 fn bridge_hole(pts: &[Vec2], ring: Vec<usize>, hole: &[usize]) -> Vec<usize> {
     // Rightmost hole vertex M.
-    let (mi, &m_idx) =
-        hole.iter().enumerate().max_by(|a, b| pts[*a.1].x.partial_cmp(&pts[*b.1].x).unwrap()).unwrap();
+    let Some((mi, &m_idx)) = hole.iter().enumerate().max_by(|a, b| pts[*a.1].x.total_cmp(&pts[*b.1].x))
+    else {
+        return ring;
+    };
     let m = pts[m_idx];
 
     // Cast a ray to +x and find the closest crossing of the outer ring.
@@ -112,9 +114,7 @@ fn bridge_hole(pts: &[Vec2], ring: Vec<usize>, hole: &[usize]) -> Vec<usize> {
         }
         None => {
             // Degenerate input; fall back to the nearest ring vertex.
-            (0..n)
-                .min_by(|&a, &b| pts[ring[a]].distance(m).partial_cmp(&pts[ring[b]].distance(m)).unwrap())
-                .unwrap()
+            (0..n).min_by(|&a, &b| pts[ring[a]].distance(m).total_cmp(&pts[ring[b]].distance(m))).unwrap_or(0)
         }
     };
 
@@ -218,5 +218,22 @@ mod tests {
         let hole_area = crate::profile::polygon_signed_area(&hole);
         let (pts, tris) = triangulate(&outer, &[hole]);
         assert!((area(&pts, &tris) - (100.0 - hole_area)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn empty_hole_is_ignored() {
+        // An empty hole ring used to panic while looking for its rightmost vertex.
+        let outer = vec![v2(0.0, 0.0), v2(10.0, 0.0), v2(10.0, 10.0), v2(0.0, 10.0)];
+        let (pts, tris) = triangulate(&outer, &[vec![]]);
+        assert!((area(&pts, &tris) - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nan_hole_does_not_panic() {
+        // Sorting holes by a NaN coordinate used to panic.
+        let outer = vec![v2(0.0, 0.0), v2(10.0, 0.0), v2(10.0, 10.0), v2(0.0, 10.0)];
+        let nan = vec![v2(f64::NAN, 1.0), v2(f64::NAN, 2.0), v2(f64::NAN, 3.0)];
+        let hole = vec![v2(3.0, 3.0), v2(7.0, 3.0), v2(7.0, 7.0), v2(3.0, 7.0)];
+        let _ = triangulate(&outer, &[nan, hole]);
     }
 }

@@ -34,7 +34,7 @@ mod tests {
 
     #[test]
     fn counts() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(1.0, 1.0, 1.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(1.0, 1.0, 1.0), 1).unwrap();
         let s = super::write(&b, "cube");
         assert_eq!(s.lines().filter(|l| l.starts_with("f ")).count(), b.polygons.len());
         assert_eq!(s.lines().filter(|l| l.starts_with("g ")).count(), 6);

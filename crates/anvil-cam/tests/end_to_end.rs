@@ -17,10 +17,10 @@ use anvil_model::material::Material;
 /// 80 x 60 x 20 block with a 40 x 30 pocket 10 deep around a 10 x 10 island, and a 6 mm
 /// through hole.
 fn part() -> Solid {
-    let base = block(v3(0.0, 0.0, 0.0), v3(80.0, 60.0, 20.0), 1);
-    let pocket = block(v3(20.0, 15.0, 10.0), v3(60.0, 45.0, 25.0), 2);
-    let island = block(v3(35.0, 25.0, 10.0), v3(45.0, 35.0, 20.0), 3);
-    let through = cylinder(v3(10.0, 10.0, -5.0), 3.0, 30.0, 4);
+    let base = block(v3(0.0, 0.0, 0.0), v3(80.0, 60.0, 20.0), 1).unwrap();
+    let pocket = block(v3(20.0, 15.0, 10.0), v3(60.0, 45.0, 25.0), 2).unwrap();
+    let island = block(v3(35.0, 25.0, 10.0), v3(45.0, 35.0, 20.0), 3).unwrap();
+    let through = cylinder(v3(10.0, 10.0, -5.0), 3.0, 30.0, 4).unwrap();
     base.subtract(&pocket).union(&island).subtract(&through)
 }
 
@@ -122,8 +122,8 @@ fn part_to_certified_programs() {
 #[test]
 fn flat_bottomed_blind_hole_is_reported_as_a_gouge() {
     // A drill cannot make a flat bottom: the simulator says so.
-    let base = block(v3(0.0, 0.0, 0.0), v3(40.0, 40.0, 20.0), 1);
-    let blind = cylinder(v3(20.0, 20.0, 10.0), 3.0, 15.0, 2);
+    let base = block(v3(0.0, 0.0, 0.0), v3(40.0, 40.0, 20.0), 1).unwrap();
+    let blind = cylinder(v3(20.0, 20.0, 10.0), 3.0, 15.0, 2).unwrap();
     let part = base.subtract(&blind);
     let job = job();
     let stock = Stock { min: v3(0.0, 0.0, 0.0), max: v3(40.0, 40.0, 20.0) };

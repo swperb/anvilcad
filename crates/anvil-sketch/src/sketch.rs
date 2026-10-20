@@ -1091,7 +1091,7 @@ impl Sketch {
             .enumerate()
             .map(|(i, q)| (i, q.pos().distance(p)))
             .filter(|(_, d)| *d <= radius)
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i)
     }
 
@@ -1100,7 +1100,7 @@ impl Sketch {
         (0..self.entities.len())
             .map(|e| (e, self.distance_to_entity(e, p)))
             .filter(|(_, d)| *d <= radius)
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(e, _)| e)
     }
 }

@@ -1,6 +1,7 @@
 //! The testable statements of `docs/re/sketch-tools.md` for the editing tools (numbered
 //! as there). Units are millimetres and degrees; "rectangle 40 × 20" has corners (0, 0),
 //! (40, 0), (40, 20) and (0, 20).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use anvil_kernel::profile::Seg2;
 use anvil_kernel::{v2, Vec2};
