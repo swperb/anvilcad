@@ -8,8 +8,10 @@
 # VERSION defaults to the workspace version in Cargo.toml; a leading "v" is dropped, so a
 # tag such as v0.2.0 can be passed as it is. The release workflow
 # (.github/workflows/release.yml) runs this on each platform, and it runs the same way on a
-# developer's machine. Nothing is code-signed: that needs paid certificates. The macOS app
-# gets an ad-hoc signature, which Apple Silicon requires before it runs anything.
+# developer's machine. On macOS, setting ANVIL_MACOS_SIGN_IDENTITY and ANVIL_NOTARY_PROFILE
+# signs the app with a Developer ID and notarizes it (see packaging/macos/sign.sh); without
+# them it gets an ad-hoc signature, which Apple Silicon requires before it runs anything.
+# The Windows and Linux packages are not signed.
 #
 # Needs: macos  - Xcode command-line tools and the aarch64-apple-darwin and
 #                 x86_64-apple-darwin Rust targets
@@ -49,27 +51,54 @@ macos)
     cargo build --release --locked --target "$t" "${crates[@]}"
   done
 
+  . packaging/macos/sign.sh
+  bundle_id=io.github.swperb.anvilcad
+
+  # The plain binaries for the .tar.gz, each signed on its own. The command-line tools are
+  # copied into the app as they are; the main binary is signed again there as part of the
+  # bundle.
+  name="anvilcad-$version-macos-universal"
+  mkdir -p "$stage/$name"
+  for b in "${bins[@]}"; do
+    lipo -create -output "$stage/$name/$b" \
+      "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
+    macos_sign "$stage/$name/$b" "$bundle_id.$b"
+  done
+  docs_into "$stage/$name"
+
   app="$stage/dmg/AnvilCAD.app"
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-  for b in "${bins[@]}"; do
-    lipo -create -output "$app/Contents/MacOS/$b" \
-      "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
-  done
+  for b in "${bins[@]}"; do cp "$stage/$name/$b" "$app/Contents/MacOS/$b"; done
   sed "s/@VERSION@/$version/g" packaging/macos/Info.plist >"$app/Contents/Info.plist"
   cp packaging/icons/anvilcad.icns "$app/Contents/Resources/anvilcad.icns"
-  codesign --force --deep --sign - "$app"
-  ln -s /Applications "$stage/dmg/Applications"
+  macos_sign "$app"
+  codesign --verify --deep --strict "$app"
 
+  # Notarize the app and the plain binaries in one submission, then staple the ticket to
+  # the app so it opens without a network check. Binaries outside a bundle cannot carry a
+  # ticket; Gatekeeper looks theirs up online.
+  if [ -n "$macos_profile" ]; then
+    (cd "$stage" && zip -qry notarize.zip dmg/AnvilCAD.app "$name")
+    macos_notarize "$stage/notarize.zip"
+    xcrun stapler staple "$app"
+  fi
+
+  tar -C "$stage" -czf "$dist/$name.tar.gz" "$name"
+
+  ln -s /Applications "$stage/dmg/Applications"
   dmg="$dist/AnvilCAD-$version-macos-universal.dmg"
   rm -f "$dmg"
   hdiutil create -volname "AnvilCAD $version" -srcfolder "$stage/dmg" -fs HFS+ \
     -format UDZO -ov "$dmg"
-
-  name="anvilcad-$version-macos-universal"
-  mkdir -p "$stage/$name"
-  for b in "${bins[@]}"; do cp "$app/Contents/MacOS/$b" "$stage/$name/"; done
-  docs_into "$stage/$name"
-  tar -C "$stage" -czf "$dist/$name.tar.gz" "$name"
+  if [ -n "$macos_identity" ]; then
+    macos_sign "$dmg" "$bundle_id.dmg"
+  fi
+  if [ -n "$macos_profile" ]; then
+    macos_notarize "$dmg"
+    xcrun stapler staple "$dmg"
+    spctl --assess --type open --context context:primary-signature -vv "$dmg"
+    spctl --assess --type exec -vv "$app"
+  fi
   ;;
 
 linux)

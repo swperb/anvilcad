@@ -10,9 +10,26 @@ name: Release
 #
 # Cost: nothing. It uses only the standard GitHub-hosted runners (ubuntu-latest,
 # windows-latest, macos-latest), which are free for public repositories, and free tools
-# (WiX Toolset 5, appimagetool). It signs nothing, so no certificates are needed, and it
-# calls no paid service. It runs only for a tag, a manual run, or a pull request that
-# touches the packaging, not on every push.
+# (WiX Toolset 5, appimagetool), and calls no paid service. It runs only for a tag, a
+# manual run, or a pull request that touches the packaging, not on every push.
+#
+# macOS signing and notarization use the maintainer's Apple Developer Program membership,
+# which is paid for already; Apple charges nothing per signature or notarization. They run
+# only when the secrets below are set, and never for pull requests (a dry run does not need
+# them, and pull requests from forks get no secrets). Without them the app gets an ad-hoc
+# signature, so forks still build. The secrets:
+#
+#   MACOS_CERTIFICATE_P12        the "Developer ID Application" certificate with its private
+#                                key, exported from Keychain Access as .p12, base64-encoded
+#   MACOS_CERTIFICATE_PASSWORD   the password chosen for that export
+#   APPLE_TEAM_ID                the ten-character team id
+#   and, for notarization, either an App Store Connect API key:
+#   NOTARY_API_KEY_P8            the AuthKey_XXXXXXXXXX.p8 file, base64-encoded
+#   NOTARY_API_KEY_ID            its key id
+#   NOTARY_API_ISSUER            the issuer id shown above the list of keys
+#   or an Apple ID:
+#   NOTARY_APPLE_ID              the Apple ID's email address
+#   NOTARY_APP_PASSWORD          an app-specific password for it (account.apple.com)
 on:
   push:
     tags: ["v*"]
@@ -41,7 +58,61 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
+      # Imports the certificate into a temporary keychain, stores the notary credentials
+      # in it, and tells package.sh to use them. Without a certificate, and for pull
+      # requests, it does nothing and the build is ad-hoc signed.
+      - name: Signing keychain
+        if: github.event_name != 'pull_request'
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.NOTARY_API_ISSUER }}
+          APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          APP_PASSWORD: ${{ secrets.NOTARY_APP_PASSWORD }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$TEAM_ID" ]; then
+            echo "::notice::No signing certificate is configured; the macOS build is ad-hoc signed and not notarized."
+            exit 0
+          fi
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kc_password="$(uuidgen)"
+          security create-keychain -p "$kc_password" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kc_password" "$kc"
+          echo "ANVIL_KEYCHAIN=$kc" >> "$GITHUB_ENV"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -k "$kc_password" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$kc" \
+            | grep -o "\"Developer ID Application: .*($TEAM_ID)\"" | tr -d '"' | head -n 1)"
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERTIFICATE_P12 holds no Developer ID Application identity for team $TEAM_ID."
+            exit 1
+          fi
+          echo "ANVIL_MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+          if [ -n "$API_KEY_P8" ]; then
+            echo "$API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+            xcrun notarytool store-credentials anvilcad-notary --keychain "$kc" \
+              --key "$RUNNER_TEMP/notary.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER"
+            rm -f "$RUNNER_TEMP/notary.p8"
+          elif [ -n "$APPLE_ID" ]; then
+            xcrun notarytool store-credentials anvilcad-notary --keychain "$kc" \
+              --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
+          else
+            echo "::warning::No notary credentials are configured; the macOS build is signed but not notarized."
+            exit 0
+          fi
+          echo "ANVIL_NOTARY_PROFILE=anvilcad-notary" >> "$GITHUB_ENV"
       - run: bash packaging/package.sh macos "$VERSION"
+      - name: Remove the signing keychain
+        if: always() && env.ANVIL_KEYCHAIN != ''
+        run: security delete-keychain "$ANVIL_KEYCHAIN"
       - uses: actions/upload-artifact@v4
         with:
           name: macos

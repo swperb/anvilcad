@@ -26,13 +26,15 @@ is needed.
 | Windows 10 or 11, x64 | `AnvilCAD-<version>-windows-x64.msi` (or the `.zip`) |
 | Linux x86_64, glibc 2.35 or later | `AnvilCAD-<version>-linux-x86_64.AppImage` (or the `.tar.gz`) |
 
-The packages are not code-signed yet, because signing certificates cost money, so the
-first launch takes one extra step:
+- **macOS**: open the `.dmg` and drag AnvilCAD to Applications. The app is signed with a
+  Developer ID and notarized by Apple, so it opens like any other downloaded app. (The 0.1.0
+  `.dmg` was not signed. If macOS says it cannot verify the developer, click Done, open
+  System Settings > Privacy & Security, click Open Anyway next to AnvilCAD and confirm, or
+  upgrade to a newer release.)
 
-- **macOS**: open the `.dmg` and drag AnvilCAD to Applications. The first time you open
-  it, macOS says it cannot verify the developer. Click Done, open System Settings > Privacy
-  & Security, click Open Anyway next to AnvilCAD and confirm. Or, in Terminal:
-  `xattr -dr com.apple.quarantine /Applications/AnvilCAD.app`.
+The Windows and Linux packages are not code-signed yet, so their first launch takes one
+extra step:
+
 - **Windows**: SmartScreen says "Windows protected your PC". Click More info, then Run
   anyway. The installer adds AnvilCAD to the Start menu and puts `anvilcad-agent`,
   `anvil-bulk` and `anvil-migrate` on the PATH.
