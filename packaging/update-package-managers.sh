@@ -8,8 +8,9 @@
 #   packaging/winget/manifests/a/AnvilCAD/AnvilCAD/<v>/   (submit to microsoft/winget-pkgs)
 #
 # Needs: gh, shasum, and msiinfo and msiextract (msitools: brew install msitools / apt install
-# msitools) to read the .msi's ProductCode and check which runtime its programs need. Run it after the release workflow has published the tag,
-# commit the result, then publish both (see packaging/README.md).
+# msitools) to read the .msi's ProductCode and check which runtime its programs need. Run it
+# after the release workflow has published the tag, commit the result, then publish both
+# (see packaging/README.md).
 set -euo pipefail
 
 version="${1:?usage: update-package-managers.sh VERSION}"
