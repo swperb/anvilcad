@@ -94,7 +94,7 @@ with evidence; the maintainer decides.
 | G3 | Install instructions for unsigned apps (macOS Gatekeeper, Windows SmartScreen) are in the README and on `docs/index.html` | Read both pages |
 | G4 | The MCP server works from a one-line setup | Run the README's `claude mcp add ...` line in a fresh shell and build a 10x20x30 mm block; the volume must be 6000 mm³ |
 | G5 | Every claim in the README and the drafts below is true today | Check against the "Say / Do not say" table in [docs/POSITIONING.md](docs/POSITIONING.md) and the README's "What works today" |
-| G6 | Demo video, 60 seconds or less: an agent building a part over MCP, then a feature tree before and after migration with the volume check | A file in `docs/media/`, made with `anvilcad-agent` ([docs/AGENT_HARNESS.md](docs/AGENT_HARNESS.md)) from a part the project may publish |
+| G6 | Films rendered from the current release: the 60-second trailer, the `agent` film, and the feature spots. Add a migration before-and-after with the volume check when there is a part the project may publish | `python3 scripts/cinema/films.py` ([scripts/cinema/README.md](scripts/cinema/README.md)); watch each one, and check its captions against the README's "What works today" |
 | G7 | GitHub topics and homepage set | `gh repo view --json homepageUrl,repositoryTopics`. Suggested topics: `cad`, `parametric-cad`, `rust`, `brep`, `step`, `mcp`, `solidworks`, `cam`, `3d-modeling`. Ask the maintainer before running `gh repo edit --add-topic`. |
 | G8 | A place to talk: GitHub Discussions on (or a Discord), linked from the README | `gh repo view --json hasDiscussionsEnabled`. Ask before changing the setting. |
 | G9 | 5 to 10 open issues labelled `good first issue`, each with the files involved and what done looks like | `gh issue list --label "good first issue"` |
@@ -173,8 +173,8 @@ account look like spam to Reddit's filters and to moderators.
 Fill the `{{placeholders}}` from the release at T-24 h. Check every sentence against gate
 G5 before posting; if a claim stopped being true, cut it.
 
-Placeholders: `{{version}}`, `{{release_url}}`, `{{video_url}}` (an MP4 or GIF the
-platform can embed), `{{mcp_setup}}` (the one-line command from the README),
+Placeholders: `{{version}}`, `{{release_url}}`, `{{video_url}}` (the trailer, or the
+`agent` film for AI audiences, from `target/cinema/`), `{{mcp_setup}}` (the one-line command from the README),
 `{{new_this_release}}`.
 
 ### 5.1 Show HN title
