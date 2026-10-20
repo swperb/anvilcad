@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Windows installer for AnvilCAD, built with WiX Toolset 5 by packaging/package.sh:
+
+    wix build -arch x64 -d Version=0.1.0 -d BinDir=... -d Root=... -o AnvilCAD.msi anvilcad.wxs
+
+  It installs for all users into Program Files\AnvilCAD, adds a Start menu shortcut, and
+  puts the install folder on the system PATH so anvilcad-agent, anvil-bulk and anvil-migrate
+  run from any terminal. Installing a newer version replaces the older one.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="AnvilCAD"
+           Manufacturer="AnvilCAD contributors"
+           Version="$(Version)"
+           UpgradeCode="F808BDF8-B9BD-439F-8E65-78DC89274DC8"
+           Scope="perMachine"
+           Compressed="yes">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of AnvilCAD is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AnvilCAD.ico" SourceFile="$(Root)\packaging\icons\anvilcad.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AnvilCAD.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/swperb/anvilcad" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="AnvilCAD" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component>
+        <File Source="$(BinDir)\anvilcad.exe" KeyPath="yes">
+          <Shortcut Name="AnvilCAD"
+                    Directory="ProgramMenuFolder"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AnvilCAD.ico"
+                    Advertise="yes" />
+        </File>
+        <Environment Id="PATH" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="yes" Permanent="no" />
+      </Component>
+      <Component>
+        <File Source="$(BinDir)\anvilcad-agent.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(BinDir)\anvil-bulk.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(BinDir)\anvil-migrate.exe" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(Root)\LICENSE-MIT" KeyPath="yes" />
+      </Component>
+      <Component>
+        <File Source="$(Root)\LICENSE-APACHE" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+  </Package>
+</Wix>
