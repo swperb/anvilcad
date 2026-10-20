@@ -118,12 +118,15 @@ to recover more, as long as nothing is gated behind it.
   (`cargo run -p anvil-app`) opens a real window; don't.
 - Save harness screenshots under `target/` and look at them before you describe them.
 
-## Testing on Windows: use the Windows VM
+## Testing on Windows and Linux: use the test VMs
 
-A Windows 11 Pro VM on the maintainer's TrueNAS box is the sandbox for anything that
-touches Windows: builds, tests, the headless harness and the real windowed app. Drive it
-with `scripts/winvm/winvm` (see [docs/WINDOWS_VM.md](docs/WINDOWS_VM.md)); it syncs the
-working tree over SSH, so nothing needs committing first.
+A Windows 11 Pro VM and an Ubuntu 24.04 VM on the maintainer's TrueNAS box are the sandboxes
+for anything that touches those platforms: builds, tests, the headless harness and the real
+windowed app. Drive them with `scripts/winvm/winvm` and `scripts/linuxvm/linuxvm` (see
+[docs/WINDOWS_VM.md](docs/WINDOWS_VM.md) and [docs/LINUX_VM.md](docs/LINUX_VM.md)); they sync
+the working tree over SSH, so nothing needs committing first. They share the NAS's memory
+and, by default, take turns (`ANVIL_VM_MODE`); a lease keeps one agent from stopping a VM
+another is using.
 
 - Before finishing a change that could behave differently on Windows (paths, file I/O,
   dialogs, rendering, the `windows-gnu` build, `anvil-migrate`, Document Manager), run
@@ -133,8 +136,19 @@ working tree over SSH, so nothing needs committing first.
   inside the VM is fine; it never touches the host's screen or input.
 - Take a `winvm snapshot` before anything that changes the VM itself (installers, registry,
   drivers) and `winvm rollback` afterwards.
-- If `winvm status` shows the VM is unreachable, say so and carry on with local checks;
-  CI's `windows-latest` job still covers the build.
+- For changes that could behave differently on Linux (Wayland or X11, file dialogs, fonts,
+  rendering, paths), run `scripts/linuxvm/linuxvm check`, and `linuxvm gui launch` (GNOME),
+  `--headless-wayland` or `--headless-x11` to see the window.
+- If `status` shows a VM is unreachable, say so and carry on with local checks; CI's
+  `windows-latest` and `ubuntu-latest` jobs still cover the build.
+
+## Configuration and scripting
+
+`init.lua` (options, theme, key bindings, user commands) and the `anvil` scripting API are
+documented in [docs/SCRIPTING.md](docs/SCRIPTING.md); `crates/anvil-app/src/script.rs` and
+`app/scripting.rs` implement them. When you add a toolbar command, add it to
+`BUILTIN_COMMANDS` in `app/scripting.rs` and to the list in docs/SCRIPTING.md, so keys and
+scripts can reach it. Keep `docs/examples/init.lua` working: a test loads it.
 
 ## Engineering standards
 

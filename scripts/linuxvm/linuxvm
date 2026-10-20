@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+# Drives the Ubuntu 24.04 test VM from macOS or Linux: power and snapshots through the
+# TrueNAS middleware, and builds, tests, the headless harness and the real windowed app (on
+# GNOME under Wayland or X11, or a headless compositor) over SSH. See docs/LINUX_VM.md.
+#
+# Usage: scripts/linuxvm/linuxvm <command> [args...]   (scripts/linuxvm/linuxvm help for the list)
+set -euo pipefail
+
+CONFIG="${LINUXVM_CONFIG:-$HOME/.config/anvilcad/linuxvm.env}"
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && source "$CONFIG"
+LINUXVM_NAME="${LINUXVM_NAME:-anvillinux}"
+LINUXVM_ZVOL="${LINUXVM_ZVOL:-nas1/vms/anvil-linux}"
+LINUXVM_USER="${LINUXVM_USER:-anvil}"
+# Reached through the NAS by default, which works from anywhere on the Tailnet. Set
+# LINUXVM_JUMP= (empty) to connect straight to the VM when you are on its LAN.
+LINUXVM_JUMP="${LINUXVM_JUMP-${TRUENAS_USER:-truenas_admin}@${TRUENAS_HOST:-truenas-scale-1}}"
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
+# Each checkout (main, or a worktree) gets its own source tree and target dir in the VM.
+SLUG="$(basename "$REPO" | tr -c 'A-Za-z0-9_.\n-' '_')"
+VM_SRC="anvil/src/$SLUG"
+VM_TARGET="anvil/target/$SLUG"
+LOCAL_OUT="$REPO/target/linuxvm"
+
+TOOL=linuxvm VM_NAME="$LINUXVM_NAME" VM_ZVOL="$LINUXVM_ZVOL" VM_LOGIN="$LINUXVM_USER"
+VM_MAC="${LINUXVM_MAC:-}" VM_HOST="${LINUXVM_HOST:-}" VM_JUMP="$LINUXVM_JUMP"
+# shellcheck source-path=SCRIPTDIR source=../vm/truenas.sh
+source "$HERE/../vm/truenas.sh"
+
+# The ssh command line for rsync's -e, each option single-quoted (rsync honours quotes).
+rsync_ssh() { local o out="ssh"; for o in "${VM_SSH_OPTS[@]}"; do out+=" '$o'"; done; echo "$out"; }
+
+# Runs a bash command in the VM (in the user's home) and returns its exit code.
+vm() { ssh "${VM_SSH_OPTS[@]}" "$VM_LOGIN@$(host)" "bash -lc $(printf '%q' "$*")"; }
+
+# Runs a command inside the auto-logon user's graphical session: its D-Bus, Wayland and X
+# displays, whichever session type GDM started.
+in_session() {
+  vm "source ~/anvil/session.env 2>/dev/null || { echo 'no desktop session yet; is the VM at the GNOME desktop?' >&2; exit 1; }; $*"
+}
+
+# The environment every cargo command in the VM runs with.
+cargo_env() { printf '%s' "source ~/.cargo/env && export CARGO_TARGET_DIR=~/$VM_TARGET && cd ~/$VM_SRC &&"; }
+
+# Copies the working tree (tracked and untracked, not ignored, uncommitted edits included)
+# into the VM with rsync. Only changed files are sent, and the target dir is kept.
+cmd_sync() {
+  local list n
+  list="$(mktemp)"
+  (cd "$REPO" && git ls-files -co --exclude-standard -z |
+    while IFS= read -r -d '' f; do if [ -f "$f" ] && [ ! -L "$f" ]; then printf '%s\0' "$f"; fi; done) > "$list"
+  n="$(tr -cd '\0' < "$list" | wc -c | tr -d ' ')"
+  vm "mkdir -p ~/$VM_SRC ~/$VM_TARGET"
+  (cd "$REPO" && rsync -a --from0 --files-from="$list" \
+    -e "$(rsync_ssh)" ./ "$VM_LOGIN@$(host):$VM_SRC/")
+  echo "linuxvm: synced $n files to ~/$VM_SRC"
+  rm -f "$list"
+}
+
+cmd_cargo() {
+  [ "${LINUXVM_NO_SYNC:-}" = 1 ] || cmd_sync
+  local args="" a
+  for a in "$@"; do args+=" $(printf '%q' "$a")"; done
+  vm "$(cargo_env) cargo$args"
+}
+
+# The checks CLAUDE.md asks for, run on Linux.
+cmd_check() {
+  cmd_sync
+  LINUXVM_NO_SYNC=1 cmd_cargo fmt --all --check
+  LINUXVM_NO_SYNC=1 cmd_cargo clippy --workspace --all-targets
+  LINUXVM_NO_SYNC=1 cmd_cargo test --workspace
+}
+
+# Runs anvilcad-agent in the VM (no display needed; it renders with lavapipe). Paths are
+# relative to the synced tree; anything written under target/linuxvm-out/ is copied back to
+# target/linuxvm/ locally.
+cmd_agent() {
+  cmd_sync
+  local args="" a rc=0
+  for a in "$@"; do args+=" $(printf '%q' "$a")"; done
+  vm "$(cargo_env) mkdir -p target/linuxvm-out && cargo run -q -p anvil-app --bin anvilcad-agent --$args" || rc=$?
+  pull_out
+  return $rc
+}
+
+pull_out() {
+  mkdir -p "$LOCAL_OUT"
+  if vm "test -n \"\$(ls -A ~/$VM_SRC/target/linuxvm-out 2>/dev/null)\""; then
+    rsync -a -e "$(rsync_ssh)" "$VM_LOGIN@$(host):$VM_SRC/target/linuxvm-out/" "$LOCAL_OUT/"
+    echo "linuxvm: copied the VM's target/linuxvm-out to $LOCAL_OUT"
+  fi
+}
+
+# Builds the app and runs it on the GNOME desktop (Wayland or X11, whichever the session is),
+# or in a headless sway compositor with `--headless-wayland` (repeatable, nothing else on
+# screen; its socket is the one that appears when it starts, never GNOME's), or under Xvfb
+# with `--headless-x11`.
+gui_launch() {
+  local mode=desktop
+  case "${1:-}" in --headless-wayland) mode=sway; shift ;; --headless-x11) mode=xvfb; shift ;; esac
+  [ "${LINUXVM_NO_SYNC:-}" = 1 ] || cmd_sync
+  vm "$(cargo_env) cargo build -q -p anvil-app --bin anvilcad"
+  # The tilde is expanded in the VM, not here.
+  # shellcheck disable=SC2088
+  local args="" a bin="~/$VM_TARGET/debug/anvilcad"
+  for a in "$@"; do args+=" $(printf '%q' "$a")"; done
+  case "$mode" in
+    desktop) in_session "cd ~/$VM_SRC && (setsid $bin$args >~/anvil/anvilcad.log 2>&1 &) && sleep 3 && pgrep -x anvilcad >/dev/null && echo \"started on the \$XDG_SESSION_TYPE desktop\" || { tail -20 ~/anvil/anvilcad.log; exit 1; }" ;;
+    sway) vm "pkill -x sway 2>/dev/null; export XDG_RUNTIME_DIR=/run/user/\$(id -u) WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman; before=\$(ls \$XDG_RUNTIME_DIR | grep '^wayland-[0-9]*\$'); (setsid env -u WAYLAND_DISPLAY -u DISPLAY sway -c /dev/null >~/anvil/sway.log 2>&1 &); sleep 2; export WAYLAND_DISPLAY=\$(ls \$XDG_RUNTIME_DIR | grep '^wayland-[0-9]*\$' | grep -vxF \"\$before\" | head -1); [ -n \"\$WAYLAND_DISPLAY\" ] || { tail -5 ~/anvil/sway.log; exit 1; }; swaymsg -s \$XDG_RUNTIME_DIR/sway-ipc.*.sock output HEADLESS-1 resolution 1920x1080 >/dev/null; echo \$WAYLAND_DISPLAY > ~/anvil/headless-wayland; cd ~/$VM_SRC && (setsid env -u DISPLAY WAYLAND_DISPLAY=\$WAYLAND_DISPLAY $bin$args >~/anvil/anvilcad.log 2>&1 &) && sleep 3 && pgrep -x anvilcad >/dev/null && echo 'started in headless sway (Wayland)'" ;;
+    xvfb) vm "pkill -x Xvfb 2>/dev/null; (setsid Xvfb :99 -screen 0 1920x1080x24 >/dev/null 2>&1 &); sleep 1; cd ~/$VM_SRC && (setsid env -u WAYLAND_DISPLAY DISPLAY=:99 $bin$args >~/anvil/anvilcad.log 2>&1 &) && sleep 3 && pgrep -x anvilcad >/dev/null && echo 'started under Xvfb (X11)'" ;;
+  esac
+}
+
+# Rewrites one key chord (ctrl+Escape, Return, PageDown...) into ydotool 0.1.8's names.
+ydotool_keys() {
+  local out="" part
+  local IFS=+
+  for part in $1; do
+    case "$(printf '%s' "$part" | tr 'A-Z' 'a-z')" in
+      escape|esc) part=esc ;;
+      return|enter) part=enter ;;
+      backspace) part=backspace ;;
+      delete|del) part=delete ;;
+      pagedown|pgdn) part=pagedown ;;
+      pageup|pgup) part=pageup ;;
+      arrowup|up) part=up ;;
+      arrowdown|down) part=down ;;
+      arrowleft|left) part=left ;;
+      arrowright|right) part=right ;;
+      control|ctrl) part=ctrl ;;
+      cmd|super|meta) part=leftmeta ;;
+      *) part="$(printf '%s' "$part" | tr 'A-Z' 'a-z')" ;;
+    esac
+    out+="${out:++}$part"
+  done
+  printf '%s' "$out"
+}
+
+cmd_gui() {
+  [ $# -ge 1 ] || die "usage: linuxvm gui <launch|shot|click|move|type|key|windows|close|session> ..."
+  local action="$1"; shift
+  case "$action" in
+    launch) gui_launch "$@" ;;
+    shot)
+      # Screenshots whatever the app was last launched into: the headless compositors if
+      # they are running, otherwise the GNOME desktop.
+      local out="${1:-$LOCAL_OUT/desktop.png}"
+      mkdir -p "$(dirname "$out")"
+      vm "rm -f ~/anvil/shot.png
+        if pgrep -x sway >/dev/null && [ -f ~/anvil/headless-wayland ]; then XDG_RUNTIME_DIR=/run/user/\$(id -u) WAYLAND_DISPLAY=\$(cat ~/anvil/headless-wayland) grim ~/anvil/shot.png
+        elif pgrep -x Xvfb >/dev/null; then DISPLAY=:99 import -window root ~/anvil/shot.png
+        else source ~/anvil/session.env && gnome-screenshot -f ~/anvil/shot.png; fi
+        test -s ~/anvil/shot.png"
+      scp -q "${VM_SSH_OPTS[@]}" "$VM_LOGIN@$(host):anvil/shot.png" "$out"
+      echo "linuxvm: saved a screenshot to $out"
+      ;;
+    # ydotool writes to /dev/uinput, so input works the same under Wayland and X11. Ubuntu
+    # 24.04's ydotool (0.1.8) only moves the pointer relatively, so it is pushed into the top
+    # left corner first; provisioning makes pointer motion 1:1 (no acceleration). Each call makes
+    # a new virtual device, which GNOME takes a moment to attach, hence --delay.
+    move) vm "sudo ydotool mousemove --delay 400 -10000 -10000 >/dev/null 2>&1; sudo ydotool mousemove --delay 400 $1 $2 >/dev/null 2>&1" ;;
+    click)
+      local btn=1; [ "${3:-}" = right ] && btn=2
+      vm "sudo ydotool mousemove --delay 400 -10000 -10000 >/dev/null 2>&1; sudo ydotool mousemove --delay 400 $1 $2 >/dev/null 2>&1; sudo ydotool click --delay 400 $btn >/dev/null 2>&1"
+      ;;
+    type) printf '%s' "$1" | ssh "${VM_SSH_OPTS[@]}" "$VM_LOGIN@$(host)" "sudo ydotool type --delay 400 --file - >/dev/null 2>&1" ;;
+    key)
+      # ydotool 0.1.8 knows Linux's key names (esc, enter); unknown names type their first
+      # letter, so translate the egui-style names the other harnesses use.
+      local k keys=()
+      for k in "$@"; do keys+=("$(ydotool_keys "$k")"); done
+      vm "sudo ydotool key --delay 400 $(printf '%q ' "${keys[@]}") >/dev/null 2>&1"
+      ;;
+    windows) in_session "if [ \"\$XDG_SESSION_TYPE\" = x11 ]; then wmctrl -lpG; else echo 'Wayland: windows are not listable from outside; X11 apps (Xwayland):'; DISPLAY=:0 wmctrl -lpG 2>/dev/null || true; fi" ;;
+    close) vm "pkill -x anvilcad && echo closed || echo 'not running'; pkill -x sway 2>/dev/null; pkill -x Xvfb 2>/dev/null; rm -f ~/anvil/headless-wayland; true" ;;
+    session)
+      # Switches the GNOME desktop between Wayland and X11 (restarts the session).
+      case "${1:-}" in
+        wayland) vm "sudo sed -i 's/^WaylandEnable=.*/WaylandEnable=true/' /etc/gdm3/custom.conf && sudo systemctl restart gdm3" ;;
+        x11) vm "sudo sed -i 's/^WaylandEnable=.*/WaylandEnable=false/' /etc/gdm3/custom.conf && sudo systemctl restart gdm3" ;;
+        *) in_session 'echo "$XDG_SESSION_TYPE"'; return ;;
+      esac
+      echo "linuxvm: restarting the desktop as ${1}; the session comes back in about 15 s"
+      ;;
+    *) die "unknown gui action '$action'" ;;
+  esac
+}
+
+cmd_status() {
+  echo "vm:    $VM_NAME ($(vm_state))"
+  local ip; ip="$(vm_ip 2>/dev/null || true)"
+  echo "ip:    ${ip:-unknown}"
+  if [ -n "$ip" ] && HOST_CACHE="$ip" vm '. /etc/os-release; echo "ssh:   ok, $PRETTY_NAME, kernel $(uname -r)"; s=$(cat ~/anvil/session.env 2>/dev/null | sed -n "s/^export XDG_SESSION_TYPE=//p"); echo "desktop: ${s:-not signed in yet}"; if [ -x ~/.cargo/bin/rustc ]; then echo "rust:  $(~/.cargo/bin/rustc --version)"; else echo "rust:  not installed (linuxvm provision)"; fi' 2>/dev/null; then :; else
+    echo "ssh:   not answering"
+  fi
+}
+
+# Runs provision.sh in the VM under nohup (so a dropped connection does not stop it) and
+# follows its log until it finishes.
+cmd_provision() {
+  scp -q "${VM_SSH_OPTS[@]}" "$HERE/provision.sh" "$VM_LOGIN@$(host):provision.sh"
+  vm "mkdir -p ~/anvil && rm -f ~/anvil/provision.status && (nohup sh -c 'bash ~/provision.sh; echo \$? > ~/anvil/provision.status' > ~/anvil/provision.log 2>&1 &)"
+  local shown=0 n st
+  while :; do
+    n="$(vm "wc -l < ~/anvil/provision.log" 2>/dev/null || echo "$shown")"
+    if [ "$n" -gt "$shown" ]; then vm "sed -n '$((shown + 1)),${n}p' ~/anvil/provision.log" 2>/dev/null || true; shown=$n; fi
+    st="$(vm "cat ~/anvil/provision.status 2>/dev/null" 2>/dev/null || true)"
+    [ -n "$st" ] && break
+    sleep 10
+  done
+  [ "$st" = 0 ] || die "provisioning failed (exit $st); see ~/anvil/provision.log in the VM"
+}
+
+usage() {
+  cat <<'EOF'
+linuxvm: drive the AnvilCAD Ubuntu 24.04 test VM
+
+Power and state
+  status                 VM state, IP, Ubuntu and kernel version, desktop session, Rust
+  ip                     print the VM's LAN address
+  start | stop | restart power the VM through TrueNAS (start makes room by shutting
+                         down the other test VM if memory is short)
+  wait [seconds]         wait until SSH answers (default 900 s)
+  snapshot [name]        snapshot the VM's disk (default name: UTC timestamp)
+  snapshots              list snapshots
+  rollback <name>        stop, roll the disk back to a snapshot, start again
+  provision              install or update Rust and the session helper in the VM
+
+Build and test (the working tree, uncommitted edits included, is synced first)
+  sync                   copy the working tree into the VM (rsync)
+  cargo <args...>        run cargo in the VM, e.g. linuxvm cargo test -p anvil-io
+  check                  cargo fmt --check, clippy --workspace --all-targets, test --workspace
+  agent <args...>        run anvilcad-agent in the VM; write screenshots under
+                         target/linuxvm-out/ and they are copied back to target/linuxvm/
+
+The real windowed app
+  gui launch [args...]   build and start anvilcad on the GNOME desktop
+  gui launch --headless-wayland [args...]   ... in a headless sway compositor instead
+  gui launch --headless-x11 [args...]       ... under Xvfb instead
+  gui shot [out.png]     screenshot (default target/linuxvm/desktop.png)
+  gui click X Y [right]  click at screen pixel X,Y (ydotool; Wayland and X11)
+  gui move X Y           move the pointer
+  gui type TEXT          type text into the focused window
+  gui key KEYS...        press keys, e.g. ctrl+s, Escape, Enter, ctrl+shift+p
+  gui windows            list windows (X11 and Xwayland)
+  gui close              quit the app and any headless compositor
+  gui session [wayland|x11]  show or switch the GNOME session type
+
+Memory (the NAS runs one test VM at a time unless it has room for more)
+  --auto | --parallel | --exclusive   before the command: override ANVIL_VM_MODE, which is
+                         auto by default (take turns only when memory is short), parallel
+                         (never stop the other VM; for when the NAS has the RAM) or exclusive
+                         (always stop the other VM). Set it in ~/.config/anvilcad/vms.env.
+
+Shell
+  ssh [command]          open a shell, or run one command
+EOF
+}
+
+main() {
+  parse_mode_flags "$@"
+  set -- "${ARGS[@]+"${ARGS[@]}"}"
+  local c="${1:-help}"; shift || true
+  case "$c" in
+    help|-h|--help) usage; return ;;
+    status) cmd_status; return ;;
+  esac
+  vm_common_command "$c" "$@" && return
+  case "$c" in
+    provision|sync|cargo|check|agent|gui|ssh) ensure_up ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  case "$c" in
+    provision) cmd_provision ;;
+    sync) cmd_sync ;;
+    cargo) cmd_cargo "$@" ;;
+    check) cmd_check ;;
+    agent) cmd_agent "$@" ;;
+    gui) cmd_gui "$@" ;;
+    ssh) if [ $# -eq 0 ]; then exec ssh "${VM_SSH_OPTS[@]/BatchMode=yes/BatchMode=no}" -t "$VM_LOGIN@$(host)"; else vm "$*"; fi ;;
+  esac
+}
+
+main "$@"

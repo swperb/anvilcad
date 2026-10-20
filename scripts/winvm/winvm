@@ -9,16 +9,12 @@ set -euo pipefail
 CONFIG="${WINVM_CONFIG:-$HOME/.config/anvilcad/winvm.env}"
 # shellcheck source=/dev/null
 [ -f "$CONFIG" ] && source "$CONFIG"
-TRUENAS_HOST="${TRUENAS_HOST:-truenas-scale-1}"
-TRUENAS_USER="${TRUENAS_USER:-truenas_admin}"
 WINVM_NAME="${WINVM_NAME:-anvilwin11}"
 WINVM_ZVOL="${WINVM_ZVOL:-nas1/vms/anvil-win11}"
 WINVM_USER="${WINVM_USER:-anvil}"
-WINVM_MAC="${WINVM_MAC:-}"
-WINVM_HOST="${WINVM_HOST:-}"
 # The VM is on the NAS's LAN; by default it is reached by jumping through the NAS, which
 # works from anywhere on the Tailnet. Set WINVM_JUMP= (empty) to connect directly.
-WINVM_JUMP="${WINVM_JUMP-$TRUENAS_USER@$TRUENAS_HOST}"
+WINVM_JUMP="${WINVM_JUMP-${TRUENAS_USER:-truenas_admin}@${TRUENAS_HOST:-truenas-scale-1}}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(git -C "$HERE" rev-parse --show-toplevel)"
@@ -30,59 +26,10 @@ VM_SRC="$VM_ROOT\\src\\$SLUG"
 VM_TARGET="$VM_ROOT\\target\\$SLUG"
 LOCAL_OUT="$REPO/target/winvm"
 
-SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new)
-VM_SSH_OPTS=("${SSH_OPTS[@]}")
-# TrueNAS turns off sshd's TCP forwarding, so ProxyJump is refused; nc on the NAS relays instead.
-[ -n "$WINVM_JUMP" ] && VM_SSH_OPTS+=(-o "ProxyCommand=ssh -o BatchMode=yes $WINVM_JUMP nc %h %p")
-
-die() { echo "winvm: $*" >&2; exit 1; }
-
-nas() { ssh "${SSH_OPTS[@]}" -l "$TRUENAS_USER" "$TRUENAS_HOST" "$@"; }
-
-# Calls a TrueNAS middleware method. Arguments after the method are JSON values.
-midclt() {
-  local q="" a
-  for a in "$@"; do q+=" $(printf '%q' "$a")"; done
-  nas "midclt call$q"
-}
-
-vm_id() {
-  midclt vm.query "[[\"name\",\"=\",\"$WINVM_NAME\"]]" '{"get":true,"select":["id"]}' |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
-}
-
-vm_state() {
-  midclt vm.query "[[\"name\",\"=\",\"$WINVM_NAME\"]]" '{"get":true}' |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["status"]["state"])'
-}
-
-# The VM's MAC address, from the config or from its NIC device.
-vm_mac() {
-  if [ -n "$WINVM_MAC" ]; then echo "$WINVM_MAC"; return; fi
-  midclt vm.query "[[\"name\",\"=\",\"$WINVM_NAME\"]]" '{"get":true}' |
-    python3 -c 'import json,sys
-for d in json.load(sys.stdin)["devices"]:
-    if d["dtype"] == "NIC": print(d["attributes"]["mac"]); break'
-}
-
-# The VM's LAN address: WINVM_HOST if set, otherwise found in the NAS's neighbour table.
-vm_ip() {
-  if [ -n "$WINVM_HOST" ]; then echo "$WINVM_HOST"; return; fi
-  local mac ip
-  mac="$(vm_mac | tr 'A-F' 'a-f')"
-  [ -n "$mac" ] || die "the VM has no NIC with a MAC address"
-  ip="$(nas "ip -4 neigh show dev br0 | awk '\$3==\"lladdr\" && tolower(\$4)==\"$mac\" {print \$1; exit}'")"
-  if [ -z "$ip" ]; then
-    # The neighbour entry appears once the NAS has talked to the VM; ping the subnet once.
-    nas 'n=$(ip -4 -o addr show br0 | awk "{print \$4}" | cut -d. -f1-3); for i in $(seq 1 254); do ping -c1 -W1 "$n.$i" >/dev/null 2>&1 & done; wait' || true
-    ip="$(nas "ip -4 neigh show dev br0 | awk '\$3==\"lladdr\" && tolower(\$4)==\"$mac\" {print \$1; exit}'")"
-  fi
-  [ -n "$ip" ] || die "could not find the VM's IP (MAC $mac). Is it running? Set WINVM_HOST in $CONFIG to skip the lookup."
-  echo "$ip"
-}
-
-HOST_CACHE=""
-host() { [ -n "$HOST_CACHE" ] || HOST_CACHE="$(vm_ip)"; echo "$HOST_CACHE"; }
+TOOL=winvm VM_NAME="$WINVM_NAME" VM_ZVOL="$WINVM_ZVOL" VM_LOGIN="$WINVM_USER"
+VM_MAC="${WINVM_MAC:-}" VM_HOST="${WINVM_HOST:-}" VM_JUMP="$WINVM_JUMP"
+# shellcheck source-path=SCRIPTDIR source=../vm/truenas.sh
+source "$HERE/../vm/truenas.sh"
 
 # Runs a PowerShell command in the VM and returns its exit code. The command is sent as
 # -EncodedCommand because Windows' OpenSSH passes it through a command line that would
@@ -91,14 +38,14 @@ vm() {
   local script enc
   script="\$ErrorActionPreference='Stop'; \$ProgressPreference='SilentlyContinue'; $*; exit \$LASTEXITCODE"
   enc="$(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')"
-  ssh "${VM_SSH_OPTS[@]}" "$WINVM_USER@$(host)" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc"
+  ssh "${VM_SSH_OPTS[@]}" "$VM_LOGIN@$(host)" "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -OutputFormat Text -EncodedCommand $enc"
 }
 
 # Copies a file from the VM to the local machine.
-vm_pull() { scp -q "${VM_SSH_OPTS[@]}" "$WINVM_USER@$(host):$1" "$2"; }
+vm_pull() { scp -q "${VM_SSH_OPTS[@]}" "$VM_LOGIN@$(host):$1" "$2"; }
 
 # Copies a local file into the VM.
-vm_push() { scp -q "${VM_SSH_OPTS[@]}" "$1" "$WINVM_USER@$(host):$2"; }
+vm_push() { scp -q "${VM_SSH_OPTS[@]}" "$1" "$VM_LOGIN@$(host):$2"; }
 
 # Quotes a value for a single-quoted PowerShell string.
 psq() { printf "'%s'" "${1//\'/\'\'}"; }
@@ -199,39 +146,12 @@ cmd_gui() {
   esac
 }
 
-cmd_snapshot() {
-  local name="${1:-$(date -u +%Y%m%d-%H%M%S)}"
-  midclt zfs.snapshot.create "{\"dataset\":\"$WINVM_ZVOL\",\"name\":\"$name\"}" >/dev/null
-  echo "winvm: snapshot $WINVM_ZVOL@$name"
-}
 
-cmd_snapshots() {
-  midclt zfs.snapshot.query "[[\"dataset\",\"=\",\"$WINVM_ZVOL\"]]" '{"select":["name"]}' |
-    python3 -c 'import json,sys; [print(s["name"]) for s in json.load(sys.stdin)]'
-}
 
-# Rolls the VM's disk back to a snapshot. Later snapshots are destroyed, as with zfs rollback -r.
-cmd_rollback() {
-  [ $# -eq 1 ] || die "usage: winvm rollback <snapshot name>"
-  local id; id="$(vm_id)"
-  [ "$(vm_state)" = RUNNING ] && { midclt -j 1 vm.stop "$id" '{"force_after_timeout":true}' >/dev/null; }
-  midclt zfs.snapshot.rollback "$WINVM_ZVOL@$1" '{"recursive":true,"force":true}' >/dev/null
-  midclt vm.start "$id" >/dev/null
-  echo "winvm: rolled back to $WINVM_ZVOL@$1 and started the VM; run 'winvm wait' before using it"
-}
 
-# Waits until SSH answers in the VM.
-cmd_wait() {
-  local deadline=$(( $(date +%s) + ${1:-900} ))
-  until ssh "${VM_SSH_OPTS[@]}" -o ConnectTimeout=5 "$WINVM_USER@$(host)" 'exit 0' 2>/dev/null; do
-    [ "$(date +%s)" -lt "$deadline" ] || die "timed out waiting for SSH"
-    HOST_CACHE=""; sleep 10
-  done
-  echo "winvm: $(host) is up"
-}
 
 cmd_status() {
-  echo "vm:    $WINVM_NAME ($(vm_state))"
+  echo "vm:    $VM_NAME ($(vm_state))"
   local ip; ip="$(vm_ip 2>/dev/null || true)"
   echo "ip:    ${ip:-unknown}"
   if [ -n "$ip" ] && HOST_CACHE="$ip" vm "Write-Output ('ssh:   ok, ' + (Get-CimInstance Win32_OperatingSystem).Caption + ' ' + [Environment]::OSVersion.Version); \$l = Get-CimInstance SoftwareLicensingProduct -Filter \"PartialProductKey IS NOT NULL AND Name LIKE 'Windows%'\"; Write-Output ('licence: ' + @('unlicensed','licensed','OOB grace','OOT grace','non-genuine grace','notification','extended grace')[\$l.LicenseStatus]); \$rc = Get-Command rustc -ErrorAction SilentlyContinue; if (Test-Path \"\$env:USERPROFILE\\.cargo\\bin\\rustc.exe\") { Write-Output ('rust:  ' + (& \"\$env:USERPROFILE\\.cargo\\bin\\rustc.exe\" --version)) } else { Write-Output 'rust:  not installed (winvm provision)' }; exit 0" 2>/dev/null; then :; else
@@ -252,7 +172,8 @@ winvm: drive the AnvilCAD Windows 11 test VM
 Power and state
   status                 VM state, IP, Windows version, licence, Rust version
   ip                     print the VM's LAN address
-  start | stop | restart power the VM through TrueNAS
+  start | stop | restart power the VM through TrueNAS (start makes room by shutting
+                         down the other test VM if memory is short)
   wait [seconds]         wait until SSH answers (default 900 s)
   snapshot [name]        snapshot the VM's disk (default name: UTC timestamp)
   snapshots              list snapshots
@@ -276,32 +197,39 @@ The real windowed app, on the VM's desktop
   gui close [process]    close the app (default anvilcad)
   gui resolution WxH     change the desktop size, e.g. 1920x1080
 
+Memory (the NAS runs one test VM at a time unless it has room for more)
+  --auto | --parallel | --exclusive   before the command: override ANVIL_VM_MODE, which is
+                         auto by default (take turns only when memory is short), parallel
+                         (never stop the other VM; for when the NAS has the RAM) or exclusive
+                         (always stop the other VM). Set it in ~/.config/anvilcad/vms.env.
+
 Shell
   ssh [command]          open a PowerShell session, or run one command
 EOF
 }
 
 main() {
+  parse_mode_flags "$@"
+  set -- "${ARGS[@]+"${ARGS[@]}"}"
   local c="${1:-help}"; shift || true
   case "$c" in
-    status) cmd_status ;;
-    ip) vm_ip ;;
-    start) midclt vm.start "$(vm_id)" >/dev/null; echo "winvm: started" ;;
-    stop) midclt -j 1 vm.stop "$(vm_id)" '{"force_after_timeout":true}' >/dev/null; echo "winvm: stopped" ;;
-    restart) midclt -j 1 vm.restart "$(vm_id)" >/dev/null; echo "winvm: restarted" ;;
-    wait) cmd_wait "$@" ;;
-    snapshot) cmd_snapshot "$@" ;;
-    snapshots) cmd_snapshots ;;
-    rollback) cmd_rollback "$@" ;;
+    help|-h|--help) usage; return ;;
+    status) cmd_status; return ;;
+  esac
+  vm_common_command "$c" "$@" && return
+  # Everything else needs the VM up; start it (making room if memory is short) if it is not.
+  case "$c" in
+    provision|sync|cargo|check|agent|gui|ssh) ensure_up ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  case "$c" in
     provision) cmd_provision ;;
     sync) cmd_sync ;;
     cargo) cmd_cargo "$@" ;;
     check) cmd_check ;;
     agent) cmd_agent "$@" ;;
     gui) cmd_gui "$@" ;;
-    ssh) if [ $# -eq 0 ]; then exec ssh "${VM_SSH_OPTS[@]/BatchMode=yes/BatchMode=no}" -t "$WINVM_USER@$(host)"; else vm "$*"; fi ;;
-    help|-h|--help) usage ;;
-    *) usage >&2; exit 2 ;;
+    ssh) if [ $# -eq 0 ]; then exec ssh "${VM_SSH_OPTS[@]/BatchMode=yes/BatchMode=no}" -t "$VM_LOGIN@$(host)"; else vm "$*"; fi ;;
   esac
 }
 
