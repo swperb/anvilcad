@@ -260,10 +260,21 @@ impl AnvilApp {
         let Some(engine) = self.scripting.engine.take() else {
             return Err("no Lua engine is loaded".into());
         };
+        let result = self.with_host(ctx, |host| f(&engine, host));
+        self.scripting.engine = Some(engine);
+        result
+    }
+
+    /// Calls `f` with the [`Host`] that Lua scripts drive, for callers in Rust such as the MCP
+    /// server (`crate::mcp`). Rebuilds afterwards if the part changed.
+    pub fn with_host<R>(
+        &mut self,
+        ctx: &egui::Context,
+        f: impl FnOnce(&mut dyn Host) -> Result<R, String>,
+    ) -> Result<R, String> {
         let before = self.doc.clone();
         self.scripting.script_status = None;
-        let result = f(&engine, &mut AppHost { app: self, ctx });
-        self.scripting.engine = Some(engine);
+        let result = f(&mut AppHost { app: self, ctx });
         if self.doc != before {
             self.rebuild();
             self.scene_dirty = true;
@@ -273,6 +284,77 @@ impl AnvilApp {
             self.status = s;
         }
         result
+    }
+
+    /// The feature tree with each feature's settable dimensions, for agents (`crate::mcp`).
+    pub fn feature_list(&self) -> serde_json::Value {
+        use serde_json::json;
+        let features: Vec<_> = self
+            .doc
+            .features
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                let dims: serde_json::Map<String, serde_json::Value> = DimSlot::of(&f.kind)
+                    .into_iter()
+                    .filter_map(|slot| {
+                        let d = slot.get(&f.kind)?;
+                        let value = d.eval(&self.state.variables).ok();
+                        let expr = match d {
+                            Dim::Expr(e) => Some(e.clone()),
+                            Dim::Value(_) => None,
+                        };
+                        Some((slot.label().to_string(), json!({ "value": value, "equation": expr })))
+                    })
+                    .collect();
+                json!({
+                    "id": f.id,
+                    "name": f.name,
+                    "kind": kind_name(&f.kind),
+                    "suppressed": f.suppressed,
+                    "rolled_back": self.doc.rollback.is_some_and(|r| i >= r),
+                    "error": self.state.errors.get(&f.id),
+                    "dimensions": dims,
+                })
+            })
+            .collect();
+        json!({
+            "features": features,
+            "variables": self.state.variables,
+            "variable_errors": self.state.variable_errors,
+        })
+    }
+
+    /// Closes the message dialog, if one is open, and returns its title and text, so an
+    /// agent can read it without a dialog left over its next screenshot.
+    pub fn take_message(&mut self) -> Option<(String, String)> {
+        self.message.take()
+    }
+
+    /// The body's mass properties, in millimetres and grams, for agents (`crate::mcp`).
+    pub fn mass_properties(&self) -> Result<serde_json::Value, String> {
+        use serde_json::json;
+        if self.state.body.is_empty() {
+            return Err("there is no solid body yet; add a sketch and an extrusion".into());
+        }
+        let m = self.state.mass_report(&self.doc);
+        let b = self.state.body.bounds();
+        let material = self.doc.material.as_ref().map(|m| m.resolved());
+        let c = m.props.centroid;
+        Ok(json!({
+            "units": { "length": "mm", "volume": "mm^3", "area": "mm^2", "mass": "g" },
+            "volume": m.props.volume,
+            "surface_area": m.props.surface_area,
+            "centroid": [c.x, c.y, c.z],
+            "bounds": { "min": [b.min.x, b.min.y, b.min.z], "max": [b.max.x, b.max.y, b.max.z] },
+            "size": [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z],
+            "material": material.as_ref().map(|m| m.name.clone()),
+            "density_g_per_cm3": material.as_ref().map(|m| m.density),
+            "mass": m.mass,
+            "principal_moments_g_mm2": m.principal,
+            "open_edges": self.state.body.open_edges(),
+            "exact": self.state.exact.is_some(),
+        }))
     }
 
     /// Runs a Lua script with the whole `anvil` API. Without a loaded config it runs in a
@@ -736,6 +818,49 @@ impl Host for AppHost<'_> {
         }
     }
 
+    fn set_dimension(&mut self, feature: &str, dimension: &str, value: &str) -> Result<(), String> {
+        let doc = &self.app.doc;
+        let f = feature
+            .parse::<u32>()
+            .ok()
+            .and_then(|id| doc.feature(id))
+            .or_else(|| doc.features.iter().find(|f| f.name.eq_ignore_ascii_case(feature)))
+            .ok_or_else(|| format!("anvil.dim: there is no feature \"{feature}\""))?;
+        let (id, name) = (f.id, f.name.clone());
+        let slots = DimSlot::of(&f.kind);
+        let wanted = dimension.trim().to_ascii_lowercase().replace('_', " ");
+        let Some(slot) = slots.iter().copied().find(|s| s.label() == wanted) else {
+            let have: Vec<_> = slots.iter().map(|s| s.label()).collect();
+            return Err(match have.is_empty() {
+                true => format!("anvil.dim: {name} has no dimension that can be set"),
+                false => format!("anvil.dim: {name} has no \"{dimension}\"; it has {}", have.join(", ")),
+            });
+        };
+        let value = value.trim();
+        let dim = match value.parse::<f64>() {
+            Ok(v) if v.is_finite() => Dim::Value(v),
+            Ok(_) => return Err(format!("anvil.dim: {value} is not a finite number")),
+            Err(_) if value.is_empty() => return Err("anvil.dim: the value is empty".into()),
+            Err(_) => Dim::Expr(value.to_string()),
+        };
+        let old = self.app.doc.feature(id).and_then(|f| slot.get(&f.kind)).cloned();
+        if let Some(d) = self.app.doc.feature_mut(id).and_then(|f| slot.get_mut(&mut f.kind)) {
+            *d = dim;
+        }
+        self.app.rebuild();
+        if let Some(e) = self.app.state.errors.get(&id).cloned() {
+            // Put the old value back, so one bad value does not leave the part broken.
+            if let (Some(old), Some(d)) =
+                (old, self.app.doc.feature_mut(id).and_then(|f| slot.get_mut(&mut f.kind)))
+            {
+                *d = old;
+            }
+            self.app.rebuild();
+            return Err(format!("anvil.dim: {name} {}: {e}", slot.label()));
+        }
+        Ok(())
+    }
+
     fn set_material(&mut self, name: &str) -> Result<(), String> {
         let m = Material::library().into_iter().find(|m| m.name.eq_ignore_ascii_case(name));
         let m = m.ok_or_else(|| format!("anvil.material: no library material is called \"{name}\""))?;
@@ -786,6 +911,7 @@ impl Host for AppHost<'_> {
             Depth::Expr(e) => (EndCondition::Blind, Dim::Expr(e.clone())),
             Depth::ThroughAll => (EndCondition::ThroughAll, Dim::Value(0.0)),
         };
+        let before = self.app.doc.clone();
         let id = self.app.doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
             sketch: spec.sketch,
             end,
@@ -796,7 +922,10 @@ impl Host for AppHost<'_> {
         }));
         // Rebuild now, so a later sketch can sit on this feature's faces and errors show here.
         self.app.rebuild();
-        if let Some(e) = self.app.state.errors.get(&id) {
+        if let Some(e) = self.app.state.errors.get(&id).cloned() {
+            // A failed call adds nothing, so a retry does not leave a broken twin behind.
+            self.app.doc = before;
+            self.app.rebuild();
             return Err(format!("anvil.extrude: {e}"));
         }
         Ok(id)

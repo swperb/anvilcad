@@ -21,6 +21,10 @@ on Windows, Mesa's lavapipe on Linux, which comes in the `mesa-vulkan-drivers` p
 Set `ANVIL_SOFTWARE_RENDER=1` to force the software adapter. Everything except
 screenshots also works with no adapter at all.
 
+For AI agents that speak the Model Context Protocol (Claude Code, Cursor and others),
+`anvilcad-agent mcp` wraps this harness in an MCP server with modelling tools; see
+[MCP.md](MCP.md).
+
 ## Running it
 
 ```bash

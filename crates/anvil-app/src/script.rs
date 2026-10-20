@@ -179,6 +179,9 @@ pub trait Host {
     /// Sets (or adds) a global variable, then rebuilds.
     fn set_variable(&mut self, name: &str, expr: &str) -> Result<(), String>;
     fn set_material(&mut self, name: &str) -> Result<(), String>;
+    /// Sets a feature's dimension (`depth`, `angle`, `radius`...) to a number or an
+    /// equation, then rebuilds. `feature` is the feature's id or its name.
+    fn set_dimension(&mut self, feature: &str, dimension: &str, value: &str) -> Result<(), String>;
     /// Adds a sketch and returns its feature id.
     fn add_sketch(&mut self, spec: &SketchSpec) -> Result<u32, String>;
     /// Adds an extrusion and returns its feature id.
@@ -391,7 +394,8 @@ impl Engine {
         let host = RefCell::new(host);
         let anvil = self.anvil()?;
         let names = [
-            "run", "state", "new", "open", "save", "export", "var", "material", "sketch", "extrude", "status",
+            "run", "state", "new", "open", "save", "export", "var", "dim", "material", "sketch", "extrude",
+            "status",
         ];
         let result = self.guarded(|lua| {
             lua.scope(|scope| {
@@ -445,6 +449,23 @@ impl Engine {
                             }
                         };
                         h.borrow_mut().set_variable(&name, &expr).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "dim",
+                    scope.create_function(move |_, (feature, dim, value): (Value, String, Value)| {
+                        let usage = "anvil.dim(feature, dimension, value): feature is an id or a name, \
+                                     value a number or an equation";
+                        let text = |v: &Value| match v {
+                            Value::Integer(i) => Some(i.to_string()),
+                            Value::Number(n) => Some(n.to_string()),
+                            Value::String(s) => Some(s.to_string_lossy()),
+                            _ => None,
+                        };
+                        let (Some(feature), Some(value)) = (text(&feature), text(&value)) else {
+                            return Err(fail(usage.into()));
+                        };
+                        h.borrow_mut().set_dimension(&feature, &dim, &value).map_err(fail)
                     })?,
                 )?;
                 anvil.set(
