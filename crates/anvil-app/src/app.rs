@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 
 mod configs;
 use configs::{ConfigUi, Manager};
+mod scripting;
+pub use scripting::BUILTIN_COMMANDS;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Selection {
@@ -136,6 +138,8 @@ pub struct AnvilApp {
     measure: Option<Vec<measure::Pick>>,
     /// The configuration manager and its windows.
     cfg: ConfigUi,
+    /// init.lua, user key bindings, user commands and the command palette.
+    scripting: scripting::Scripting,
 }
 
 /// A file dialog the app asked for while dialogs were scripted.
@@ -214,6 +218,7 @@ impl AnvilApp {
             dialog_log: Vec::new(),
             measure: None,
             cfg: ConfigUi::default(),
+            scripting: scripting::Scripting::default(),
         };
         if let Some(p) = open {
             if p.as_os_str() == "--sample" {
@@ -403,7 +408,7 @@ impl AnvilApp {
 
     fn perform(&mut self, a: PendingAction) {
         match a {
-            PendingAction::New => self.load_document(Document::new(), None),
+            PendingAction::New => self.start_new_part(),
             PendingAction::OpenSample => self.load_document(crate::sample::sample_part(), None),
             PendingAction::Open => {
                 let picked = self.file_dialog("Open", || {
@@ -586,6 +591,7 @@ impl AnvilApp {
 
     fn enter_sketch(&mut self, id: u32, frame: anvil_kernel::Frame) {
         let mut s = SketchSession::new(id, frame);
+        s.pick_px = self.snap_px();
         if let Some(st) = self.state.sketch_status.get(&id) {
             s.status = st.clone();
         }
@@ -1272,6 +1278,41 @@ impl AnvilApp {
                 if ui.button("Check Design (DFM)...").clicked() {
                     ui.close_menu();
                     self.open_dfm();
+                }
+                ui.separator();
+                for (label, name) in [
+                    ("Command Palette...  Ctrl+Shift+P", "Command Palette"),
+                    ("Run Script...", "Run Script..."),
+                    ("Reload Config", "Reload Config"),
+                    ("Edit Config...", "Edit Config"),
+                ] {
+                    if ui.button(label).clicked() {
+                        ui.close_menu();
+                        let ctx = ui.ctx().clone();
+                        if let Err(e) = self.run_builtin(&ctx, name) {
+                            self.status = e;
+                        }
+                    }
+                }
+                let user: Vec<(String, String)> = self
+                    .scripting
+                    .engine
+                    .as_ref()
+                    .map(|e| {
+                        e.config.commands.iter().map(|c| (c.name.clone(), c.description.clone())).collect()
+                    })
+                    .unwrap_or_default();
+                if !user.is_empty() {
+                    ui.separator();
+                    for (name, desc) in user {
+                        if ui.button(&name).on_hover_text(desc).clicked() {
+                            ui.close_menu();
+                            let ctx = ui.ctx().clone();
+                            if let Err(e) = self.run_command(&ctx, &name) {
+                                self.status = format!("{name}: {e}");
+                            }
+                        }
+                    }
                 }
             });
             ui.menu_button("Help", |ui| {
@@ -2858,7 +2899,8 @@ impl AnvilApp {
                 }
             };
             let hover = if self.sketch.is_some() { None } else { self.hover_face };
-            let data = SceneData::build(&self.mesh, &self.edges, hover, &selected);
+            let colors = crate::theme::scene_colors(ui.ctx());
+            let data = SceneData::build(&self.mesh, &self.edges, hover, &selected, &colors);
             self.renderer.lock().unwrap().set_scene(data);
             self.scene_dirty = false;
         }
@@ -3765,6 +3807,10 @@ impl AnvilApp {
         if ctx.wants_keyboard_input() {
             return;
         }
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::P)) {
+            self.scripting.palette = Some(Default::default());
+            let _ = self.run_builtin(ctx, "Command Palette");
+        }
         let ctrl = |k: Key| ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, k));
         if ctrl(Key::Z) {
             self.undo();
@@ -3897,7 +3943,7 @@ impl AnvilApp {
 
     /// Replaces the document with an empty part.
     pub fn new_document(&mut self) {
-        self.load_document(Document::new(), None);
+        self.start_new_part();
     }
 
     /// The part being edited.
@@ -4718,9 +4764,11 @@ impl AnvilApp {
             self.last_title = title;
         }
 
+        self.poll_config(ctx);
+        self.user_keys(ctx);
         self.shortcuts(ctx);
 
-        let pal = Palette::for_dark(self.dark);
+        let pal = Palette::for_ctx(ctx, self.dark);
         let chrome = |m: egui::Margin| egui::Frame::NONE.fill(pal.chrome).inner_margin(m);
         egui::TopBottomPanel::top("menu")
             .frame(chrome(egui::Margin::symmetric(8, 3)))
@@ -4792,6 +4840,7 @@ impl AnvilApp {
         });
         self.windows(ctx);
         self.config_windows(ctx);
+        self.command_palette(ctx);
         self.commit_if_changed();
         self.handle_screenshot(ctx);
     }

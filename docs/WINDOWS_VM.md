@@ -126,6 +126,14 @@ The VM was installed unattended from Microsoft's Windows 11 multi-edition ISO:
 Windows was then activated by the owner with their own licence, and the `activated`
 snapshot taken.
 
+## Memory and parallel agents
+
+The Windows and Linux VMs share the NAS's memory and, until it is upgraded, take turns: when one
+does not fit, the harness shuts the other down once no agent is using it. `ANVIL_VM_MODE`
+(`auto`, `parallel` or `exclusive`, in `~/.config/anvilcad/vms.env` or as `--auto`,
+`--parallel` or `--exclusive` before a command) controls this, and leases keep one agent from
+stopping a VM another is using. See [LINUX_VM.md](LINUX_VM.md#memory-one-vm-at-a-time-or-both-at-once).
+
 ## Moving the VM to NVMe
 
 The VM's disk is on the HDD mirror (`nas1`) for now because the NAS's only NVMe is its
