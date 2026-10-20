@@ -257,8 +257,8 @@ impl Assembly {
         }
     }
 
-    pub fn to_json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_default()
+    pub fn to_json(&self) -> Result<String, FileError> {
+        Ok(serde_json::to_string_pretty(self)?)
     }
 
     pub fn from_json(s: &str) -> Result<Assembly, FileError> {
@@ -279,7 +279,7 @@ impl Assembly {
 
     pub fn save(&self, path: &Path) -> Result<(), FileError> {
         let tmp = path.with_extension("anvasm.tmp");
-        std::fs::write(&tmp, self.to_json())?;
+        std::fs::write(&tmp, self.to_json()?)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -726,7 +726,10 @@ mod tests {
         let mut parts = Parts::for_file(&file);
         let status = back.clone().solve(&mut parts);
         assert!(status.ok(), "{status:?}");
-        assert!(matches!(Assembly::from_json(&Document::new().to_json()), Err(FileError::WrongFormat(_))));
+        assert!(matches!(
+            Assembly::from_json(&Document::new().to_json().unwrap()),
+            Err(FileError::WrongFormat(_))
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

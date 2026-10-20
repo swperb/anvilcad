@@ -13,3 +13,11 @@ anvil-sketch.workspace = true
 anvil-brep.workspace = true
 anvil-step.workspace = true
 glam = "0.34"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

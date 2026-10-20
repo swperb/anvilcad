@@ -1,5 +1,6 @@
 //! The testable statements of `docs/re/sketch-entities.md` (numbered as there) that the
 //! sketch crate can check on its own. Lengths in mm, angles in degrees.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use anvil_kernel::{v2, Vec2};
 use anvil_sketch::entities::{

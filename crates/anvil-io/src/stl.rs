@@ -55,7 +55,7 @@ mod tests {
 
     #[test]
     fn binary_layout() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(1.0, 1.0, 1.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(1.0, 1.0, 1.0), 1).unwrap();
         let bytes = write_binary(&b, "cube");
         let n = u32::from_le_bytes(bytes[80..84].try_into().unwrap()) as usize;
         assert_eq!(n, 12);

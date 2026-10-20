@@ -8,6 +8,8 @@
 use anvil_io::com;
 #[cfg(windows)]
 mod export;
+// The report and file collection only run on Windows, where SOLIDWORKS can be driven.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod report;
 #[cfg(windows)]
 mod sw;
@@ -69,11 +71,13 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn ext_lower(p: &Path) -> String {
     p.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
 }
 
 /// Collects SOLIDWORKS files, remembering the input root for relative output paths.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn collect(inputs: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
     fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, PathBuf)>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -173,7 +177,9 @@ fn run(args: Args) -> Result<(), String> {
 
 #[cfg(windows)]
 fn write_reports(out: &Path, batch: &report::BatchReport) {
-    let _ = std::fs::write(out.join("migration-report.json"), serde_json::to_string_pretty(batch).unwrap());
+    if let Ok(json) = serde_json::to_string_pretty(batch) {
+        let _ = std::fs::write(out.join("migration-report.json"), json);
+    }
     let _ = std::fs::write(out.join("migration-report.csv"), batch.to_csv());
 }
 

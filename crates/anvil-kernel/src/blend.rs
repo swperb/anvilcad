@@ -69,7 +69,7 @@ pub fn blend_edges(
     t: EdgeTreatment,
     feature: u32,
 ) -> Result<Solid, BlendError> {
-    if !(t.size() > 0.0) {
+    if t.size().is_nan() || t.size() <= 0.0 {
         return Err(BlendError::Invalid("the size must be greater than zero".into()));
     }
     if edges.is_empty() {
@@ -231,7 +231,7 @@ fn linear_regions(
             (t0.min(t1), t0.max(t1))
         })
         .collect();
-    spans.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+    spans.sort_by(|x, y| x.0.total_cmp(&y.0));
     let mut runs: Vec<(f64, f64)> = Vec::new();
     for s in spans {
         match runs.last_mut() {
@@ -334,7 +334,7 @@ fn circular_region(
         d.dot(w_ref).atan2(d.dot(u_ref)).rem_euclid(TAU)
     };
     let mut angles: Vec<f64> = segs.iter().flat_map(|(s, _, _)| [ang(s[0]), ang(s[1])]).collect();
-    angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    angles.sort_by(|a, b| a.total_cmp(b));
     angles.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
     let (start, span) = if angles.len() < 2 {
         (0.0, TAU)
@@ -393,7 +393,7 @@ mod tests {
 
     #[test]
     fn fillet_one_box_edge() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1).unwrap();
         let edge = EdgeRef::new(face(1, 1), face(1, 3)); // top meets x = max
         let r = 2.0;
         let out = blend_edges(&b, &[edge], EdgeTreatment::Fillet { radius: r }, 9).unwrap();
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn chamfer_one_box_edge() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1).unwrap();
         let edge = EdgeRef::new(face(1, 1), face(1, 3));
         let out = blend_edges(&b, &[edge], EdgeTreatment::Chamfer { distance: 3.0 }, 9).unwrap();
         let v = out.mass_properties().volume;
@@ -417,8 +417,8 @@ mod tests {
     #[test]
     fn fillet_inside_corner_adds_material() {
         // L-shape: a 20x10x2 plate with a 2x10x10 wall at x = 0..2.
-        let plate = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 2.0), 1);
-        let wall = block(v3(0.0, 0.0, 0.0), v3(2.0, 10.0, 12.0), 2);
+        let plate = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 2.0), 1).unwrap();
+        let wall = block(v3(0.0, 0.0, 0.0), v3(2.0, 10.0, 12.0), 2).unwrap();
         let l = plate.union(&wall);
         // Concave edge: plate top (feature 1, top cap) meets the wall's x = max side.
         let edge = EdgeRef::new(face(1, 1), face(2, 3));
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn fillet_boss_top_and_hole_rim() {
         // Boss: cylinder r = 10, h = 20; fillet its top edge (convex torus cut).
-        let c = cylinder(v3(0.0, 0.0, 0.0), 10.0, 20.0, 1);
+        let c = cylinder(v3(0.0, 0.0, 0.0), 10.0, 20.0, 1).unwrap();
         let top = EdgeRef::new(face(1, 1), face(1, 2));
         let r = 2.0;
         let out = blend_edges(&c, &[top], EdgeTreatment::Fillet { radius: r }, 9).unwrap();
@@ -447,8 +447,8 @@ mod tests {
         assert!(rel(v0 - v, removed) < 0.03, "removed {} vs {removed}", v0 - v);
 
         // Plate with a hole: fillet the hole's top rim.
-        let plate = block(v3(-20.0, -20.0, 0.0), v3(20.0, 20.0, 5.0), 3);
-        let hole = cylinder(v3(0.0, 0.0, -1.0), 6.0, 7.0, 4);
+        let plate = block(v3(-20.0, -20.0, 0.0), v3(20.0, 20.0, 5.0), 3).unwrap();
+        let hole = cylinder(v3(0.0, 0.0, -1.0), 6.0, 7.0, 4).unwrap();
         let p = plate.subtract(&hole);
         let rim = EdgeRef::new(face(3, 1), face(4, 2));
         let before = p.mass_properties().volume;
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn fillet_all_box_edges() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1).unwrap();
         let faces: Vec<FaceId> = (0..6).map(|i| face(1, i)).collect();
         let opposite = |i: u32, j: u32| matches!((i.min(j), i.max(j)), (0, 1) | (2, 4) | (3, 5));
         let mut edges = Vec::new();
@@ -487,13 +487,13 @@ mod tests {
 
     #[test]
     fn errors() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1).unwrap();
         let missing = EdgeRef::new(face(1, 0), face(1, 1)); // top and bottom never meet
         assert!(matches!(
             blend_edges(&b, &[missing], EdgeTreatment::Fillet { radius: 1.0 }, 9),
             Err(BlendError::EdgeNotFound(_))
         ));
-        let c = cylinder(v3(0.0, 0.0, 0.0), 2.0, 5.0, 1);
+        let c = cylinder(v3(0.0, 0.0, 0.0), 2.0, 5.0, 1).unwrap();
         assert!(matches!(
             blend_edges(
                 &c,

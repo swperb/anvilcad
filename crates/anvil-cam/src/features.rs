@@ -373,17 +373,17 @@ mod tests {
     /// 80 x 60 x 20 block with a 40 x 30 pocket 10 deep holding a 10 x 10 island, a
     /// through hole of 6 mm and a blind hole of 5 mm, 8 deep.
     pub(crate) fn sample_part() -> Solid {
-        let base = block(v3(0.0, 0.0, 0.0), v3(80.0, 60.0, 20.0), 1);
-        let pocket = block(v3(20.0, 15.0, 10.0), v3(60.0, 45.0, 25.0), 2);
-        let island = block(v3(35.0, 25.0, 10.0), v3(45.0, 35.0, 20.0), 3);
-        let through = cylinder(v3(10.0, 10.0, -5.0), 3.0, 30.0, 4);
-        let blind = cylinder(v3(70.0, 50.0, 12.0), 2.5, 10.0, 5);
+        let base = block(v3(0.0, 0.0, 0.0), v3(80.0, 60.0, 20.0), 1).unwrap();
+        let pocket = block(v3(20.0, 15.0, 10.0), v3(60.0, 45.0, 25.0), 2).unwrap();
+        let island = block(v3(35.0, 25.0, 10.0), v3(45.0, 35.0, 20.0), 3).unwrap();
+        let through = cylinder(v3(10.0, 10.0, -5.0), 3.0, 30.0, 4).unwrap();
+        let blind = cylinder(v3(70.0, 50.0, 12.0), 2.5, 10.0, 5).unwrap();
         base.subtract(&pocket).union(&island).subtract(&through).subtract(&blind)
     }
 
     #[test]
     fn slice_of_a_block_is_one_ccw_loop() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 20.0, 5.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 20.0, 5.0), 1).unwrap();
         let loops = slice(&b, 2.5).unwrap();
         assert_eq!(loops.len(), 1);
         assert!((signed_area(&loops[0].pts) - 200.0).abs() < 1e-9);

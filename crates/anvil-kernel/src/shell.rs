@@ -56,9 +56,8 @@ fn displacement(planes: &[(Vec3, f64)]) -> Vec3 {
     }
     // Gaussian elimination with partial pivoting.
     for col in 0..k {
-        let piv = (col..k)
-            .max_by(|&a, &b| g[a * k + col].abs().partial_cmp(&g[b * k + col].abs()).unwrap())
-            .unwrap();
+        let piv =
+            (col..k).max_by(|&a, &b| g[a * k + col].abs().total_cmp(&g[b * k + col].abs())).unwrap_or(col);
         if piv != col {
             for c in 0..k {
                 g.swap(piv * k + c, col * k + c);
@@ -93,7 +92,7 @@ fn displacement(planes: &[(Vec3, f64)]) -> Vec3 {
 /// Hollows `solid` with walls of `thickness`, removing (opening) the faces in `remove`.
 /// Cavity faces are tagged with `feature`.
 pub fn shell(solid: &Solid, remove: &[FaceId], thickness: f64, feature: u32) -> Result<Solid, ShellError> {
-    if !(thickness > 0.0) {
+    if thickness.is_nan() || thickness <= 0.0 {
         return Err(ShellError::Invalid("the wall thickness must be greater than zero".into()));
     }
     if solid.is_empty() {
@@ -153,7 +152,7 @@ pub fn shell(solid: &Solid, remove: &[FaceId], thickness: f64, feature: u32) -> 
     }
     let cavity = Solid::new(cavity);
     let (v_body, v_cav) = (solid.mass_properties().volume, cavity.mass_properties().volume);
-    if !(v_cav > 0.0) || v_cav >= v_body + 1e-9 && remove.is_empty() {
+    if v_cav.is_nan() || v_cav <= 0.0 || v_cav >= v_body + 1e-9 && remove.is_empty() {
         return Err(ShellError::TooThick);
     }
     let out = solid.subtract(&cavity);
@@ -175,7 +174,7 @@ mod tests {
 
     #[test]
     fn closed_box_shell() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1).unwrap();
         let s = shell(&b, &[], 1.0, 7).unwrap();
         let v = s.mass_properties().volume;
         assert!(rel(v, 2000.0 - 18.0 * 8.0 * 8.0) < 1e-9, "{v}");
@@ -185,7 +184,7 @@ mod tests {
     #[test]
     fn open_top_box() {
         // Like a SOLIDWORKS shell with the top face removed.
-        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1).unwrap();
         let top = FaceId { feature: 1, index: FaceId::END_CAP };
         let s = shell(&b, &[top], 1.0, 7).unwrap();
         let v = s.mass_properties().volume;
@@ -196,7 +195,7 @@ mod tests {
 
     #[test]
     fn cylinder_cup() {
-        let c = cylinder(v3(0.0, 0.0, 0.0), 10.0, 20.0, 1);
+        let c = cylinder(v3(0.0, 0.0, 0.0), 10.0, 20.0, 1).unwrap();
         let top = FaceId { feature: 1, index: FaceId::END_CAP };
         let s = shell(&c, &[top], 2.0, 7).unwrap();
         let outer = c.mass_properties().volume;
@@ -208,8 +207,8 @@ mod tests {
 
     #[test]
     fn l_shape_keeps_concave_corner() {
-        let plate = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 4.0), 1);
-        let wall = block(v3(0.0, 0.0, 0.0), v3(4.0, 10.0, 20.0), 2);
+        let plate = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 4.0), 1).unwrap();
+        let wall = block(v3(0.0, 0.0, 0.0), v3(4.0, 10.0, 20.0), 2).unwrap();
         let l = plate.union(&wall);
         let s = shell(&l, &[], 1.0, 7).unwrap();
         // Inward offset of an L is an L: legs 18 x 2 and 2 x 18 overlapping in 2 x 2,
@@ -221,7 +220,7 @@ mod tests {
 
     #[test]
     fn too_thick() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 2.0), 1);
+        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 2.0), 1).unwrap();
         assert!(matches!(shell(&b, &[], 1.5, 7), Err(ShellError::TooThick | ShellError::FoldsOver)));
     }
 }

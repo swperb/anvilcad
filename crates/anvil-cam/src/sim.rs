@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn part_surface_from_solid() {
-        let body = anvil_kernel::build::block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 5.0), 1);
+        let body = anvil_kernel::build::block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 5.0), 1).unwrap();
         let like = HeightField::new(v2(-2.0, -2.0), v2(12.0, 12.0), 0.5).unwrap();
         let f = HeightField::from_solid(&body, &like);
         assert_eq!(f.at(v2(5.0, 5.0)), 5.0);

@@ -328,21 +328,22 @@ pub fn revolve(
     Ok(solid)
 }
 
-/// Axis-aligned box primitive, mostly for tests and quick modelling.
-pub fn block(min: Vec3, max: Vec3, feature: u32) -> Solid {
+/// Axis-aligned box primitive, mostly for tests and quick modelling. Fails on a box with
+/// zero height.
+pub fn block(min: Vec3, max: Vec3, feature: u32) -> Result<Solid, BuildError> {
     let frame = Frame { origin: v3(0.0, 0.0, 0.0), ..Frame::WORLD };
     let prof = Profile::new(
         Loop2::rectangle(crate::math::v2(min.x, min.y), crate::math::v2(max.x, max.y), 0),
         vec![],
     );
-    extrude(&[prof], &frame, min.z, max.z, feature).expect("valid box")
+    extrude(&[prof], &frame, min.z, max.z, feature)
 }
 
-/// Cylinder primitive along +Z.
-pub fn cylinder(center: Vec3, radius: f64, height: f64, feature: u32) -> Solid {
+/// Cylinder primitive along +Z. Fails when the height is zero.
+pub fn cylinder(center: Vec3, radius: f64, height: f64, feature: u32) -> Result<Solid, BuildError> {
     let frame = Frame { origin: center, ..Frame::WORLD };
     let prof = Profile::new(Loop2::circle(Vec2::ZERO, radius, 0), vec![]);
-    extrude(&[prof], &frame, 0.0, height, feature).expect("valid cylinder")
+    extrude(&[prof], &frame, 0.0, height, feature)
 }
 
 #[cfg(test)]
@@ -357,7 +358,7 @@ mod tests {
 
     #[test]
     fn extruded_box_volume() {
-        let s = block(v3(0.0, 0.0, 0.0), v3(10.0, 20.0, 30.0), 1);
+        let s = block(v3(0.0, 0.0, 0.0), v3(10.0, 20.0, 30.0), 1).unwrap();
         let m = s.mass_properties();
         assert!(close(m.volume, 6000.0, 1e-9), "{}", m.volume);
         assert!(close(m.surface_area, 2.0 * (200.0 + 300.0 + 600.0), 1e-9));
@@ -411,7 +412,7 @@ mod tests {
 
     #[test]
     fn mirrored_block_keeps_its_volume() {
-        let b = block(v3(5.0, 0.0, 0.0), v3(15.0, 10.0, 4.0), 1);
+        let b = block(v3(5.0, 0.0, 0.0), v3(15.0, 10.0, 4.0), 1).unwrap();
         let m = b.mirrored(v3(0.0, 0.0, 0.0), v3(1.0, 0.0, 0.0));
         let mp = m.mass_properties();
         assert!(close(mp.volume, 400.0, 1e-12), "{}", mp.volume);
@@ -451,8 +452,8 @@ mod tests {
 
     #[test]
     fn boolean_box_minus_cylinder() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1);
-        let c = cylinder(v3(5.0, 5.0, -1.0), 2.0, 12.0, 2);
+        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1).unwrap();
+        let c = cylinder(v3(5.0, 5.0, -1.0), 2.0, 12.0, 2).unwrap();
         let r = b.subtract(&c);
         let v = r.mass_properties().volume;
         let hole = c.mass_properties().volume / 12.0 * 10.0;
@@ -464,8 +465,8 @@ mod tests {
 
     #[test]
     fn boolean_union_and_intersection() {
-        let a = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1);
-        let b = block(v3(5.0, 5.0, 5.0), v3(15.0, 15.0, 15.0), 2);
+        let a = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1).unwrap();
+        let b = block(v3(5.0, 5.0, 5.0), v3(15.0, 15.0, 15.0), 2).unwrap();
         assert!(close(a.union(&b).mass_properties().volume, 2000.0 - 125.0, 1e-9));
         assert!(close(a.intersect(&b).mass_properties().volume, 125.0, 1e-9));
         assert!(close(a.subtract(&b).mass_properties().volume, 875.0, 1e-9));
@@ -474,19 +475,28 @@ mod tests {
     #[test]
     fn coplanar_union() {
         // Two boxes sharing a face.
-        let a = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1);
-        let b = block(v3(10.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 2);
+        let a = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 1).unwrap();
+        let b = block(v3(10.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 2).unwrap();
         assert!(close(a.union(&b).mass_properties().volume, 2000.0, 1e-9));
     }
 
     #[test]
     fn raycast_hits_top() {
-        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 7);
+        let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 10.0), 7).unwrap();
         let hit = b.raycast(v3(5.0, 5.0, 100.0), v3(0.0, 0.0, -1.0)).unwrap();
         assert!((hit.t - 90.0).abs() < 1e-9);
         assert_eq!(hit.tag.id, FaceId { feature: 7, index: FaceId::END_CAP });
         let f = b.planar_face_frame(hit.tag.id).unwrap();
         assert!((f.z - Vec3::Z).length() < 1e-12);
         assert!((f.origin.z - 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn flat_primitives_are_errors() {
+        // These used to panic; a zero-height box or cylinder is now refused.
+        assert!(matches!(block(v3(0.0, 0.0, 1.0), v3(10.0, 10.0, 1.0), 1), Err(BuildError::ZeroDepth)));
+        assert!(matches!(cylinder(v3(0.0, 0.0, 0.0), 5.0, 0.0, 1), Err(BuildError::ZeroDepth)));
+        let v = block(v3(0.0, 0.0, 0.0), v3(10.0, 20.0, 30.0), 1).unwrap().mass_properties().volume;
+        assert!((v - 6000.0).abs() < 1e-9);
     }
 }

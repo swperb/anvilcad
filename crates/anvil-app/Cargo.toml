@@ -42,3 +42,11 @@ mlua = { version = "0.12", features = ["lua54", "vendored", "serde"] }
 # software rasteriser every Windows install has. This only adds a feature to eframe's wgpu.
 [target.'cfg(windows)'.dependencies]
 wgpu = { version = "24.0.5", default-features = false, features = ["dx12"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

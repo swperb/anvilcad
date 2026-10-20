@@ -47,13 +47,11 @@ impl Widget {
     fn to_json(&self) -> Value {
         let r = self.rect;
         let c = r.center();
-        let mut v = json!({
-            "id": self.id,
-            "role": self.role,
-            "rect": [r.min.x, r.min.y, r.max.x, r.max.y],
-            "center": [c.x, c.y],
-        });
-        let o = v.as_object_mut().expect("object");
+        let mut o = serde_json::Map::new();
+        o.insert("id".into(), json!(self.id));
+        o.insert("role".into(), json!(self.role));
+        o.insert("rect".into(), json!([r.min.x, r.min.y, r.max.x, r.max.y]));
+        o.insert("center".into(), json!([c.x, c.y]));
         if let Some(l) = &self.label {
             o.insert("label".into(), json!(l));
         }
@@ -69,7 +67,7 @@ impl Widget {
         if let Some(s) = self.selected {
             o.insert("selected".into(), json!(s));
         }
-        v
+        Value::Object(o)
     }
 }
 
@@ -434,10 +432,7 @@ impl Headless {
 
     /// Draws the last frame offscreen and reads it back.
     pub fn render(&mut self) -> Result<Image, String> {
-        if self.gpu.is_none() {
-            self.gpu = Some(Gpu::new());
-        }
-        let gpu = match self.gpu.as_mut().expect("set above") {
+        let gpu = match self.gpu.get_or_insert_with(Gpu::new) {
             Ok(g) => g,
             Err(e) => return Err(e.clone()),
         };
@@ -562,15 +557,14 @@ impl Headless {
     /// carry `"ok"`; failures add `"error"`. A command's `"id"` is echoed back.
     pub fn command(&mut self, cmd: &Value) -> Value {
         let name = cmd.get("cmd").and_then(Value::as_str).unwrap_or("");
-        let mut reply = match self.dispatch(name, cmd) {
-            Ok(v) => {
-                let mut v = if v.is_object() { v } else { json!({}) };
-                v.as_object_mut().expect("object").insert("ok".into(), json!(true));
+        let mut o = match self.dispatch(name, cmd) {
+            Ok(Value::Object(mut v)) => {
+                v.insert("ok".into(), json!(true));
                 v
             }
-            Err(e) => json!({ "ok": false, "error": e }),
+            Ok(_) => serde_json::Map::from_iter([("ok".into(), json!(true))]),
+            Err(e) => serde_json::Map::from_iter([("ok".into(), json!(false)), ("error".into(), json!(e))]),
         };
-        let o = reply.as_object_mut().expect("object");
         if let Some(id) = cmd.get("id") {
             o.insert("id".into(), id.clone());
         }
@@ -585,7 +579,7 @@ impl Headless {
         if self.closed {
             o.insert("closed".into(), json!(true));
         }
-        reply
+        Value::Object(o)
     }
 
     fn dispatch(&mut self, name: &str, cmd: &Value) -> Result<Value, String> {

@@ -1,4 +1,5 @@
 //! The relation statements of `docs/re/sketch-tools.md` ("Relations", 51 to 57).
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use anvil_kernel::{v2, Vec2};
 use anvil_sketch::{Constraint, EntityId, Geom, PointId, Sketch, ORIGIN};
