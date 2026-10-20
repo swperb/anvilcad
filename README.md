@@ -14,6 +14,37 @@ The goal is a complete, free engineering stack: CAD now, then CAM, PDM and PLM (
 Status: early (0.1). The core modelling loop works end to end. Large parts of a full CAD
 system are still ahead; see the roadmap.
 
+## Install
+
+Download the package for your system from the
+[latest release](https://github.com/swperb/anvilcad/releases/latest). No Rust toolchain
+is needed.
+
+| System | Package |
+|---|---|
+| macOS 11 or later, Apple Silicon or Intel | `AnvilCAD-<version>-macos-universal.dmg` |
+| Windows 10 or 11, x64 | `AnvilCAD-<version>-windows-x64.msi` (or the `.zip`) |
+| Linux x86_64, glibc 2.35 or later | `AnvilCAD-<version>-linux-x86_64.AppImage` (or the `.tar.gz`) |
+
+The packages are not code-signed yet, because signing certificates cost money, so the
+first launch takes one extra step:
+
+- **macOS**: open the `.dmg` and drag AnvilCAD to Applications. The first time you open
+  it, macOS says it cannot verify the developer. Click Done, open System Settings > Privacy
+  & Security, click Open Anyway next to AnvilCAD and confirm. Or, in Terminal:
+  `xattr -dr com.apple.quarantine /Applications/AnvilCAD.app`.
+- **Windows**: SmartScreen says "Windows protected your PC". Click More info, then Run
+  anyway. The installer adds AnvilCAD to the Start menu and puts `anvilcad-agent`,
+  `anvil-bulk` and `anvil-migrate` on the PATH.
+- **Linux**: `chmod +x AnvilCAD-*.AppImage`, then run it. The bundled tools run as
+  `./AnvilCAD-*.AppImage anvilcad-agent ...` and `./AnvilCAD-*.AppImage anvil-bulk ...`.
+  If the AppImage does not start, install your distribution's `fuse3` package or add
+  `--appimage-extract-and-run`.
+
+The `.tar.gz` and `.zip` archives hold the plain binaries, for scripts and servers. On
+macOS the command-line tools are also inside the app, in
+`/Applications/AnvilCAD.app/Contents/MacOS/`.
+
 ## What works today
 
 **Sketching**
@@ -399,6 +430,8 @@ Kernel design notes:
 
 ## Building
 
+To build from source instead of installing a package:
+
 Linux and macOS: `cargo run --release -p anvil-app`
 
 Windows with MSVC (Visual Studio Build Tools installed): `cargo run --release -p anvil-app`
@@ -411,6 +444,10 @@ winget install BrechtSanders.WinLibs.POSIX.UCRT   # GNU binutils
 bash scripts/setup-windows-gnu.sh                 # one time
 bash scripts/build.sh run --release -p anvil-app
 ```
+
+To build the release packages, run `bash packaging/package.sh macos|linux|windows`; they
+land in `dist/`. Pushing a `v*` tag runs the same script on each platform through
+`.github/workflows/release.yml` and attaches the packages to a GitHub Release.
 
 Run the tests with `cargo test --workspace` (or `bash scripts/build.sh test --workspace`).
 The app crate's tests drive the real UI with simulated mouse input, so sketching,

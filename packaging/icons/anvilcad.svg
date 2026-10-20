@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- AnvilCAD application icon: the anvil mark from docs/assets/favicon.svg (its quadratic curves
+       written as cubics) on a rounded square, with the margin macOS expects around an app icon. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#1C1917"/>
+  <g transform="translate(176 166) scale(13.9)">
+    <path d="M3 13 L45 13 L45 20 L35 20 C32.333 21.333 31 24.667 31 30 L38 36 L38 41 L12 41 L12 36 L19 30 C19 25.333 17.667 22.5 15 21.5 C10.333 19.833 6.333 17 3 13 Z" fill="none" stroke="#F5F5F4" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="22" y="7" width="13" height="5" rx="1.25" fill="#EA580C"/>
+  </g>
+</svg>

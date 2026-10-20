@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AnvilCAD
+GenericName=Parametric 3D CAD
+Comment=Free and open-source parametric 3D CAD
+Exec=anvilcad %f
+Icon=anvilcad
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+Keywords=CAD;3D;STEP;sketch;parametric;
