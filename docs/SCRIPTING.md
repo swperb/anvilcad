@@ -123,6 +123,7 @@ made before the error, which Undo reverses.
 | `anvil.export(path)` | writes STEP (exact where possible), STL or OBJ, by extension |
 | `anvil.var(name, value)` | sets a global variable to a number or an equation, such as `"width / 2"` |
 | `anvil.dim(feature, dimension, value)` | sets a feature's dimension (`"depth"`, `"angle"`, `"offset"`, `"spacing"`, `"count"`, `"radius"`, `"distance"`, `"chamfer angle"` or `"thickness"`) to a number or an equation, then rebuilds; `feature` is its id or name. If the rebuild fails, the old value is kept and the call raises the error |
+| `anvil.delete(feature)` | deletes a feature (by id or name) and the features that depend on it, and returns their ids |
 | `anvil.material(name)` | sets a library material |
 | `anvil.sketch{ plane, rects, circles }` | adds a sketch and returns its id; `plane` is `"front"`, `"top"`, `"right"` or `{ on = feature_id, face = "end" \| "start" }`; `rects` are `{x0, y0, x1, y1}` corners and `circles` are `{x, y, radius}`, in the sketch's coordinates (mm) |
 | `anvil.extrude{ sketch, depth, cut, reverse }` | extrudes a sketch and returns the feature id; `depth` is mm, an equation, or `"through"` |

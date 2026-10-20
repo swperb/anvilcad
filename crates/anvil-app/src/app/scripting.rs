@@ -357,6 +357,28 @@ impl AnvilApp {
         }))
     }
 
+    /// Runs Lua like [`AnvilApp::run_lua`] and returns the chunk's return value (as JSON) and
+    /// the lines it printed, for agents (`crate::mcp`).
+    pub fn eval_lua(
+        &mut self,
+        ctx: &egui::Context,
+        source: &str,
+        name: &str,
+    ) -> Result<(serde_json::Value, Vec<String>), String> {
+        if self.scripting.engine.is_none() {
+            self.scripting.engine = Some(Engine::load("", "init.lua", None)?);
+        }
+        let mut out = (serde_json::Value::Null, Vec::new());
+        let result = self.with_engine(ctx, |engine, host| {
+            out = engine.eval_script(source, name, host)?;
+            Ok(())
+        });
+        if let Err(e) = &result {
+            self.status = format!("Script error: {e}");
+        }
+        result.map(|()| out)
+    }
+
     /// Runs a Lua script with the whole `anvil` API. Without a loaded config it runs in a
     /// fresh engine.
     pub fn run_lua(&mut self, ctx: &egui::Context, source: &str, name: &str) -> Result<(), String> {
@@ -736,6 +758,17 @@ struct AppHost<'a> {
 }
 
 impl AppHost<'_> {
+    /// A feature by its id or (case-insensitive) name.
+    fn feature_named(&self, what: &str, feature: &str) -> Result<&Feature, String> {
+        let doc = &self.app.doc;
+        feature
+            .parse::<u32>()
+            .ok()
+            .and_then(|id| doc.feature(id))
+            .or_else(|| doc.features.iter().find(|f| f.name.eq_ignore_ascii_case(feature)))
+            .ok_or_else(|| format!("{what}: there is no feature \"{feature}\""))
+    }
+
     /// Scripts never throw away unsaved work unless they say so.
     fn check_unsaved(&self, what: &str, force: bool) -> Result<(), String> {
         if self.app.is_dirty() && !force {
@@ -818,14 +851,16 @@ impl Host for AppHost<'_> {
         }
     }
 
+    fn delete_feature(&mut self, feature: &str) -> Result<Vec<u32>, String> {
+        let id = self.feature_named("anvil.delete", feature)?.id;
+        let gone = self.app.doc.delete_feature(id);
+        self.app.selection = Selection::None;
+        self.app.rebuild();
+        Ok(gone)
+    }
+
     fn set_dimension(&mut self, feature: &str, dimension: &str, value: &str) -> Result<(), String> {
-        let doc = &self.app.doc;
-        let f = feature
-            .parse::<u32>()
-            .ok()
-            .and_then(|id| doc.feature(id))
-            .or_else(|| doc.features.iter().find(|f| f.name.eq_ignore_ascii_case(feature)))
-            .ok_or_else(|| format!("anvil.dim: there is no feature \"{feature}\""))?;
+        let f = self.feature_named("anvil.dim", feature)?;
         let (id, name) = (f.id, f.name.clone());
         let slots = DimSlot::of(&f.kind);
         let wanted = dimension.trim().to_ascii_lowercase().replace('_', " ");
@@ -898,7 +933,25 @@ impl Host for AppHost<'_> {
             let p = sf.sketch.add_point(anvil_kernel::v2(c[0], c[1]));
             sf.sketch.add_circle(p, c[2]);
         }
-        Ok(self.app.doc.add_feature(FeatureKind::Sketch(sf)))
+        let before = self.app.doc.clone();
+        let id = self.app.doc.add_feature(FeatureKind::Sketch(sf));
+        // Rebuild now, so a face that cannot carry a sketch fails here rather than at the
+        // extrusion that uses it.
+        self.app.rebuild();
+        if let Some(e) = self.app.state.errors.get(&id).cloned() {
+            self.app.doc = before;
+            self.app.rebuild();
+            let hint = match spec.plane {
+                PlaneSpec::Face { feature, start } => format!(
+                    " (feature {feature} has no planar {} face in the body; sketch on a boss's \
+                     face or a standard plane instead)",
+                    if start { "start" } else { "end" }
+                ),
+                _ => String::new(),
+            };
+            return Err(format!("anvil.sketch: {e}{hint}"));
+        }
+        Ok(id)
     }
 
     fn add_extrude(&mut self, spec: &ExtrudeSpec) -> Result<u32, String> {

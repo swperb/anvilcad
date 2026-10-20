@@ -95,6 +95,7 @@ fn handshake_and_tool_list() {
         "export",
         "screenshot",
         "run_lua",
+        "delete_feature",
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
@@ -335,4 +336,119 @@ fn base64_matches_rfc_4648() {
         assert_eq!(base64(raw.as_bytes()), enc);
     }
     assert_eq!(base64(&[0xff, 0xfe, 0xfd]), "//79");
+}
+
+/// The sequence a live agent ran: holes and a boss sketched on the plate's top face, then the
+/// plate's thickness changed. The boss used to jump 90 degrees about the origin, because the
+/// face's sketch frame broke a tie between X and Y on rounding noise.
+#[test]
+fn face_sketches_stay_put_when_a_variable_changes() {
+    let mut s = server();
+    call(&mut s, "new_part", json!({ "material": "6061 Alloy" }));
+    call(&mut s, "set_variable", json!({ "name": "thickness", "value": 8 }));
+    call(&mut s, "add_sketch", json!({ "plane": "front", "rects": [[0, 0, 80, 50]] }));
+    call(&mut s, "add_extrude", json!({ "sketch": 1, "depth": "thickness" }));
+    let holes = json!([[10, 10, 3], [70, 10, 3], [10, 40, 3], [70, 40, 3]]);
+    call(&mut s, "add_sketch", json!({ "on_feature": 2, "face": "end", "circles": holes }));
+    call(&mut s, "add_extrude", json!({ "sketch": 3, "depth": "through", "cut": true }));
+    call(&mut s, "add_sketch", json!({ "on_feature": 2, "face": "end", "rects": [[30, 15, 50, 35]] }));
+    call(&mut s, "add_extrude", json!({ "sketch": 5, "depth": 15 }));
+    for (t, top) in [(10.0, 25.0), (8.0, 23.0), (12.5, 27.5)] {
+        let r = call(&mut s, "set_variable", json!({ "name": "thickness", "value": t }));
+        let b = &r["body"]["bounds"];
+        assert_vec(&b["min"], [0.0, 0.0, 0.0]);
+        assert_vec(&b["max"], [80.0, 50.0, top]);
+        // Symmetric holes and a centred boss keep the centroid over the plate's centre.
+        assert!(close(&r["body"]["centroid"][0], 40.0) && close(&r["body"]["centroid"][1], 25.0), "{r}");
+    }
+}
+
+#[test]
+fn deletes_features_and_their_dependents() {
+    let mut s = server();
+    let id = block(&mut s);
+    let sk = call(&mut s, "add_sketch", json!({ "on_feature": id, "rects": [[0, 0, 5, 5]] }));
+    let cut = call(&mut s, "add_extrude", json!({ "sketch": sk["sketch"], "depth": 2, "cut": true }));
+    assert!(close(&cut["body"]["volume"], 6000.0 - 50.0), "{cut}");
+    // Deleting the sketch takes its cut with it.
+    let r = call(&mut s, "delete_feature", json!({ "feature": sk["sketch"] }));
+    assert_eq!(r["deleted"], json!([cut["feature"], sk["sketch"]]));
+    assert!(close(&r["body"]["volume"], 6000.0), "{r}");
+    let r = call(&mut s, "delete_feature", json!({ "feature": "Sketch1" }));
+    assert_eq!(r["body"]["empty"], true, "{r}");
+    assert_eq!(call(&mut s, "list_features", json!({}))["features"], json!([]));
+    let e = call_err(&mut s, "delete_feature", json!({ "feature": "Sketch1" }));
+    assert!(e.contains("no feature"), "{e}");
+}
+
+#[test]
+fn a_cut_that_misses_warns() {
+    let mut s = server();
+    block(&mut s);
+    // The front plane is the block's bottom face. A cut goes against the plane's normal
+    // (into a face), so from the front plane it points away from the block, along -Z.
+    let sk = call(&mut s, "add_sketch", json!({ "plane": "front", "rects": [[2, 2, 4, 4]] }));
+    let r = call(&mut s, "add_extrude", json!({ "sketch": sk["sketch"], "depth": 5, "cut": true }));
+    assert!(close(&r["body"]["volume"], 6000.0), "{r}");
+    assert!(r["warning"].as_str().is_some_and(|w| w.contains("with reverse: true")), "{r}");
+    let r = call(&mut s, "delete_feature", json!({ "feature": sk["sketch"] }));
+    assert_eq!(r["deleted"].as_array().map(Vec::len), Some(2));
+    let sk = call(&mut s, "add_sketch", json!({ "plane": "front", "rects": [[2, 2, 4, 4]] }));
+    let r = call(
+        &mut s,
+        "add_extrude",
+        json!({ "sketch": sk["sketch"], "depth": 5, "cut": true, "reverse": true }),
+    );
+    assert!(close(&r["body"]["volume"], 6000.0 - 20.0), "{r}");
+    assert_eq!(r["warning"], Value::Null);
+}
+
+#[test]
+fn run_lua_returns_values_and_printed_lines() {
+    let mut s = server();
+    block(&mut s);
+    let r = call(
+        &mut s,
+        "run_lua",
+        json!({ "code": "print('volume', anvil.state().body.volume)\n\
+                         return { n = #anvil.state().features, name = anvil.state().features[2].name }" }),
+    );
+    assert_eq!(r["result"], json!({ "n": 2, "name": "Boss-Extrude1" }));
+    assert_eq!(r["printed"], json!(["volume\t6000.0"]));
+    let r = call(&mut s, "run_lua", json!({ "code": "return 1 + 2" }));
+    assert_eq!(r["result"], json!(3));
+    assert_eq!(r["printed"], json!([]));
+    let r = call(&mut s, "run_lua", json!({ "code": "return function() end" }));
+    assert_eq!(r["result"], "function");
+    // print is only captured while run_lua runs.
+    let r = call(&mut s, "run_lua", json!({ "code": "return print == nil" }));
+    assert_eq!(r["result"], false);
+}
+
+#[test]
+fn open_part_reports_the_material() {
+    let mut s = server();
+    block(&mut s);
+    call(&mut s, "set_material", json!({ "name": "6061 Alloy" }));
+    let dir = scratch("material");
+    // The folder does not exist yet; save_part makes it, as export does.
+    let path = dir.join("sub/m.anvprt").display().to_string();
+    call(&mut s, "save_part", json!({ "path": path }));
+    call(&mut s, "new_part", json!({}));
+    let r = call(&mut s, "open_part", json!({ "path": path }));
+    assert_eq!(r["material"], "6061 Alloy");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A second live agent sketched a hole on a pocket cut's end face. The sketch was accepted and
+/// only the extrusion failed; now the sketch itself fails, and adds nothing.
+#[test]
+fn a_sketch_on_a_face_that_is_not_there_fails_at_once() {
+    let mut s = server();
+    let id = block(&mut s);
+    let sk = call(&mut s, "add_sketch", json!({ "on_feature": id, "rects": [[2, 2, 8, 8]] }));
+    let cut = call(&mut s, "add_extrude", json!({ "sketch": sk["sketch"], "depth": 5, "cut": true }));
+    let e = call_err(&mut s, "add_sketch", json!({ "on_feature": cut["feature"], "circles": [[5, 5, 1]] }));
+    assert!(e.contains("no planar end face"), "{e}");
+    assert_eq!(call(&mut s, "list_features", json!({}))["features"].as_array().unwrap().len(), 4);
 }

@@ -293,10 +293,14 @@ impl Solid {
         }
         let n = p.normal;
         let origin = n * p.w;
+        // The world axis least aligned with the normal. Axes within a rounding error of each
+        // other count as a tie, which the first one wins: a face normal to Z has X and Y both
+        // at zero, and after a boolean the noise in its normal (1e-17) must not pick Y on one
+        // rebuild and X on the next, turning every sketch on the face by 90 degrees.
         let hint = [Vec3::X, Vec3::Y, Vec3::Z]
             .into_iter()
-            .min_by(|a, b| a.dot(n).abs().partial_cmp(&b.dot(n).abs()).unwrap())
-            .unwrap();
+            .min_by_key(|a| (a.dot(n).abs() * 1e9).round() as i64)
+            .unwrap_or(Vec3::X);
         Some(Frame::from_normal(origin, n, hint))
     }
 
@@ -528,5 +532,28 @@ impl Solid {
             }
         }
         count.values().filter(|&&c| c != 0).count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::v3;
+
+    /// A face normal to Z has X and Y tied as the frame's hint. Noise in the normal from a
+    /// boolean must not break the tie toward Y, or sketches on the face turn 90 degrees.
+    #[test]
+    fn face_frame_ignores_noise_in_the_normal() {
+        let mut s = crate::build::block(v3(0.0, 0.0, 0.0), v3(80.0, 50.0, 8.0), 2);
+        let cap = FaceId { feature: 2, index: FaceId::END_CAP };
+        let clean = s.planar_face_frame(cap).expect("the end cap is planar");
+        assert_eq!((clean.x, clean.y, clean.z), (Vec3::X, Vec3::Y, Vec3::Z));
+        for p in s.polygons.iter_mut().filter(|p| p.tag.id == cap) {
+            // Y is now (very slightly) less aligned with the normal than X.
+            p.normal = v3(2e-17, 1e-17, 1.0);
+        }
+        let noisy = s.planar_face_frame(cap).expect("the end cap is planar");
+        assert!((noisy.x - Vec3::X).length() < 1e-12, "x axis {:?}", noisy.x);
+        assert!((noisy.origin - v3(0.0, 0.0, 8.0)).length() < 1e-9, "origin {:?}", noisy.origin);
     }
 }

@@ -46,20 +46,21 @@ server writes are created as needed.
 | Tool | Arguments | Does |
 |---|---|---|
 | `new_part` | `material` | starts a new, empty part, discarding the current one |
-| `open_part` | `path` | opens an `.anvprt` part, template, STEP or SOLIDWORKS file; returns its feature tree and body |
+| `open_part` | `path` | opens an `.anvprt` part, template, STEP or SOLIDWORKS file; returns its feature tree, material and body |
 | `save_part` | `path` | saves as `.anvprt`, to `path` or the part's file |
 | `list_features` | | the feature tree: id, name, kind, rebuild error and settable dimensions (value and equation) of each feature, and the global variables |
 | `get_state` | | everything the harness's `state` command reports |
-| `add_sketch` | `plane` (`front`, `top`, `right`) or `on_feature` and `face` (`end`, `start`); `rects` `[[x0, y0, x1, y1], ...]`; `circles` `[[x, y, r], ...]` | adds a sketch and returns its id. Front is the XY plane, top XZ and right YZ |
-| `add_extrude` | `sketch`, `depth` (mm, an equation, or `"through"`), `cut`, `reverse` | extrudes a boss, or a cut; returns its id and the body after the rebuild |
+| `add_sketch` | `plane` (`front`, `top`, `right`) or `on_feature` and `face` (`end`, `start`); `rects` `[[x0, y0, x1, y1], ...]`; `circles` `[[x, y, r], ...]` | adds a sketch and returns its id, or fails at once if the face cannot carry a sketch (a cut's faces cannot). Front is the XY plane, top XZ and right YZ. On a face, the sketch's x is world X (world Y on a face normal to X) and its origin is the world origin projected onto the face |
+| `add_extrude` | `sketch`, `depth` (mm, an equation, or `"through"`), `cut`, `reverse` | extrudes a boss, or a cut; returns its id and the body after the rebuild, with a `warning` if the body did not change. A boss goes along the plane's normal (+Z from front, +Y from top, +X from right, out of a face); a cut goes the other way (into a face); `reverse` flips either |
+| `delete_feature` | `feature` (id or name) | deletes the feature and those that depend on it (a sketch takes its extrusion with it); returns the ids removed |
 | `set_variable` | `name`, `value` (number or equation) | sets or adds a global variable and rebuilds |
 | `set_dimension` | `feature` (id or name), `dimension`, `value` | sets `depth`, `angle`, `offset`, `spacing`, `count`, `radius`, `distance`, `chamfer angle` or `thickness`; if the rebuild fails, the old value is kept and the error returned |
 | `set_material` | `name` | assigns a library material, such as `6061 Alloy` or `Plain Carbon Steel` |
 | `rebuild` | | rebuilds and reports the body and any feature errors |
-| `mass_properties` | | volume (mm³), surface area (mm²), centroid, bounding box and size (mm); mass (g) and principal moments of inertia (g·mm²) when a material is set |
+| `mass_properties` | | volume (mm³), surface area (mm²), centroid, bounding box and size (mm); mass (g) and principal moments of inertia (g·mm²) when a material is set. They are computed from the tessellated body, so curved faces make them slightly approximate; `exact` says whether STEP export writes an exact B-rep |
 | `export` | `path` | `.step` or `.stp` (exact B-rep where possible), `.stl` or `.obj` |
 | `screenshot` | `path`, `view`, `fit` (default true), `crop` (`viewport` or `window`), `width`, `height`, `inline` (default true) | renders a PNG to `path` and, unless `inline` is false, returns it as an image |
-| `run_lua` | `code` | runs Lua with the `anvil` API, for anything else |
+| `run_lua` | `code` | runs Lua with the `anvil` API, for anything else; returns the chunk's return value as `result` and what it printed as `printed` |
 | `run_command` | `name` | runs a built-in command, such as `Undo`, `Redo` or `Isometric` |
 
 A tool that fails returns a result with `isError: true` and a message that says what was
@@ -97,5 +98,6 @@ protocol messages; anything else goes to stderr.
 
 `crates/anvil-app/src/mcp/tests.rs` drives the server with JSON-RPC and checks exact values
 (the 10 × 20 × 30 mm block's volume, area, centroid and mass, dimension and variable
-changes, cuts, STEP and STL round trips, and every kind of error), and
+changes, cuts, deleting features, face sketches that must stay put when a variable changes,
+STEP and STL round trips, and every kind of error), and
 `crates/anvil-app/tests/mcp_stdio.rs` runs the binary as a client would.
