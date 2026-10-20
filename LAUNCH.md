@@ -91,7 +91,7 @@ with evidence; the maintainer decides.
 |---|---|---|
 | G1 | A GitHub release exists with installers for macOS, Windows and Linux | `gh release view --json tagName,assets --jq '{tag:.tagName,assets:[.assets[].name]}'` |
 | G2 | Each installer opens the sample part on a clean machine | Windows: `scripts/winvm/winvm` with the downloaded asset. Linux: `scripts/linuxvm/linuxvm`. macOS: download, open, Help > Open Sample Part. Record the time from download to sample part; the target is under 5 minutes. |
-| G3 | Install instructions for unsigned apps (macOS Gatekeeper, Windows SmartScreen) are in the README and on `docs/index.html` | Read both pages |
+| G3 | The macOS `.dmg` is signed with a Developer ID and notarized; install instructions for the unsigned Windows and Linux packages (SmartScreen, AppImage) are in the README and on `docs/index.html` | `spctl -a -vv -t open --context context:primary-signature AnvilCAD-*.dmg` says "Notarized Developer ID"; read both pages |
 | G4 | The MCP server works from a one-line setup | Run the README's `claude mcp add ...` line in a fresh shell and build a 10x20x30 mm block; the volume must be 6000 mm³ |
 | G5 | Every claim in the README and the drafts below is true today | Check against the "Say / Do not say" table in [docs/POSITIONING.md](docs/POSITIONING.md) and the README's "What works today" |
 | G6 | Films rendered from the current release: the 60-second trailer, the `agent` film, and the feature spots. Add a migration before-and-after with the volume check when there is a part the project may publish | `python3 scripts/cinema/films.py` ([scripts/cinema/README.md](scripts/cinema/README.md)); watch each one, and check its captions against the README's "What works today" |
@@ -103,7 +103,7 @@ with evidence; the maintainer decides.
 | G12 | The maintainer has time blocked: 4 hours from the HN post, and an hour a day for a week | Ask |
 
 Nice to have, not gates: native `.sldprt` geometry for simple parts, drawings, a browser
-build, code-signed installers.
+build, code-signed Windows installers.
 
 ---
 
@@ -221,7 +221,7 @@ What's missing: drawings, assembly migration, and reading .sldprt geometry nativ
 (today it reads custom properties; geometry comes through migration or STEP). The roadmap
 is in ROADMAP.md.
 
-Installers: {{release_url}} (unsigned for now; the README has the extra click).
+Installers: {{release_url}} (the Mac app is notarized; Windows is unsigned for now and the README has the extra click).
 I'd love feedback, especially from people who use SOLIDWORKS daily.
 ```
 
