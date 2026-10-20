@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-io",
  "anvil-kernel",
@@ -190,7 +190,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-brep"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "glam",
  "proptest",
@@ -201,7 +201,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-bulk"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-io",
  "anvil-kernel",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-cam"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-kernel",
  "anvil-model",
@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-kernel",
  "anvil-model",
@@ -240,14 +240,14 @@ dependencies = [
 
 [[package]]
 name = "anvil-kernel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "anvil-migrate"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-io",
  "anvil-kernel",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-model"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-brep",
  "anvil-kernel",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-props"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-io",
  "anvil-model",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-sketch"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-kernel",
  "serde",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-step"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anvil-brep",
  "glam",
