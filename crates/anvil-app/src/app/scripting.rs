@@ -11,6 +11,10 @@ use std::time::SystemTime;
 /// with a short description. Names match the toolbar and menus.
 pub const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("New", "Start a new part"),
+    ("New Assembly", "Start a new assembly"),
+    ("Insert Component", "Place a part in the assembly"),
+    ("Mate", "Add a mate between two components"),
+    ("Bill of Materials", "Show the assembly's parts list"),
     ("Open", "Open a part, template, STEP or SOLIDWORKS file"),
     ("Save", "Save the part"),
     ("Save As", "Save the part under a new name"),
@@ -139,6 +143,14 @@ impl AnvilApp {
         };
         match *name {
             "New" => self.request(PendingAction::New),
+            "New Assembly" => self.request(PendingAction::NewAssembly),
+            "Insert Component" => self.insert_component(),
+            "Mate" => self.start_mate(),
+            "Bill of Materials" => {
+                if let Some(s) = &mut self.asm {
+                    s.bom = true;
+                }
+            }
             "Open" => self.request(PendingAction::Open),
             "Save" => self.save(false),
             "Save As" => self.save(true),
@@ -148,6 +160,7 @@ impl AnvilApp {
             "Undo" => self.undo(),
             "Redo" => self.redo(),
             "Rebuild" => self.rebuild(),
+            "Delete" if self.asm.is_some() => self.delete_assembly_selection(),
             "Delete" => {
                 if matches!(self.selection, Selection::Feature(_)) && self.editor.is_none() {
                     self.delete_selected_feature();

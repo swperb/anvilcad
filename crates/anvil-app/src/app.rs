@@ -12,6 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+mod assembly;
 mod configs;
 use configs::{ConfigUi, Manager};
 mod scripting;
@@ -48,6 +49,7 @@ enum Editor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingAction {
     New,
+    NewAssembly,
     Open,
     OpenSample,
     Exit,
@@ -140,6 +142,8 @@ pub struct AnvilApp {
     cfg: ConfigUi,
     /// init.lua, user key bindings, user commands and the command palette.
     scripting: scripting::Scripting,
+    /// The assembly open in the window, when one is: the part fields are then unused.
+    asm: Option<assembly::AsmSession>,
 }
 
 /// A file dialog the app asked for while dialogs were scripted.
@@ -219,6 +223,7 @@ impl AnvilApp {
             measure: None,
             cfg: ConfigUi::default(),
             scripting: scripting::Scripting::default(),
+            asm: None,
         };
         if let Some(p) = open {
             if p.as_os_str() == "--sample" {
@@ -271,6 +276,10 @@ impl AnvilApp {
     }
 
     fn rebuild(&mut self) {
+        if self.in_assembly() {
+            self.refresh_assembly();
+            return;
+        }
         // Edits to configured parameters belong to the active configuration.
         self.doc.capture_configuration();
         self.state = self.doc.rebuild();
@@ -307,6 +316,7 @@ impl AnvilApp {
     }
 
     fn load_document(&mut self, doc: Document, path: Option<PathBuf>) {
+        self.leave_assembly();
         self.doc = doc;
         self.committed = self.doc.clone();
         self.saved = if path.is_some() { self.doc.clone() } else { Document::new() };
@@ -322,7 +332,10 @@ impl AnvilApp {
     }
 
     fn is_dirty(&self) -> bool {
-        self.doc != self.saved
+        match &self.asm {
+            Some(s) => s.is_dirty(),
+            None => self.doc != self.saved,
+        }
     }
 
     fn commit_if_changed(&mut self) {
@@ -337,6 +350,10 @@ impl AnvilApp {
     }
 
     fn undo(&mut self) {
+        if self.in_assembly() {
+            self.assembly_undo(false);
+            return;
+        }
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut self.doc, prev));
             self.after_history_jump();
@@ -344,6 +361,10 @@ impl AnvilApp {
     }
 
     fn redo(&mut self) {
+        if self.in_assembly() {
+            self.assembly_undo(true);
+            return;
+        }
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.doc, next));
             self.after_history_jump();
@@ -366,6 +387,9 @@ impl AnvilApp {
     }
 
     fn title(&self) -> String {
+        if let Some(s) = &self.asm {
+            return format!("{}{} - AnvilCAD", s.name(), if s.is_dirty() { " *" } else { "" });
+        }
         let name = self
             .path
             .as_ref()
@@ -376,6 +400,9 @@ impl AnvilApp {
     }
 
     fn part_name(&self) -> String {
+        if let Some(s) = &self.asm {
+            return s.name();
+        }
         self.path
             .as_ref()
             .and_then(|p| p.file_stem())
@@ -409,6 +436,7 @@ impl AnvilApp {
     fn perform(&mut self, a: PendingAction) {
         match a {
             PendingAction::New => self.start_new_part(),
+            PendingAction::NewAssembly => self.new_assembly(),
             PendingAction::OpenSample => self.load_document(crate::sample::sample_part(), None),
             PendingAction::Open => {
                 let picked = self.file_dialog("Open", || {
@@ -417,6 +445,7 @@ impl AnvilApp {
                             "AnvilCAD, STEP and SOLIDWORKS files",
                             &[
                                 "anvprt",
+                                "anvasm",
                                 "anvprtdot",
                                 "fprt",
                                 "step",
@@ -428,6 +457,7 @@ impl AnvilApp {
                             ],
                         )
                         .add_filter("AnvilCAD part", &["anvprt"])
+                        .add_filter("AnvilCAD assembly", &[anvil_model::assembly::ASSEMBLY_EXT])
                         .add_filter("STEP", &["step", "stp"])
                         .add_filter("AnvilCAD part template", &["anvprtdot"])
                         .add_filter(
@@ -472,6 +502,10 @@ impl AnvilApp {
             self.import_step(p);
             return;
         }
+        if ext == anvil_model::assembly::ASSEMBLY_EXT {
+            self.open_assembly(p);
+            return;
+        }
         let is_template = p.extension().map(|e| e.eq_ignore_ascii_case(PART_TEMPLATE_EXT)).unwrap_or(false);
         match Document::load(p) {
             Ok(d) if is_template => self.load_document(Document::from_template(&d), None),
@@ -500,6 +534,10 @@ impl AnvilApp {
     }
 
     fn save(&mut self, save_as: bool) {
+        if self.in_assembly() {
+            self.save_assembly(save_as);
+            return;
+        }
         let path = match (&self.path, save_as) {
             (Some(p), false) => Some(p.clone()),
             _ => {
@@ -1201,9 +1239,17 @@ impl AnvilApp {
                     ui.close_menu();
                     self.request(PendingAction::New);
                 }
+                if ui.button("New Assembly").clicked() {
+                    ui.close_menu();
+                    self.request(PendingAction::NewAssembly);
+                }
                 if ui.button("Open...        Ctrl+O").clicked() {
                     ui.close_menu();
                     self.request(PendingAction::Open);
+                }
+                if ui.button("Insert Component...").clicked() {
+                    ui.close_menu();
+                    self.insert_component();
                 }
                 ui.separator();
                 if ui.button("Save           Ctrl+S").clicked() {
@@ -1365,6 +1411,21 @@ impl AnvilApp {
 
     /// The command bar: tabs, then the open tab's commands in captioned groups.
     fn command_manager(&mut self, ui: &mut egui::Ui) {
+        if self.in_assembly() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                theme::tab(ui, "Assembly", true);
+            });
+            let pal = Palette::of(ui);
+            let y = ui.cursor().top();
+            ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, pal.border));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.set_min_height(62.0);
+                self.assembly_commands(ui);
+            });
+            return;
+        }
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (t, label) in
@@ -2785,7 +2846,9 @@ impl AnvilApp {
         }
 
         // Picking edges or faces for a fillet, chamfer or shell being edited.
-        if let (Some((fid, kind)), true) = (self.pick_target(), self.sketch.is_none()) {
+        if self.in_assembly() {
+            self.assembly_pointer(&resp, rect);
+        } else if let (Some((fid, kind)), true) = (self.pick_target(), self.sketch.is_none()) {
             let clicked = resp.clicked_by(egui::PointerButton::Primary);
             match kind {
                 PickKind::Edges => {
@@ -2885,7 +2948,9 @@ impl AnvilApp {
                 (true, Some(r), Some(i)) => r.findings.get(i).map(|f| f.faces.clone()),
                 _ => None,
             };
-            let selected: Vec<FaceId> = if let Some(faces) = shell_faces {
+            let selected: Vec<FaceId> = if let Some(s) = &self.asm {
+                s.highlighted()
+            } else if let Some(faces) = shell_faces {
                 faces
             } else if let Some(faces) = dfm_faces {
                 faces
@@ -2915,6 +2980,13 @@ impl AnvilApp {
         self.draw_planes(&painter, rect);
         self.draw_model_sketches(&painter, rect);
         self.draw_picked_edges(&painter, rect);
+        if let Some(s) = &self.asm {
+            let stroke = Stroke::new(3.0, pal.accent);
+            for seg in s.highlighted_edges() {
+                let (a, b) = (self.camera.project(seg[0], rect), self.camera.project(seg[1], rect));
+                painter.line_segment([a, b], stroke);
+            }
+        }
 
         // Sketch interaction.
         if let Some(s) = &mut self.sketch {
@@ -3868,7 +3940,18 @@ impl AnvilApp {
         if arrows != (0, 0) {
             self.camera.orbit(arrows.0 as f64 * -20.0, arrows.1 as f64 * -20.0);
         }
-        if self.sketch.is_none() {
+        if self.in_assembly() {
+            if del {
+                self.delete_assembly_selection();
+            }
+            if esc {
+                if let Some(s) = &mut self.asm {
+                    s.mate = None;
+                    s.selection = assembly::AsmSelection::None;
+                }
+                self.scene_dirty = true;
+            }
+        } else if self.sketch.is_none() {
             if del && matches!(self.selection, Selection::Feature(_)) && self.editor.is_none() {
                 self.delete_selected_feature();
             }
@@ -4093,6 +4176,7 @@ impl AnvilApp {
             "undo": self.undo.len(),
             "redo": self.redo.len(),
             "viewport": [r.min.x, r.min.y, r.max.x, r.max.y],
+            "assembly": self.assembly_snapshot(),
         })
     }
 }
@@ -4822,7 +4906,9 @@ impl AnvilApp {
             }))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    if self.sketch.is_some() {
+                    if self.in_assembly() {
+                        self.assembly_tree(ui);
+                    } else if self.sketch.is_some() {
                         self.sketch_manager(ui);
                     } else if self.editor.is_some() {
                         self.property_manager(ui);
@@ -4839,6 +4925,7 @@ impl AnvilApp {
             self.viewport(ui);
         });
         self.windows(ctx);
+        self.bom_window(ctx);
         self.config_windows(ctx);
         self.command_palette(ctx);
         self.commit_if_changed();

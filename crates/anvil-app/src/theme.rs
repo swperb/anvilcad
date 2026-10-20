@@ -330,6 +330,12 @@ pub enum Icon {
     Properties,
     /// A configuration: two stacked variants of a part.
     Configuration,
+    /// An assembly: two blocks, one on the other.
+    Assembly,
+    /// Inserting a component: a block and a plus sign.
+    InsertComponent,
+    /// A mate: two faces brought together.
+    Mate,
     ViewFront,
     ViewTop,
     ViewRight,
@@ -679,6 +685,22 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
         Icon::Configuration => {
             poly(&[(5.0, 2.0), (14.0, 2.0), (14.0, 9.0), (5.0, 9.0)], Color32::TRANSPARENT, ln);
             poly(&[(2.0, 6.0), (11.0, 6.0), (11.0, 14.0), (2.0, 14.0)], tint, hi);
+        }
+        Icon::Assembly => {
+            poly(&[(1.5, 9.0), (9.5, 9.0), (9.5, 14.5), (1.5, 14.5)], tint, ln);
+            poly(&[(6.5, 1.5), (14.5, 1.5), (14.5, 7.0), (6.5, 7.0)], Color32::TRANSPARENT, hi);
+            line((6.5, 9.0), (9.5, 7.0), ln);
+        }
+        Icon::InsertComponent => {
+            poly(&[(1.5, 6.0), (10.0, 6.0), (10.0, 14.5), (1.5, 14.5)], tint, ln);
+            line((12.5, 1.0), (12.5, 7.0), hi);
+            line((9.5, 4.0), (15.5, 4.0), hi);
+        }
+        Icon::Mate => {
+            poly(&[(1.5, 2.0), (6.5, 2.0), (6.5, 14.0), (1.5, 14.0)], tint, ln);
+            poly(&[(9.5, 2.0), (14.5, 2.0), (14.5, 14.0), (9.5, 14.0)], Color32::TRANSPARENT, ln);
+            line((7.0, 8.0), (9.0, 8.0), hi);
+            path(&[(7.8, 6.5), (9.0, 8.0), (7.8, 9.5)], hi);
         }
         Icon::ViewFront => cube(1),
         Icon::ViewTop => cube(2),

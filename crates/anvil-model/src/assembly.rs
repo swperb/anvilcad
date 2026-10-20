@@ -400,6 +400,24 @@ impl Assembly {
         }
     }
 
+    /// What a distance or angle mate between `a` and `b` would measure where the
+    /// components are now (see [`mates::measure_now`]).
+    pub fn measure_now(
+        &self,
+        parts: &mut Parts,
+        kind: &MateKind,
+        alignment: Alignment,
+        a: &MateRef,
+        b: &MateRef,
+    ) -> Option<f64> {
+        let place = |r: &MateRef| match r.component {
+            Some(c) => self.component(c).map(|c| c.placement),
+            None => Some(Frame::WORLD),
+        };
+        let (sa, sb) = (self.ref_shape(parts, a).ok()?, self.ref_shape(parts, b).ok()?);
+        mates::measure_now(kind, alignment, (&place(a)?, &sa), (&place(b)?, &sb))
+    }
+
     /// Solves the mates and moves the components that are not fixed.
     pub fn solve(&mut self, parts: &mut Parts) -> AssemblyStatus {
         let index: HashMap<u32, usize> = self.components.iter().enumerate().map(|(i, c)| (c.id, i)).collect();

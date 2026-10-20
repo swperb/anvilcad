@@ -454,6 +454,40 @@ pub fn relative(of: &Frame, f: &Frame) -> Frame {
     Frame { origin: of.to_local3(f.origin), x: local(f.x), y: local(f.y), z: local(f.z) }
 }
 
+/// What a distance or angle mate between two placed entities would measure now: the
+/// signed distance in millimetres (negative on the side `flip` selects) or the angle in
+/// degrees. `None` for other kinds and for pairs the mate cannot join.
+pub fn measure_now(
+    kind: &MateKind,
+    alignment: Alignment,
+    a: (&Frame, &Shape),
+    b: (&Frame, &Shape),
+) -> Option<f64> {
+    let (wa, wb) = (world(a.0, a.1), world(b.0, b.1));
+    let rel = Relation {
+        kind: *kind,
+        alignment,
+        a: Side { component: None, shape: *a.1 },
+        b: Side { component: None, shape: *b.1 },
+    };
+    let sign = resolve_sign(&rel, &wa, &wb);
+    match kind {
+        MateKind::Distance { .. } => {
+            let mut out = Vec::new();
+            let probe = MateKind::Distance { value: 0.0, flip: false };
+            residuals(&probe, &wa, &wb, sign, 1.0, &mut Eqs { out: &mut out, scale: 1.0 }).ok()?;
+            out.last().copied()
+        }
+        MateKind::Angle { .. } => {
+            let ((da, pa), (db, pb)) = (wa.direction()?, wb.direction()?);
+            let s = if sign == 0.0 { closest_sign(da, db) } else { sign };
+            let c = (da.dot(db) * s).clamp(-1.0, 1.0);
+            Some(if pa == pb { c.acos() } else { c.asin() }.to_degrees())
+        }
+        _ => None,
+    }
+}
+
 /// Places the components to satisfy the relations. `placements` are updated in place;
 /// `fixed` components never move.
 pub fn solve(placements: &mut [Frame], fixed: &[bool], relations: &[Relation]) -> SolveReport {
@@ -858,13 +892,13 @@ fn jacobi_eigen(mut a: Vec<Vec<f64>>) -> (Vec<f64>, Vec<Vec<f64>>) {
                 let t = if theta == 0.0 { 1.0 } else { t };
                 let c = 1.0 / (t * t + 1.0).sqrt();
                 let s = t * c;
-                for k in 0..n {
-                    let (akp, akq) = (a[k][p], a[k][q]);
-                    a[k][p] = c * akp - s * akq;
-                    a[k][q] = s * akp + c * akq;
+                for row in a.iter_mut() {
+                    let (akp, akq) = (row[p], row[q]);
+                    row[p] = c * akp - s * akq;
+                    row[q] = s * akp + c * akq;
                 }
-                for k in 0..n {
-                    let (apk, aqk) = (a[p][k], a[q][k]);
+                let (rp, rq) = (a[p].clone(), a[q].clone());
+                for (k, (apk, aqk)) in rp.into_iter().zip(rq).enumerate() {
                     a[p][k] = c * apk - s * aqk;
                     a[q][k] = s * apk + c * aqk;
                 }
@@ -1107,6 +1141,36 @@ mod tests {
         // Aligned: the bottom's outward normal (-z) points along +z, so the block flips.
         assert!((p[0].z + Vec3::Z).length() < 1e-7, "{:?}", p[0].z);
         assert!(p[0].origin.z.abs() < 1e-7);
+    }
+
+    #[test]
+    fn measuring_before_mating() {
+        let f = at(0.0, 0.0, 18.0);
+        let d = measure_now(
+            &MateKind::Distance { value: 0.0, flip: false },
+            Alignment::AntiAligned,
+            (&Frame::WORLD, &top()),
+            (&f, &bottom()),
+        );
+        assert_eq!(d, Some(8.0));
+        let below = at(0.0, 0.0, -18.0);
+        let d = measure_now(
+            &MateKind::Distance { value: 0.0, flip: false },
+            Alignment::AntiAligned,
+            (&Frame::WORLD, &top()),
+            (&below, &bottom()),
+        );
+        assert_eq!(d, Some(-28.0));
+        let turned =
+            Frame { origin: Vec3::ZERO, x: vec3(0.6, 0.8, 0.0), y: vec3(-0.8, 0.6, 0.0), z: Vec3::Z };
+        let a = measure_now(
+            &MateKind::Angle { degrees: 0.0 },
+            Alignment::Aligned,
+            (&Frame::WORLD, &left()),
+            (&turned, &left()),
+        )
+        .unwrap_or_default();
+        assert!((a - 0.8f64.atan2(0.6).to_degrees()).abs() < 1e-9, "{a}");
     }
 
     #[test]
