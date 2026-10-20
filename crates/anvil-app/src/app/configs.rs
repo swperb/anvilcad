@@ -74,7 +74,7 @@ impl AnvilApp {
         });
         let pal = Palette::of(ui);
         let y = ui.cursor().top();
-        ui.painter().hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0, pal.border));
+        ui.painter().hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0_f32, pal.border));
         ui.add_space(8.0);
     }
 

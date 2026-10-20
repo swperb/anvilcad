@@ -135,7 +135,7 @@ impl<'a> Cfb<'a> {
         cfb.fat = fat;
 
         let dir = cfb.read_chain(first_dir, None)?;
-        cfb.entries = dir.chunks_exact(128).map(parse_entry).collect();
+        cfb.entries = dir.as_chunks::<128>().0.iter().map(|e| parse_entry(e)).collect();
         let root = match cfb.entries.first() {
             Some(e) if e.kind == KIND_ROOT => e.clone(),
             _ => return err("missing root entry"),
@@ -143,7 +143,7 @@ impl<'a> Cfb<'a> {
 
         if first_minifat != ENDOFCHAIN && first_minifat != FREESECT {
             let mf = cfb.read_chain(first_minifat, None)?;
-            cfb.minifat = mf.chunks_exact(4).map(|c| u32_at(c, 0)).collect();
+            cfb.minifat = mf.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect();
         }
         if root.size > 0 {
             cfb.mini_stream = cfb.read_chain(root.start, Some(root.size))?;

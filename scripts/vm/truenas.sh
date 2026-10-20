@@ -173,6 +173,11 @@ parse_mode_flags() {
 }
 
 vm_snapshot() {
+  if [ "${1:-}" = delete ]; then
+    shift
+    vm_snapshot_delete "$@"
+    return
+  fi
   local name="${1:-$(date -u +%Y%m%d-%H%M%S)}"
   midclt zfs.snapshot.create "{\"dataset\":\"$VM_ZVOL\",\"name\":\"$name\"}" >/dev/null
   echo "$TOOL: snapshot $VM_ZVOL@$name"
@@ -181,6 +186,34 @@ vm_snapshot() {
 vm_snapshots() {
   midclt zfs.snapshot.query "[[\"dataset\",\"=\",\"$VM_ZVOL\"]]" '{"select":["name"]}' |
     python3 -c 'import json,sys; [print(s["name"]) for s in json.load(sys.stdin)]'
+}
+
+# The snapshots the VM docs tell people to roll back to. Deleting one needs --force.
+BASELINE_SNAPSHOTS="fresh-install provisioned activated"
+
+# Deletes snapshots of the VM's disk by name. Every name is checked before any is deleted,
+# so a typo deletes nothing.
+vm_snapshot_delete() {
+  local force="" names=() n existing
+  for n in "$@"; do
+    case "$n" in
+      --force) force=1 ;;
+      -*) die "unknown option $n" ;;
+      *) names+=("$n") ;;
+    esac
+  done
+  [ ${#names[@]} -gt 0 ] || die "usage: $TOOL snapshot delete [--force] <name>..."
+  existing=" $(vm_snapshots | sed 's/.*@//' | tr '\n' ' ') "
+  for n in "${names[@]}"; do
+    case "$existing" in *" $n "*) ;; *) die "no snapshot $VM_ZVOL@$n" ;; esac
+    case " $BASELINE_SNAPSHOTS " in
+      *" $n "*) [ -n "$force" ] || die "$n is a baseline snapshot; add --force to delete it" ;;
+    esac
+  done
+  for n in "${names[@]}"; do
+    midclt zfs.snapshot.delete "$VM_ZVOL@$n" >/dev/null
+    echo "$TOOL: deleted snapshot $VM_ZVOL@$n"
+  done
 }
 
 # Rolls the VM's disk back to a snapshot and starts it again. Later snapshots are destroyed,

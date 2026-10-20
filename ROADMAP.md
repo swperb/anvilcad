@@ -6,6 +6,12 @@ with commercial systems without needing them installed (see
 [INTEROPERABILITY.md](INTEROPERABILITY.md)). Items move to the README's "What works today"
 when they are in the code and tested.
 
+How CAD, CAM, PDM, PLM and ERP connect into one flow, what runs on the desktop and what on a
+self-hosted or managed server, and the order to build them in are described in
+[docs/PLATFORM.md](docs/PLATFORM.md). In short: AnvilCAD stays a complete desktop app that
+never needs a server; the business systems are an open-source server and web app that
+AnvilCAD connects to through panels, so the whole stack feels like one app.
+
 ## CAD
 
 1. Kernel: overflow choices and round corners,
@@ -78,3 +84,24 @@ Builds on the PDM.
 5. Interoperability: OASIS OSLC links, ISO 10303-239 (PLCS) and STEP AP242 exchange, and the
    3DEXPERIENCE platform's published web services for customers who use it, with their own
    licences and credentials.
+
+## ERP and the shop floor
+
+Builds on the PLM, as phases 4 and 5 of [docs/PLATFORM.md](docs/PLATFORM.md).
+
+1. Manufacturing hand-off to existing ERPs: released items, BOMs and routings sent to
+   ERPNext and Odoo first, then others, and generic CSV and REST for the rest.
+2. For shops with no ERP: inventory and stock locations, purchasing and suppliers, work
+   orders from routings, costing from material, machine time and tooling, and quotes.
+3. A shop-floor view: work instructions and setup sheets on a tablet, G-code downloads for
+   released programs only, and results (quantities, times, measurements) recorded against
+   the work order.
+4. Accounting, payroll and tax stay out of scope; connect to the systems that do them.
+
+## Deployment: local, self-hosted, managed
+
+1. Local: the vault in a folder, inside AnvilCAD, with no server and no account.
+2. Self-hosted: the server as one container or binary, SQLite or PostgreSQL, sign-in through
+   the organisation's own identity provider, backups and upgrades that take one command.
+3. Managed: the same server run as a service, with every record exportable in open formats
+   and a one-step move to self-hosting.

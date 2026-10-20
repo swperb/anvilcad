@@ -105,7 +105,7 @@ fn sections(stream: &[u8]) -> Option<Vec<([u8; 16], Section<'_>)>> {
 fn decode(bytes: &[u8], codepage: u16) -> String {
     let s = match codepage {
         CP_UTF16 => {
-            let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             String::from_utf16_lossy(&units)
         }
         CP_UTF8 => String::from_utf8_lossy(bytes).into_owned(),

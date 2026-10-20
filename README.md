@@ -26,6 +26,22 @@ is needed.
 | Windows 10 or 11, x64 | `AnvilCAD-<version>-windows-x64.msi` (or the `.zip`) |
 | Linux x86_64, glibc 2.35 or later | `AnvilCAD-<version>-linux-x86_64.AppImage` (or the `.tar.gz`) |
 
+With a package manager:
+
+```bash
+# macOS (Homebrew); also links anvilcad-agent and anvil-bulk into your PATH
+brew install --cask swperb/tap/anvilcad
+```
+
+```powershell
+# Windows (winget)
+winget install AnvilCAD.AnvilCAD
+```
+
+The winget package is in review at [microsoft/winget-pkgs#456878](https://github.com/microsoft/winget-pkgs/pull/456878). Until it is accepted, use the
+`.msi`. How releases reach both package managers is in
+[packaging/README.md](packaging/README.md).
+
 - **macOS**: open the `.dmg` and drag AnvilCAD to Applications. The app is signed with a
   Developer ID and notarized by Apple, so it opens like any other downloaded app. (The 0.1.0
   `.dmg` was not signed. If macOS says it cannot verify the developer, click Done, open
@@ -449,7 +465,8 @@ bash scripts/build.sh run --release -p anvil-app
 
 To build the release packages, run `bash packaging/package.sh macos|linux|windows`; they
 land in `dist/`. Pushing a `v*` tag runs the same script on each platform through
-`.github/workflows/release.yml` and attaches the packages to a GitHub Release.
+`.github/workflows/release.yml` and attaches the packages to a GitHub Release; see
+[packaging/README.md](packaging/README.md).
 
 Run the tests with `cargo test --workspace` (or `bash scripts/build.sh test --workspace`).
 The app crate's tests drive the real UI with simulated mouse input, so sketching,
