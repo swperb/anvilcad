@@ -196,7 +196,8 @@ scripts can reach it. Keep `docs/examples/init.lua` working: a test loads it.
 - Before finishing, run `cargo fmt --all`, `cargo clippy --workspace --all-targets` and
   `cargo test --workspace`. Changes that affect Linux or Windows should also pass
   `cargo check --workspace --target x86_64-unknown-linux-gnu` and
-  `--target x86_64-pc-windows-msvc`.
+  `--target x86_64-pc-windows-msvc`: `scripts/cross-check.sh` runs both from any host
+  (it needs [zig](https://ziglang.org) to compile the bundled Lua for those targets).
 - Add tests that would fail without the change, against exact values (volumes, areas,
   positions) rather than "it runs".
 - Commits carry a Developer Certificate of Origin sign-off (`git commit -s`).
