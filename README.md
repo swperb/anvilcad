@@ -430,6 +430,19 @@ To drive the app from a script or a coding agent without opening a window (it ne
 focus or touches your mouse and keyboard), use `anvilcad-agent`; see
 [docs/AGENT_HARNESS.md](docs/AGENT_HARNESS.md).
 
+## AI agents (MCP)
+
+`anvilcad-agent mcp` is a Model Context Protocol server, so Claude Code, Cursor and other
+agents can model parts headlessly: create or open a part, add sketches and extrusions, set
+dimensions and variables, read mass properties, export STEP or STL and take screenshots.
+Install it and add it to Claude Code:
+
+```bash
+cargo install --path crates/anvil-app --bin anvilcad-agent && claude mcp add anvilcad -- anvilcad-agent mcp
+```
+
+Tools, other clients and examples are in [docs/MCP.md](docs/MCP.md).
+
 ## Using it
 
 | Action | Input |
