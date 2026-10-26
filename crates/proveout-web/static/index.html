@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proveout - check a CNC program before you prove it out</title>
+  <meta name="description" content="Check G-code against your machine, your post processor and the part drawing, and get a setup sheet. No guarantees; always prove it out.">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/anonymize.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true">&#9670;</span> <b id="app-name">Proveout</b></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="check" aria-selected="true">Check a program</button>
+    <button role="tab" data-tab="profile" aria-selected="false">Profile a machine</button>
+    <button role="tab" data-tab="library" aria-selected="false">My reports</button>
+    <button role="tab" data-tab="plans" aria-selected="false">Plans</button>
+  </nav>
+  <div class="account" id="account"></div>
+</header>
+
+<div class="notice" role="note">
+  <b>No guarantee.</b> Proveout is a second pair of eyes, not a sign-off. Check every result yourself and prove the
+  program out on the machine as you always would. <a href="/terms">Read the disclosures</a>.
+</div>
+
+<main>
+  <!-- CHECK -->
+  <section id="tab-check" class="tab">
+    <ol class="steps">
+      <li class="card" id="step1">
+        <h2><span class="n">1</span> Program and drawing</h2>
+        <label>Title <input id="title" maxlength="120" placeholder="Bracket, op 1"></label>
+        <label>G-code
+          <textarea id="gcode" rows="12" spellcheck="false" placeholder="Paste the program, or load a file below"></textarea>
+        </label>
+        <input type="file" id="gcode-file" accept=".nc,.tap,.ngc,.gcode,.txt,.eia,.mpf,.h,.min,.cnc">
+        <div class="grid2">
+          <label>Drawing (PNG, JPEG, WebP, GIF or PDF)
+            <input type="file" id="drawing-file" accept="image/png,image/jpeg,image/webp,image/gif,application/pdf">
+          </label>
+          <label>Drawing notes: dimensions, tolerances, material
+            <textarea id="drawing-notes" rows="4" placeholder="Slot 50 x 12 x 3 deep, 2x 6H7 thru, 6061-T6"></textarea>
+          </label>
+        </div>
+        <label>Job notes: stock, fixture, quantity
+          <textarea id="job-notes" rows="2" placeholder="65 x 45 x 22 saw-cut, 6 in vise, 20 off"></textarea>
+        </label>
+        <details class="anon" open>
+          <summary>Anonymize before sending</summary>
+          <p class="hint">This runs in your browser; the originals never reach our server. Line numbers stay the
+            same. Results may be less accurate: the reviewer cannot use what you remove.</p>
+          <label class="inline"><input type="checkbox" id="anon-comments"> Remove comments</label>
+          <label class="inline"><input type="checkbox" id="anon-keep-tools" checked> but keep tool descriptions</label>
+          <label class="inline"><input type="checkbox" id="anon-onum"> Replace the program number</label>
+          <label>Words to redact everywhere (customer, part number, names), comma-separated
+            <input id="anon-words" placeholder="ACME, 12-3456-B, Jo"></label>
+          <p class="hint" id="anon-result"></p>
+        </details>
+      </li>
+
+      <li class="card" id="step2">
+        <h2><span class="n">2</span> Machine and post processor</h2>
+        <label>Machine <select id="machine-select"></select></label>
+        <details id="machine-edit">
+          <summary>Edit this machine's profile</summary>
+          <div id="machine-form" class="grid3"></div>
+          <button type="button" id="machine-save" class="secondary">Save to my machines</button>
+        </details>
+        <label>Post processor file (optional)
+          <input type="file" id="post-file" accept=".toml,.cps,.pst,.psm,.cfg,.py,.lcda,.txt,.pp,.mpp,.tcl,.def">
+        </label>
+        <p class="hint" id="post-label">An AnvilCAD post (.toml) is applied as rules. Any other post (Fusion .cps,
+          Mastercam .pst and so on) is read as text for the AI review and never run.</p>
+      </li>
+
+      <li class="card" id="step3">
+        <h2><span class="n">3</span> Accuracy</h2>
+        <div id="levels" class="levels"></div>
+      </li>
+
+      <li class="card" id="step4">
+        <h2><span class="n">4</span> Send</h2>
+        <div id="disclosure" class="disclosure">
+          <p id="privacy-text"></p>
+          <label class="inline"><input type="checkbox" id="accept-privacy"> I understand there is <b>no privacy
+            guarantee</b> for what I send to the AI review, and I am allowed to share it.</label>
+          <p id="guarantee-text"></p>
+          <label class="inline"><input type="checkbox" id="accept-guarantee"> I understand the results carry <b>no
+            guarantee</b> and I will check them and prove the program out myself.</label>
+        </div>
+        <button type="button" id="run" class="primary">Run check</button>
+        <span id="run-status" class="status" aria-live="polite"></span>
+      </li>
+    </ol>
+
+    <section id="results" class="card" hidden>
+      <h2><span class="n">5</span> Results</h2>
+      <div id="score" class="score"></div>
+      <div id="summary"></div>
+      <h3>Findings</h3>
+      <div id="findings"></div>
+      <div id="drawing-checks"></div>
+      <h3>Setup sheet</h3>
+      <div id="setup"></div>
+      <div id="additions"></div>
+      <div class="actions">
+        <span class="n">6</span>
+        <a id="open-sheet" class="button primary" target="_blank" rel="noopener">Open printable setup sheet</a>
+        <a id="dl-html" class="button">Download HTML</a>
+        <a id="dl-md" class="button">Download Markdown</a>
+        <a id="dl-json" class="button">Download JSON</a>
+      </div>
+      <div class="actions">
+        <span class="n">7</span>
+        <button type="button" id="save-report">Save report</button>
+        <input id="project-name" placeholder="Project name" maxlength="120">
+        <button type="button" id="save-project">Save project (inputs and report)</button>
+        <span id="save-status" class="status" aria-live="polite"></span>
+      </div>
+      <p class="hint">Check every line of this against the drawing and the machine. The score is how much the checks
+        agree, not a probability that the program is right.</p>
+    </section>
+  </section>
+
+  <!-- PROFILE -->
+  <section id="tab-profile" class="tab" hidden>
+    <div class="card">
+      <h2>Profile a machine or a post</h2>
+      <p>Before you trust a check, check the profile it uses. Proveout tests the profile's numbers, compares your post
+        with the machine, scans the post for codes that change offsets or call programs, and runs a program you know
+        is good. <b>A known-good program that fails means the profile is wrong.</b> Fix it before checking new
+        programs. None of this is a guarantee.</p>
+      <p class="hint">Machine and post are taken from step 2 of "Check a program".</p>
+      <label>A program that has run well on this machine (optional, recommended)
+        <textarea id="known-good" rows="8" spellcheck="false"></textarea></label>
+      <button type="button" id="run-profile" class="primary">Profile</button>
+      <span id="profile-status" class="status" aria-live="polite"></span>
+      <div id="profile-out"></div>
+    </div>
+  </section>
+
+  <!-- LIBRARY -->
+  <section id="tab-library" class="tab" hidden>
+    <div class="card">
+      <h2>My reports and projects</h2>
+      <p id="library-signin" class="hint">Sign in to see saved reports, projects and machines.</p>
+      <div id="storage"></div>
+      <h3>Reports</h3><div id="lib-reports"></div>
+      <h3>Projects</h3><div id="lib-projects"></div>
+      <h3>Machines</h3><div id="lib-machines"></div>
+      <details class="danger"><summary>Delete my account</summary>
+        <p>This deletes your account and everything saved in it. It cannot be undone.</p>
+        <button type="button" id="delete-account" class="secondary">Delete my account and data</button>
+      </details>
+    </div>
+  </section>
+
+  <!-- PLANS -->
+  <section id="tab-plans" class="tab" hidden>
+    <div class="card">
+      <h2>Plans</h2>
+      <p>The deterministic check is free and unlimited, and nothing in it leaves our server. AI reviews use credits:
+        Standard 1, High accuracy 3, Maximum accuracy 8.</p>
+      <div id="plans" class="plans"></div>
+      <p class="hint" id="billing-note"></p>
+    </div>
+  </section>
+</main>
+
+<dialog id="auth">
+  <form method="dialog" id="auth-form">
+    <h2 id="auth-title">Sign in</h2>
+    <label>E-mail <input type="email" id="auth-email" autocomplete="email" required></label>
+    <label>Password <input type="password" id="auth-password" autocomplete="current-password" minlength="10" required></label>
+    <p class="status" id="auth-status" aria-live="polite"></p>
+    <div class="actions">
+      <button type="submit" class="primary" id="auth-submit" value="go">Sign in</button>
+      <button type="button" id="auth-switch" class="link">Create an account instead</button>
+      <button type="button" id="auth-cancel" class="secondary">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<footer><span id="foot-app">Proveout</span> uses the deterministic G-code verifier from AnvilCAD (MIT OR Apache-2.0)
+  and, for AI reviews, Anthropic's Claude API. <a href="/terms">Disclosures</a>.</footer>
+</body>
+</html>
