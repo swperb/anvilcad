@@ -1,0 +1,22 @@
+[package]
+name = "proveout-core"
+description = "Proveout: checks a CNC program against a machine, a post processor and a drawing, and writes a setup sheet"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anvil-kernel.workspace = true
+anvil-cam = { path = "../anvil-cam" }
+sha2 = "0.11"
+thiserror = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
