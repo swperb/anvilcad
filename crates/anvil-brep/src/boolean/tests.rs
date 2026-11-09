@@ -884,3 +884,37 @@ fn touching_curves_order_by_bend() {
     }
     assert!(close(fine_volume(&u), 100.0 * PI + 4.0 * PI, 1e-4), "{}", fine_volume(&u));
 }
+
+#[test]
+fn bosses_within_microns_of_a_plate_merge_or_stay_apart_cleanly() {
+    // A boss sketched a hair into, onto or beside a plate: offsets between the vertex
+    // merge distance and the on-surface distance used to leave pieces that did not
+    // close. Every offset now gives a closed solid of the right volume.
+    let plate = cuboid(DVec3::ZERO, DVec3::new(10.0, 10.0, 2.0));
+    for d in [5e-7, 1e-6, 2e-6, 5e-6, 9e-6, 1e-5, 1.1e-5, 1.4e-5, 2e-5, 1e-4] {
+        // Sunk into the plate by d: one body, 200 + 16 * 3.
+        let sunk = cuboid(DVec3::new(3.0, 3.0, 2.0 - d), DVec3::new(7.0, 7.0, 5.0));
+        let u = boolean(&plate, &sunk, BoolOp::Union).unwrap_or_else(|e| panic!("sunk {d}: {e}"));
+        assert_eq!(u.len(), 1, "sunk {d}");
+        // Faces and vertices within tolerance (1e-5 mm) merge, so the volume is right to
+        // a few tolerances times the boss's 16 mm^2 footprint.
+        assert!((volume(&u) - 248.0).abs() < 1e-3, "sunk {d}: {}", volume(&u));
+        // Standing d above it: apart (or merged when d is within tolerance).
+        let above = cuboid(DVec3::new(3.0, 3.0, 2.0 + d), DVec3::new(7.0, 7.0, 5.0));
+        let u = boolean(&plate, &above, BoolOp::Union).unwrap_or_else(|e| panic!("above {d}: {e}"));
+        // Merged across a gap within tolerance, the boss may close it: either way the volume
+        // is right to the gap times the boss's footprint.
+        assert!((volume(&u) - (200.0 + 16.0 * (3.0 - d))).abs() < 1e-3, "above {d}: {}", volume(&u));
+        if d > 1e-5 {
+            assert_eq!(u.len(), 2, "above {d}");
+        }
+        // Overhanging the plate's side by d, and inset from it by d.
+        for s in [1.0, -1.0] {
+            let side = cuboid(DVec3::new(3.0, 3.0 + d, 2.0), DVec3::new(10.0 + s * d, 7.0, 5.0));
+            let u = boolean(&plate, &side, BoolOp::Union).unwrap_or_else(|e| panic!("side {s} {d}: {e}"));
+            assert_eq!(u.len(), 1, "side {s} {d}");
+            let want = 200.0 + 3.0 * (4.0 - d) * (7.0 + s * d);
+            assert!((volume(&u) - want).abs() < 1e-3, "side {s} {d}: {} vs {want}", volume(&u));
+        }
+    }
+}

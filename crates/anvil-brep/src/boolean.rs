@@ -34,6 +34,8 @@ use std::f64::consts::TAU;
 const TOL: f64 = 1e-6;
 /// Distance within which a point counts as lying on a curve or surface.
 const ON: f64 = 1e-5;
+/// Points of the two solids closer than this become one vertex.
+const MERGE: f64 = ON;
 /// Sampling used to build parameter-space polylines.
 const CHORD: f64 = 0.02;
 const MAX_ANGLE: f64 = TAU / 96.0;
@@ -291,7 +293,7 @@ impl<'a> Engine<'a> {
     }
 
     fn add_point(&mut self, p: DVec3, slack: f64) -> usize {
-        if let Some(i) = self.pts.iter().position(|q| (*q - p).length() < TOL) {
+        if let Some(i) = self.pts.iter().position(|q| (*q - p).length() < MERGE) {
             self.slack[i] = self.slack[i].max(slack);
             return i;
         }
@@ -553,7 +555,13 @@ impl<'a> Engine<'a> {
                 {
                     continue;
                 }
-                let ssi = intersect::surfaces(self.surface(0, fa), self.surface(1, fb), TOL)?;
+                // Faces closer than ON count as one surface, the same distance at which a
+                // point counts as lying on a face. A tighter test here would leave faces a
+                // few microns apart neither merged nor intersected (a boss sketched a hair
+                // into a plate), and their pieces would not close up.
+                let (sa, sb) = (self.surface(0, fa), self.surface(1, fb));
+                let ssi =
+                    if sa.coincident(sb, ON) { Ssi::Coincident } else { intersect::surfaces(sa, sb, TOL)? };
                 match ssi {
                     Ssi::None => {}
                     Ssi::Coincident => self.imprint_coincident(fa, fb)?,
@@ -1101,7 +1109,20 @@ impl<'a> Engine<'a> {
 
     fn classify(&self, o: usize, p: DVec3, normal: DVec3) -> Result<Class> {
         for (g, face) in self.solids[o].faces.iter().enumerate() {
-            if face.surface.distance(p) < ON && self.locate(o, g, p) != Loc::Outside {
+            // A piece lies on a face of the other solid only where their surfaces are
+            // tangent. Near a face it meets at an angle, it is a sliver beside the
+            // other solid's edge, and which side of that face it is on decides.
+            if face.surface.distance(p) < ON
+                && face.normal_at(p).dot(normal).abs() > 0.999
+                && match self.locate(o, g, p) {
+                    Loc::Inside => true,
+                    // Within tolerance of the face's edge: the piece was split along that
+                    // edge, so which side of it the piece lies on is exact even when the
+                    // piece is only a few microns wide.
+                    Loc::Boundary => boundary_side(self.solids[o], g, p).unwrap_or(true),
+                    Loc::Outside => false,
+                }
+            {
                 return Ok(if face.normal_at(p).dot(normal) > 0.0 {
                     Class::OnSame
                 } else {
@@ -1283,6 +1304,50 @@ pub fn face_contains(solid: &Solid, f: usize, p: DVec3) -> bool {
         return false;
     };
     locate_in(solid, f, &face_info(solid, face), p) != Loc::Outside
+}
+
+/// Which side of the nearest edge of face `f` a point near that edge lies on: true on
+/// the face's side. `None` when the nearest point is a vertex (where two edges decide
+/// together) or the point is on the edge itself.
+fn boundary_side(solid: &Solid, f: usize, p: DVec3) -> Option<bool> {
+    let face = solid.faces.get(f)?;
+    let mut best: Option<(f64, DVec3, DVec3)> = None;
+    for l in face.loops() {
+        for c in &l.coedges {
+            let Some(e) = solid.edge(c.edge) else { continue };
+            let (lo, hi) = (e.t0.min(e.t1), e.t0.max(e.t1));
+            let t = e.curve.param_in_range(p, lo, hi);
+            let span = hi - lo;
+            if span <= 0.0 || t < lo + 1e-9 * span || t > hi - 1e-9 * span {
+                continue;
+            }
+            let q = e.curve.eval(t);
+            let d = (p - q).length();
+            if best.is_none_or(|(b, _, _)| d < b) {
+                let h = 1e-6 * span;
+                let along =
+                    (e.curve.eval((t + h).min(hi)) - e.curve.eval((t - h).max(lo))) * (e.t1 - e.t0).signum();
+                let dir = if c.reversed { -along } else { along };
+                best = Some((d, q, dir));
+            }
+        }
+    }
+    let (d, q, dir) = best?;
+    // A vertex nearer than the closest interior point of any edge decides together
+    // with both its edges; leave that to the tolerant test.
+    let vertex = face
+        .loops()
+        .flat_map(|l| l.coedges.iter())
+        .filter_map(|c| solid.edge(c.edge))
+        .flat_map(|e| [e.start, e.end])
+        .filter_map(|v| solid.vertex(v))
+        .map(|v| (v.point - p).length())
+        .fold(f64::INFINITY, f64::min);
+    if !(1e-9..=ON).contains(&d) || vertex <= d * (1.0 + 1e-9) {
+        return None;
+    }
+    let left = face.normal_at(q).cross(dir);
+    Some((p - q).dot(left) > 0.0)
 }
 
 /// Where a point lies relative to face `f` of `solid`.
