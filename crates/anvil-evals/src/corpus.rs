@@ -4,7 +4,7 @@
 //! are given in closed form wherever one exists.
 
 use crate::csg::{Tree, cone, cuboid, cylinder, sphere, torus};
-use crate::{Case, Expect};
+use crate::{Case, Expect, Step};
 use glam::DVec3;
 use std::f64::consts::PI;
 
@@ -542,6 +542,102 @@ pub fn cases() -> Vec<Case> {
         .note("a groove whose centre circle lies on the cylinder's surface"),
     );
 
+    // --- Fillets and chamfers ----------------------------------------------------------
+    // The kernel blends an edge picked by a point on it; the reference is the exact shape
+    // in CSG (a round is a square prism less a cylinder, a bevel a slab).
+    let block = || cuboid(DVec3::ZERO, v(10.0, 6.0, 4.0));
+    let corner = 1.0 - PI / 4.0;
+    c.push(
+        Case::new(
+            "blend/fillet-box-edge",
+            "blend",
+            block().minus(round_off(v(0.0, 6.0, 4.0), DVec3::X, -DVec3::Y, -DVec3::Z, 1.0, 10.0)),
+        )
+        .features(block(), vec![Step::Fillet { at: v(5.0, 6.0, 4.0), radius: 1.0 }])
+        .volume(240.0 - corner * 10.0)
+        .bodies(1),
+    );
+    c.push(
+        Case::new(
+            "blend/fillet-small-radius",
+            "blend",
+            block().minus(round_off(v(0.0, 6.0, 4.0), DVec3::X, -DVec3::Y, -DVec3::Z, 0.05, 10.0)),
+        )
+        .features(block(), vec![Step::Fillet { at: v(5.0, 6.0, 4.0), radius: 0.05 }])
+        .volume(240.0 - corner * 0.0025 * 10.0)
+        .bodies(1),
+    );
+    let mut four = block();
+    let mut steps = Vec::new();
+    for (x, y, ux, uy) in
+        [(0.0, 0.0, 1.0, 1.0), (10.0, 0.0, -1.0, 1.0), (10.0, 6.0, -1.0, -1.0), (0.0, 6.0, 1.0, -1.0)]
+    {
+        four = four.minus(round_off(v(x, y, 0.0), DVec3::Z, v(ux, 0.0, 0.0), v(0.0, uy, 0.0), 1.0, 4.0));
+        steps.push(Step::Fillet { at: v(x, y, 2.0), radius: 1.0 });
+    }
+    c.push(
+        Case::new("blend/fillet-four-vertical-edges", "blend", four)
+            .features(block(), steps)
+            .volume(240.0 - 4.0 * corner * 4.0)
+            .change(-4.0 * corner * 4.0)
+            .bodies(1)
+            .note("each round ends on the top and bottom faces; the next edge is blended on the result"),
+    );
+    c.push(
+        Case::new(
+            "blend/chamfer-box-edge",
+            "blend",
+            block().minus(bevel_off(v(0.0, 6.0, 4.0), DVec3::X, -DVec3::Y, -DVec3::Z, 1.0, 10.0)),
+        )
+        .features(block(), vec![Step::Chamfer { at: v(5.0, 6.0, 4.0), distance: 1.0 }])
+        .volume(235.0)
+        .bodies(1),
+    );
+    let boss =
+        || cuboid(v(0.0, 0.0, 0.0), v(10.0, 10.0, 2.0)).union(cuboid(v(3.0, 3.0, 2.0), v(7.0, 6.0, 5.0)));
+    c.push(
+        Case::new(
+            "blend/fillet-boss-root",
+            "blend",
+            boss().union(round_off(v(3.0, 3.0, 2.0), DVec3::Y, -DVec3::X, DVec3::Z, 1.0, 3.0)),
+        )
+        .features(boss(), vec![Step::Fillet { at: v(3.0, 4.5, 2.0), radius: 1.0 }])
+        .volume(236.0 + corner * 3.0)
+        .change(corner * 3.0)
+        .bodies(1)
+        .note("a concave round adds material along the root of a boss and ends flush with its sides"),
+    );
+    let drilled = || plate().minus(hole(5.0, 5.0, 2.0, -1.0, 7.0));
+    c.push(
+        Case::new(
+            "blend/fillet-hole-rim",
+            "blend",
+            drilled().minus(cylinder(v(5.0, 5.0, 4.5), DVec3::Z, 2.5, 1.5).minus(torus(
+                v(5.0, 5.0, 4.5),
+                DVec3::Z,
+                2.5,
+                0.5,
+            ))),
+        )
+        .features(drilled(), vec![Step::Fillet { at: v(7.0, 5.0, 5.0), radius: 0.5 }])
+        .change(-rim_round(2.0, 0.5))
+        .bodies(1)
+        .genus(1)
+        .note("a round on a circular edge is a torus"),
+    );
+    c.push(
+        Case::new(
+            "blend/chamfer-hole-rim",
+            "blend",
+            drilled().minus(cone(v(5.0, 5.0, 4.5), DVec3::Z, 2.0, 3.5, 1.5)),
+        )
+        .features(drilled(), vec![Step::Chamfer { at: v(7.0, 5.0, 5.0), distance: 0.5 }])
+        .volume(500.0 - 20.0 * PI - PI * 0.5 / 3.0 * (4.0 + 5.0 + 6.25) + 4.0 * PI * 0.5)
+        .change(-(PI * 0.5 / 3.0 * (4.0 + 5.0 + 6.25) - 4.0 * PI * 0.5))
+        .bodies(1)
+        .genus(1),
+    );
+
     // --- Chains and patterns (performance) ----------------------------------------------
     let mut grid = cuboid(DVec3::ZERO, v(50.0, 50.0, 5.0));
     for i in 0..5 {
@@ -589,6 +685,46 @@ fn torus_outer_half() -> f64 {
     let (big, r) = (4.0, 1.0);
     let half_disc = PI * r * r / 2.0;
     half_disc * 2.0 * PI * (big + 4.0 * r / (3.0 * PI))
+}
+
+/// The volume a round of radius `r` takes off the rim of a hole of radius `big`: the
+/// corner's cross-section (a square of side `r` less a quarter disc, area
+/// `(1 - pi / 4) r^2`, whose centroid sits `r / (6 (1 - pi / 4))` from the disc's centre)
+/// swept round the axis (Pappus).
+fn rim_round(big: f64, r: f64) -> f64 {
+    let k = 1.0 - PI / 4.0;
+    let centroid = big + r - r / (6.0 * k);
+    2.0 * PI * centroid * k * r * r
+}
+
+/// The material a round of radius `r` takes off a convex edge (or, with `u` and `v`
+/// pointing out of the part, adds in a concave corner): the square of side `r` between
+/// the faces less the quarter disc, swept `len` along `axis` from `e`. `u` and `v` point
+/// from the edge along its two faces.
+fn round_off(e: DVec3, axis: DVec3, u: DVec3, v: DVec3, r: f64, len: f64) -> Tree {
+    let mid = e + axis * (0.5 * len);
+    let prism = Tree::Prim(crate::csg::Prim::Cuboid {
+        frame: crate::csg::frame(mid + (u + v) * (0.5 * r), axis, u),
+        half: DVec3::new(0.5 * r, 0.5 * r, 0.5 * len),
+    });
+    let rod = Tree::Prim(crate::csg::Prim::Cylinder {
+        frame: crate::csg::frame(e + (u + v) * r, axis, u),
+        radius: r,
+        z0: -1.0,
+        z1: len + 1.0,
+    });
+    prism.minus(rod)
+}
+
+/// The material an equal-distance bevel of `d` takes off a convex edge: the slab beyond
+/// the plane through the points `d` along each face, swept `len` along `axis` from `e`.
+fn bevel_off(e: DVec3, axis: DVec3, u: DVec3, v: DVec3, d: f64, len: f64) -> Tree {
+    let w = (u + v).normalize();
+    let big = 10.0 * d;
+    Tree::Prim(crate::csg::Prim::Cuboid {
+        frame: crate::csg::frame(e + axis * (0.5 * len) + w * (d / 2f64.sqrt() - big), axis, u - v),
+        half: DVec3::new(big, big, 0.5 * len),
+    })
 }
 
 /// The cases whose expectation is [`Expect::Pass`].

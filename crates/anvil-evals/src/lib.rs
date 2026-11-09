@@ -54,6 +54,20 @@ pub struct Case {
     pub genus: Option<u32>,
     /// Why the case exists, in a sentence.
     pub note: &'static str,
+    /// When set, the kernel builds this tree and then applies `steps` (fillets,
+    /// chamfers) to it, and `tree` is the exact shape the result must have.
+    pub base: Option<Tree>,
+    pub steps: Vec<Step>,
+    /// The exact change of volume the steps make.
+    pub change: Option<f64>,
+}
+
+/// A feature applied to a built body, picking its edge by a point on it, as a user
+/// picks an edge in the viewport.
+#[derive(Debug, Clone, Copy)]
+pub enum Step {
+    Fillet { at: glam::DVec3, radius: f64 },
+    Chamfer { at: glam::DVec3, distance: f64 },
 }
 
 impl Case {
@@ -67,7 +81,17 @@ impl Case {
             bodies: None,
             genus: None,
             note: "",
+            base: None,
+            steps: Vec::new(),
+            change: None,
         }
+    }
+
+    /// Builds `base` and applies `steps`; `tree` stays the reference.
+    pub fn features(mut self, base: Tree, steps: Vec<Step>) -> Case {
+        self.base = Some(base);
+        self.steps = steps;
+        self
     }
     pub fn volume(mut self, v: f64) -> Case {
         self.volume = Some(v);
@@ -75,6 +99,12 @@ impl Case {
     }
     pub fn bodies(mut self, n: usize) -> Case {
         self.bodies = Some(n);
+        self
+    }
+    /// The exact change of volume the feature steps make (negative for material
+    /// taken off).
+    pub fn change(mut self, dv: f64) -> Case {
+        self.change = Some(dv);
         self
     }
     pub fn genus(mut self, g: u32) -> Case {
@@ -187,6 +217,36 @@ pub fn build(tree: &Tree) -> Result<Result<Vec<Solid>, String>, String> {
     }
 }
 
+/// Builds a case: its tree, or its base and feature steps.
+pub fn build_case(case: &Case) -> Result<Result<Vec<Solid>, String>, String> {
+    let Some(base) = &case.base else {
+        return build(&case.tree);
+    };
+    match catch_unwind(AssertUnwindSafe(|| apply_steps(base, &case.steps))) {
+        Ok(r) => Ok(r),
+        Err(p) => Err(panic_text(&*p)),
+    }
+}
+
+fn apply_steps(base: &Tree, steps: &[Step]) -> Result<Vec<Solid>, String> {
+    use anvil_brep::blend::{self, Blend};
+    let mut bodies = base.build().map_err(|e| e.to_string())?;
+    for (k, step) in steps.iter().enumerate() {
+        let [body] = bodies.as_slice() else {
+            return Err(format!("step {k} needs one body, there are {}", bodies.len()));
+        };
+        let (at, kind) = match *step {
+            Step::Fillet { at, radius } => (at, Blend::Fillet(radius)),
+            Step::Chamfer { at, distance } => (at, Blend::Chamfer(distance)),
+        };
+        let Some(edge) = blend::edge_near(body, at, 1e-6) else {
+            return Err(format!("step {k}: no edge passes through {at}"));
+        };
+        bodies = blend::blend_edge(body, edge, kind, 1, 1000 + 8 * k as u32).map_err(|e| e.to_string())?;
+    }
+    Ok(bodies)
+}
+
 pub fn run(case: &Case, opt: &Options) -> CaseResult {
     let mut r = CaseResult {
         name: case.name.clone(),
@@ -219,7 +279,7 @@ pub fn run(case: &Case, opt: &Options) -> CaseResult {
     let mut best = f64::INFINITY;
     for _ in 0..opt.repeats.max(1) {
         let t = Instant::now();
-        let b = build(&case.tree);
+        let b = build_case(case);
         best = best.min(t.elapsed().as_secs_f64() * 1e3);
         bodies = Some(b);
     }
@@ -315,8 +375,9 @@ fn check_bodies(case: &Case, bodies: &[Solid], opt: &Options, r: &mut CaseResult
     r.kernel_volume = fine.iter().map(|m| anvil_brep::mass::properties(m).volume).sum();
     // A mesh within the chord of every face can differ in volume by its area times the
     // chord, which matters on small, thin results.
+    // Only curved faces sag; planar ones are exact.
     let mesh_slack: f64 =
-        fine.iter().map(|m| anvil_brep::mass::properties(m).area).sum::<f64>() * fine_params.chord;
+        bodies.iter().zip(&fine).map(|(b, m)| curved_area(b, m)).sum::<f64>() * fine_params.chord;
     let (want, rel) = match case.volume {
         Some(v) => (v, 5e-4),
         None => (r.reference_volume, 1e-3),
@@ -331,6 +392,25 @@ fn check_bodies(case: &Case, bodies: &[Solid], opt: &Options, r: &mut CaseResult
                 err / want.abs().max(1e-300)
             ),
         );
+    }
+
+    // A feature's own change of volume, which a small feature would hide in the part's.
+    if let (Some(change), Some(base)) = (case.change, &case.base) {
+        match base.build() {
+            Ok(before) => match oracle::meshes(&before, &fine_params) {
+                Ok(m) => {
+                    let v0: f64 = m.iter().map(|m| anvil_brep::mass::properties(m).volume).sum();
+                    let slack0: f64 = before.iter().zip(&m).map(|(b, m)| curved_area(b, m)).sum::<f64>()
+                        * fine_params.chord;
+                    let got = r.kernel_volume - v0;
+                    if (got - change).abs() > 1e-3 * change.abs() + 0.1 * (mesh_slack + slack0) + 1e-9 {
+                        fail(r, format!("the feature changed the volume by {got:.9}, expected {change:.9}"));
+                    }
+                }
+                Err(e) => fail(r, format!("the base does not tessellate: {e}")),
+            },
+            Err(e) => fail(r, format!("the base does not build: {e}")),
+        }
     }
 
     if opt.step_round_trip && !bodies.is_empty() {
@@ -453,4 +533,22 @@ fn step_round_trip(
     if (volume - r.kernel_volume).abs() > slack + 1e-9 * r.kernel_volume.abs() {
         fail(r, format!("volume {volume:.9} after reading back, {:.9} before", r.kernel_volume));
     }
+}
+
+/// The mesh area on a body's curved faces, where a mesh within the chord can differ from
+/// the surface.
+fn curved_area(body: &Solid, mesh: &anvil_brep::tess::TriMesh) -> f64 {
+    mesh.triangles
+        .iter()
+        .zip(&mesh.triangle_face)
+        .filter(|(_, f)| {
+            body.faces
+                .get(**f as usize)
+                .is_some_and(|f| !matches!(f.surface, anvil_brep::Surface::Plane { .. }))
+        })
+        .map(|(t, _)| {
+            let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+            0.5 * (b - a).cross(c - a).length()
+        })
+        .sum()
 }
