@@ -608,6 +608,25 @@ impl<'a> Engine<'a> {
                     Ssi::None => {}
                     Ssi::Coincident => self.imprint_coincident(fa, fb)?,
                     Ssi::Curves(curves) => {
+                        // Curves of one pair that cross each other (the two ellipses where
+                        // equal cylinders meet, crossing where the surfaces are tangent)
+                        // must meet at a vertex, or the face splits cannot close.
+                        if curves.len() > 1 {
+                            let (lo_a, hi_a) = self.infos[0][fa].bbox;
+                            let (lo_b, hi_b) = self.infos[1][fb].bbox;
+                            let (lo, hi) = (lo_a.max(lo_b), hi_a.min(hi_b));
+                            for i in 0..curves.len() {
+                                for j in i + 1..curves.len() {
+                                    for p in curve_crossings(&curves[i], &curves[j], lo, hi) {
+                                        if self.locate(0, fa, p) != Loc::Outside
+                                            && self.locate(1, fb, p) != Loc::Outside
+                                        {
+                                            self.add_point(p, 0.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         for c in curves {
                             // Where the surfaces only touch, the other solid stays on one
                             // side of each face, so the curve divides nothing.
@@ -1346,6 +1365,45 @@ pub fn face_contains(solid: &Solid, f: usize, p: DVec3) -> bool {
         return false;
     };
     locate_in(solid, f, &face_info(solid, face), p) != Loc::Outside
+}
+
+/// The parameter range of `c` worth searching inside the box `lo`..`hi`: a closed
+/// curve's whole period, a line's stretch across the box.
+fn curve_range(c: &Curve, lo: DVec3, hi: DVec3) -> (f64, f64) {
+    match c {
+        Curve::Spline(sp) => sp.domain(),
+        Curve::Line { .. } => {
+            let mid = c.param_of((lo + hi) * 0.5);
+            let r = (hi - lo).length() * 0.5 + ON;
+            (mid - r, mid + r)
+        }
+        Curve::Circle { .. } | Curve::Ellipse { .. } => (0.0, TAU),
+    }
+}
+
+/// Points where curves `a` and `b` cross inside the box `lo`..`hi`.
+fn curve_crossings(a: &Curve, b: &Curve, lo: DVec3, hi: DVec3) -> Vec<DVec3> {
+    let (a0, a1) = curve_range(a, lo, hi);
+    let (b0, b1) = curve_range(b, lo, hi);
+    let ea = Edge {
+        curve: a.clone(),
+        start: crate::topo::VertexId(0),
+        end: crate::topo::VertexId(0),
+        t0: a0,
+        t1: a1,
+    };
+    let eb = Edge {
+        curve: b.clone(),
+        start: crate::topo::VertexId(0),
+        end: crate::topo::VertexId(0),
+        t0: b0,
+        t1: b1,
+    };
+    let pad = DVec3::splat(ON);
+    edge_crossings(&ea, &eb)
+        .into_iter()
+        .filter(|p| p.cmpge(lo - pad).all() && p.cmple(hi + pad).all())
+        .collect()
 }
 
 /// Points where edges `a` and `b` cross, found as isolated close approaches along `a`.

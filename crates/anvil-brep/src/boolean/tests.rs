@@ -974,3 +974,25 @@ fn cylinders_on_one_axis_with_one_radius_combine() {
     assert_eq!(d.len(), 2);
     assert!(close(fine_volume(&d), 24.0 * PI, 1e-4), "{}", fine_volume(&d));
 }
+
+#[test]
+fn equal_cylinders_crossing_meet_at_their_tangent_points() {
+    // Two cylinders of radius 2 crossing at right angles meet in two ellipses that cross
+    // each other where the surfaces are tangent, at (0, 0, +-2). Those crossings must be
+    // vertices for either cylinder's side to split.
+    let cx = cylinder(DVec3::ZERO, DVec3::X, 2.0, -6.0, 6.0);
+    let cy = cylinder(DVec3::ZERO, DVec3::Y, 2.0, -6.0, 6.0);
+    let cz = cylinder(DVec3::ZERO, DVec3::Z, 2.0, -6.0, 6.0);
+    let two = boolean(&cx, &cy, BoolOp::Intersect).expect("bicylinder");
+    assert_eq!(two.len(), 1);
+    assert!(close(fine_volume(&two), 16.0 * 8.0 / 3.0, 1e-4), "{}", fine_volume(&two));
+    let three = boolean(&two[0], &cz, BoolOp::Intersect).expect("tricylinder");
+    assert!(close(fine_volume(&three), (16.0 - 8.0 * 2f64.sqrt()) * 8.0, 1e-4), "{}", fine_volume(&three));
+    // Cross holes of one diameter through a block.
+    let block = cuboid(DVec3::splat(-5.0), DVec3::splat(5.0));
+    let mut d = boolean(&block, &cx, BoolOp::Subtract).expect("first hole");
+    d = boolean(&d[0], &cy, BoolOp::Subtract).expect("second hole");
+    assert_eq!(d.len(), 1);
+    let want = 1000.0 - (2.0 * 4.0 * PI * 10.0 - 16.0 * 8.0 / 3.0);
+    assert!(close(fine_volume(&d), want, 1e-4), "{} vs {want}", fine_volume(&d));
+}
