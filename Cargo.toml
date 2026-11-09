@@ -29,3 +29,7 @@ opt-level = 2
 # The exact kernel is tested with many randomized cases; optimize it in test builds too.
 [profile.dev.package.anvil-brep]
 opt-level = 2
+
+# The kernel evaluations ray-cast and integrate reference models; optimize them too.
+[profile.dev.package.anvil-evals]
+opt-level = 2
