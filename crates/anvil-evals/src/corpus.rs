@@ -488,6 +488,24 @@ pub fn cases() -> Vec<Case> {
     );
     c.push(
         Case::new(
+            "cone/countersink-breaks-out",
+            "cone",
+            plate().minus(cone(v(1.0, 5.0, 2.0), DVec3::Z, 0.0, 3.0, 3.0)),
+        )
+        .bodies(1)
+        .note("the side wall, parallel to the cone's axis, cuts it in a hyperbola"),
+    );
+    c.push(
+        Case::new(
+            "cone/sliced-along-axis",
+            "cone",
+            cone(DVec3::ZERO, DVec3::Z, 2.0, 0.5, 4.0).and(cuboid(v(0.4, -3.0, -1.0), v(3.0, 3.0, 5.0))),
+        )
+        .bodies(1)
+        .note("a slice parallel to the axis: hyperbolas on the side, lines on the caps"),
+    );
+    c.push(
+        Case::new(
             "torus/half",
             "torus",
             torus(DVec3::ZERO, DVec3::Z, 4.0, 1.0).and(cuboid(v(-6.0, -6.0, 0.0), v(6.0, 6.0, 2.0))),
