@@ -1620,10 +1620,10 @@ fn interior_point(loops: &[Vec<DVec2>]) -> Option<DVec2> {
     // them); there, a point found beside the boundary is enough. Smaller faces keep the
     // triangulation, whose largest triangle is as far from any edge as can be.
     let points: usize = loops.iter().map(Vec::len).sum();
-    if points > 400 {
-        if let Some(p) = clear_point(loops) {
-            return Some(p);
-        }
+    if points > 400
+        && let Some(p) = clear_point(loops)
+    {
+        return Some(p);
     }
     largest_triangle_point(loops)
 }
