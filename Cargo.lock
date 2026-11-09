@@ -232,6 +232,7 @@ name = "anvil-evals"
 version = "0.1.1"
 dependencies = [
  "anvil-brep",
+ "anvil-step",
  "glam",
  "png 0.17.16",
  "serde",

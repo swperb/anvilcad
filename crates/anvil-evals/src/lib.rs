@@ -148,6 +148,10 @@ pub struct Options {
     pub repeats: usize,
     /// Write images for failing cases only.
     pub images_on_failure_only: bool,
+    /// Export each result to STEP, read it back and check it is the same solid.
+    pub step_round_trip: bool,
+    /// Where to keep each result's STEP file, if anywhere.
+    pub step_dir: Option<PathBuf>,
 }
 
 impl Default for Options {
@@ -159,6 +163,8 @@ impl Default for Options {
             image_dir: None,
             repeats: 1,
             images_on_failure_only: false,
+            step_round_trip: true,
+            step_dir: None,
         }
     }
 }
@@ -327,6 +333,10 @@ fn check_bodies(case: &Case, bodies: &[Solid], opt: &Options, r: &mut CaseResult
         );
     }
 
+    if opt.step_round_trip && !bodies.is_empty() {
+        step_round_trip(case, bodies, &fine_params, mesh_slack, opt.step_dir.as_deref(), r);
+    }
+
     // Inside and outside.
     if opt.membership_samples > 0 {
         let margin = 2e-3 * size + 0.02;
@@ -385,4 +395,59 @@ fn check_bodies(case: &Case, bodies: &[Solid], opt: &Options, r: &mut CaseResult
 
 pub fn sanitize(name: &str) -> String {
     name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect()
+}
+
+/// Writes the bodies to STEP, reads the file back, and checks that every body returns
+/// exact, valid and with the same volume: what a user exporting the part would get.
+fn step_round_trip(
+    case: &Case,
+    bodies: &[Solid],
+    fine: &anvil_brep::tess::TessParams,
+    slack: f64,
+    keep_in: Option<&std::path::Path>,
+    r: &mut CaseResult,
+) {
+    let text = anvil_step::export::write(bodies, &case.name);
+    if let Some(dir) = keep_in {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(dir.join(format!("{}.step", sanitize(&case.name))), &text);
+    }
+    let fail = |r: &mut CaseResult, s: String| {
+        r.status = Status::Fail;
+        r.reasons.push(format!("STEP round trip: {s}"));
+    };
+    let read = match catch_unwind(AssertUnwindSafe(|| anvil_step::import(&text))) {
+        Ok(Ok(i)) => i,
+        Ok(Err(e)) => return fail(r, format!("the exported file does not read back: {e}")),
+        Err(p) => {
+            r.status = Status::Panic;
+            r.reasons.push(format!("panic while reading the exported STEP: {}", panic_text(&*p)));
+            return;
+        }
+    };
+    if read.bodies.len() != bodies.len() {
+        return fail(r, format!("{} bodies written, {} read back", bodies.len(), read.bodies.len()));
+    }
+    let mut volume = 0.0;
+    for (i, b) in read.bodies.iter().enumerate() {
+        let Some(s) = &b.exact else {
+            return fail(
+                r,
+                format!("body {i} came back as a mesh: {}", b.not_exact.clone().unwrap_or_default()),
+            );
+        };
+        if let Err(e) = anvil_brep::check::validate(s) {
+            return fail(r, format!("body {i} came back invalid: {e}"));
+        }
+        match anvil_brep::tess::tessellate(s, fine) {
+            Ok(m) => volume += anvil_brep::mass::properties(&m).volume,
+            Err(e) => return fail(r, format!("body {i} does not tessellate after reading back: {e}")),
+        }
+    }
+    // Both volumes come from meshes within the chord of the same surfaces, which the
+    // reader may lay out afresh (a sphere's chart, a seam's place), so they agree to the
+    // meshes' own slack rather than to rounding.
+    if (volume - r.kernel_volume).abs() > slack + 1e-9 * r.kernel_volume.abs() {
+        fail(r, format!("volume {volume:.9} after reading back, {:.9} before", r.kernel_volume));
+    }
 }
