@@ -9,12 +9,14 @@ use std::process::ExitCode;
 const USAGE: &str = "usage: anvil-evals [corpus] [--filter TEXT] [--fuzz N] [--seed S] [--kinds 0,1,2,3,4]
                   [--prims N] [--images DIR] [--failed-images] [--step DIR] [--no-step] [--repeats N]
                   [--report FILE.json] [--baseline FILE.json] [--save-baseline FILE.json]
-                  [--slower PCT] [--quiet] [--probe]
+                  [--slower PCT] [--quiet] [--probe] [--blend-fuzz N]
 
 corpus runs the hand-built cases (the default when --fuzz is not given). --fuzz N runs N
 random cases from --seed. --baseline compares build times with a saved report and fails
 on any case slower by more than --slower percent (default 30) and 5 ms. Every result is
-written to STEP and read back; --step DIR keeps the files, --no-step skips the check.";
+written to STEP and read back; --step DIR keeps the files, --no-step skips the check.
+--blend-fuzz N blends four random edges of each of N random parts from --seed and fails
+on any unsound result (a refusal is fine).";
 
 struct Args {
     corpus: bool,
@@ -29,6 +31,7 @@ struct Args {
     slower: f64,
     quiet: bool,
     probe: bool,
+    blend_fuzz: u64,
     opt: Options,
 }
 
@@ -46,6 +49,7 @@ fn parse() -> Result<Args, String> {
         slower: 30.0,
         quiet: false,
         probe: false,
+        blend_fuzz: 0,
         opt: Options::default(),
     };
     let mut it = std::env::args().skip(1);
@@ -81,6 +85,7 @@ fn parse() -> Result<Args, String> {
             "--slower" => a.slower = num(it.next(), "--slower")?,
             "--quiet" => a.quiet = true,
             "--probe" => a.probe = true,
+            "--blend-fuzz" => a.blend_fuzz = num(it.next(), "--blend-fuzz")? as u64,
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -104,6 +109,26 @@ fn main() -> ExitCode {
         let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
         eprintln!("  (panic{at})");
     }));
+
+    if args.blend_fuzz > 0 {
+        let trials = fuzz::blend_trials(args.seed, args.blend_fuzz, 4);
+        let bad: Vec<_> = trials.iter().filter(|t| t.problem.is_some()).collect();
+        let refused = trials.iter().filter(|t| t.refused.is_some()).count();
+        for t in &bad {
+            println!("FAIL  {} {}: {}", t.name, t.blend, t.problem.as_deref().unwrap_or(""));
+        }
+        println!(
+            "{} blends: {} sound, {} refused, {} unsound",
+            trials.len(),
+            trials.len() - refused - bad.len(),
+            refused,
+            bad.len()
+        );
+        if let Some(path) = &args.report {
+            let _ = std::fs::write(path, serde_json::to_string_pretty(&trials).unwrap_or_default());
+        }
+        return if bad.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
 
     let mut cases = Vec::new();
     if args.corpus {

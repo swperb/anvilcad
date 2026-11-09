@@ -106,9 +106,19 @@ cargo run --release -p anvil-evals -- --repeats 5 --save-baseline target/evals/b
 cargo run --release -p anvil-evals -- --repeats 5 --baseline target/evals/before.json
 ```
 
-Baselines are per machine. `crates/anvil-evals/baselines/` keeps the ones recorded for a
-change's pull request; compare on the same machine they came from. Timings are not part of
-`cargo test`, because CI machines vary too much.
+Baselines are per machine: compare on the machine one came from. `crates/anvil-evals/baselines/`
+keeps reference runs (`cloud-linux-x86_64.json`: a 4-core cloud container, release build, best
+of 3); record one for the test VMs with `scripts/linuxvm/linuxvm` and `scripts/winvm/winvm`
+before relying on them there. Timings are not part of `cargo test`, because CI machines vary
+too much.
+
+## Random blends
+
+`--blend-fuzz N` takes N random two-primitive parts from `--seed`, fillets or chamfers four
+random edges of each with a radius of 0.05, 0.2 or 0.5, and fails on any result that is not
+sound (the audit above, without a reference shape). A refusal is fine. Seed 31 with 150
+parts gives 472 blends today: 202 sound, 269 refused (mostly smooth edges, where there is
+nothing to blend) and one unsound, listed below.
 
 ## Known kernel defects the evaluations have found and not yet fixed
 
@@ -121,6 +131,9 @@ change's pull request; compare on the same machine they came from. Timings are n
   than exact (recorded as a warning, since nothing is lost or wrong): the importer cannot yet
   rebuild a sphere face that is a whole sphere or a band round it, some faces that wrap round
   their axis with one boundary loop, and a few faces whose loops it closes wrongly.
+- Blends of edges on freeform-heavy parts: a chamfer whose bevel face's shading normals turn
+  against it near one end, a chamfer whose mesh is not watertight (`--blend-fuzz 150 --seed
+  31`, `fuzz/31-49 edge 0`), and a face that does not tessellate after a small chamfer.
 - Unbounded intersection curves between two cones, or a cone and a cylinder, are still refused
   (about one random case in seven hundred); plane and cone are solved exactly.
 

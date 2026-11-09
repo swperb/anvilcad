@@ -94,3 +94,63 @@ pub fn degenerate(t: &Tree) -> bool {
     let (lo, hi) = t.bounds();
     (hi - lo).min_element() <= 0.05 || t.volume(48) < 1e-3
 }
+
+/// What a random blend did: the kernel's refusal, or the audit's verdict on the body.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BlendTrial {
+    pub name: String,
+    pub blend: String,
+    /// `None` when the result passed the audit (or the kernel refused cleanly).
+    pub problem: Option<String>,
+    pub refused: Option<String>,
+}
+
+/// Fillets and chamfers on random edges of random two-primitive parts. There is no
+/// reference shape for these, so a result must only be sound: valid, closed, outward,
+/// within the chord, panic-free. A refusal is fine.
+pub fn blend_trials(seed: u64, parts: u64, per_part: usize) -> Vec<BlendTrial> {
+    use anvil_brep::EdgeId;
+    use anvil_brep::blend::{Blend, blend_edge};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let mut out = Vec::new();
+    for i in 0..parts {
+        let c = case(seed, i, &[0, 1, 2, 3, 4], 2);
+        let Ok(Ok(bodies)) = catch_unwind(AssertUnwindSafe(|| c.tree.build())) else { continue };
+        let Some(body) = bodies.first() else { continue };
+        let mut r = Rng::new(seed ^ i.wrapping_mul(0x9E37));
+        for _ in 0..per_part {
+            if body.edges.is_empty() {
+                break;
+            }
+            let e = r.below(body.edges.len());
+            let size = *r.pick(&[0.05, 0.2, 0.5]);
+            let kind = if r.chance(0.7) { Blend::Fillet(size) } else { Blend::Chamfer(size) };
+            let mut t = BlendTrial {
+                name: format!("{} edge {e}", c.name),
+                blend: format!("{kind:?}"),
+                problem: None,
+                refused: None,
+            };
+            match catch_unwind(AssertUnwindSafe(|| blend_edge(body, EdgeId(e as u32), kind, 1, 1000))) {
+                Err(_) => t.problem = Some("panic".into()),
+                Ok(Err(why)) => t.refused = Some(why.to_string()),
+                Ok(Ok(result)) => {
+                    for b in &result {
+                        match crate::oracle::meshes(std::slice::from_ref(b), &crate::oracle::display_params())
+                        {
+                            Ok(m) => {
+                                if let Some(first) = crate::oracle::audit(b, &m[0]).errors.into_iter().next()
+                                {
+                                    t.problem = Some(first);
+                                }
+                            }
+                            Err(e) => t.problem = Some(format!("tessellation failed: {e}")),
+                        }
+                    }
+                }
+            }
+            out.push(t);
+        }
+    }
+    out
+}
