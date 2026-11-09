@@ -465,7 +465,15 @@ impl Surface {
                 // Project the direction onto the plane z = 1 from (0, 0, -1).
                 let l = frame.to_local(p);
                 let d = l / l.length().max(1e-300);
-                DVec2::new(d.x, d.y) * (2.0 * radius / (1.0 + d.z).max(1e-12))
+                // The point opposite frame.z projects to infinity. Send it (and anything
+                // within rounding of it) far away rather than to the origin, which is the
+                // middle of the face and would put it inside.
+                let flat = DVec2::new(d.x, d.y);
+                let gap = 1.0 + d.z;
+                if gap < 1e-12 {
+                    return flat.try_normalize().unwrap_or(DVec2::X) * (2.0 * radius * 1e12);
+                }
+                flat * (2.0 * radius / gap)
             }
             Surface::BSpline(s) => s.to_uv(s.closest_beyond(p)),
         }

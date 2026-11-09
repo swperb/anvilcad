@@ -387,8 +387,7 @@ pub fn cases() -> Vec<Case> {
         )
         .volume(16.0 * PI / 3.0)
         .bodies(1)
-        .graceful()
-        .note("a plane through a sphere's poles does not split the face yet"),
+        .note("the cutting plane passes through the ball's poles"),
     );
     c.push(
         Case::new("sphere/lens", "sphere", sphere(DVec3::ZERO, 2.0).and(sphere(v(2.0, 0.0, 0.0), 2.0)))

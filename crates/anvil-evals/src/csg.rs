@@ -586,11 +586,6 @@ fn cone_spans(frame: &Frame, o: DVec3, d: DVec3, r: f64, k: f64, z0: f64, z1: f6
 fn torus_spans(frame: &Frame, o: DVec3, d: DVec3, major: f64, minor: f64) -> Vec<Span> {
     let lo = frame.to_local(o);
     let ld = frame.to_local(o + d) - lo;
-    let f = |t: f64| {
-        let p = lo + ld * t;
-        let s = p.length_squared() + major * major - minor * minor;
-        s * s - 4.0 * major * major * (p.x * p.x + p.y * p.y)
-    };
     let normal = |t: f64| {
         let p = lo + ld * t;
         let s = p.length_squared() + major * major - minor * minor;
@@ -608,29 +603,106 @@ fn torus_spans(frame: &Frame, o: DVec3, d: DVec3, major: f64, minor: f64) -> Vec
     else {
         return Vec::new();
     };
-    let n = 512;
-    let step = (tb - ta) / n as f64;
-    let mut roots = Vec::new();
-    let mut prev = f(ta);
-    for i in 1..=n {
-        let t = ta + step * i as f64;
-        let v = f(t);
-        if (prev < 0.0) != (v < 0.0) {
-            let (mut a, mut b) = (t - step, t);
-            for _ in 0..60 {
-                let m = 0.5 * (a + b);
-                if (f(a) < 0.0) == (f(m) < 0.0) { a = m } else { b = m }
-            }
-            roots.push(0.5 * (a + b));
+    // Along the ray the implicit function (|p|^2 + R^2 - r^2)^2 - 4 R^2 (x^2 + y^2) is a
+    // quartic in t; its real roots are isolated exactly between the roots of its
+    // derivatives, so no crossing is missed however thin.
+    let sum = [lo.length_squared() + major * major - minor * minor, 2.0 * lo.dot(ld), ld.length_squared()];
+    let rho = [lo.x * lo.x + lo.y * lo.y, 2.0 * (lo.x * ld.x + lo.y * ld.y), ld.x * ld.x + ld.y * ld.y];
+    let mut q = [0.0; 5];
+    for i in 0..3 {
+        for j in 0..3 {
+            q[i + j] += sum[i] * sum[j];
         }
-        prev = v;
+        q[i] -= 4.0 * major * major * rho[i];
     }
-    roots.chunks_exact(2).map(|w| Span { t0: w[0], n0: normal(w[0]), t1: w[1], n1: normal(w[1]) }).collect()
+    let roots = poly_roots(&q, ta, tb);
+    let f = |t: f64| horner(&q, t);
+    // Pair up the roots into spans, keeping only stretches where the ray is inside.
+    let mut cuts = vec![ta];
+    cuts.extend(roots);
+    cuts.push(tb);
+    let mut spans = Vec::new();
+    for w in cuts.windows(2) {
+        if w[1] - w[0] > 1e-12 && f(0.5 * (w[0] + w[1])) < 0.0 {
+            spans.push(Span { t0: w[0], n0: normal(w[0]), t1: w[1], n1: normal(w[1]) });
+        }
+    }
+    spans
+}
+
+/// `c[0] + c[1] t + c[2] t^2 + ...`.
+fn horner(c: &[f64], t: f64) -> f64 {
+    c.iter().rev().fold(0.0, |acc, &k| acc * t + k)
+}
+
+/// The real roots of a polynomial in `[lo, hi]`, in order. Each root of the derivative
+/// splits the interval into pieces on which the polynomial is monotone, and each piece
+/// with a sign change holds exactly one root, found by bisection.
+fn poly_roots(c: &[f64], lo: f64, hi: f64) -> Vec<f64> {
+    let mut c = c.to_vec();
+    while c.len() > 1 && c.last().is_some_and(|k| k.abs() < 1e-300) {
+        c.pop();
+    }
+    if c.len() <= 1 {
+        return Vec::new();
+    }
+    let deriv: Vec<f64> = c.iter().enumerate().skip(1).map(|(i, k)| k * i as f64).collect();
+    let mut knots = vec![lo];
+    knots.extend(poly_roots(&deriv, lo, hi));
+    knots.push(hi);
+    let mut roots = Vec::new();
+    for w in knots.windows(2) {
+        let (mut a, mut b) = (w[0], w[1]);
+        let (fa, fb) = (horner(&c, a), horner(&c, b));
+        if fa == 0.0 {
+            if roots.last().is_none_or(|r: &f64| (a - r).abs() > 1e-12) {
+                roots.push(a);
+            }
+            continue;
+        }
+        if (fa < 0.0) == (fb < 0.0) {
+            continue;
+        }
+        for _ in 0..200 {
+            let m = 0.5 * (a + b);
+            if m <= a || m >= b {
+                break;
+            }
+            if (horner(&c, m) < 0.0) == (fa < 0.0) {
+                a = m;
+            } else {
+                b = m;
+            }
+        }
+        roots.push(0.5 * (a + b));
+    }
+    roots
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn polynomial_roots_are_isolated() {
+        // (t - 1)(t - 2)(t - 2.000001)(t + 3): a near-double root is still split.
+        let r = [1.0, 2.0, 2.000001, -3.0];
+        let mut c = vec![1.0];
+        for x in r {
+            let mut n = vec![0.0; c.len() + 1];
+            for (i, k) in c.iter().enumerate() {
+                n[i] -= k * x;
+                n[i + 1] += k;
+            }
+            c = n;
+        }
+        let got = poly_roots(&c, -10.0, 10.0);
+        assert_eq!(got.len(), 4, "{got:?}");
+        for (g, w) in got.iter().zip([-3.0, 1.0, 2.0, 2.000001]) {
+            // A near-double root is conditioned like the square root of the rounding error.
+            assert!((g - w).abs() < 1e-8, "{got:?}");
+        }
+    }
 
     #[test]
     fn reference_volumes_match_formulas() {
