@@ -154,6 +154,7 @@ impl Diff {
 /// or a crease in the reference are not judged: a pixel there legitimately lands on
 /// either side.
 pub fn compare(view: &View, reference: &Image, mesh: &Image, depth_tol: f64) -> (Diff, Vec<u8>) {
+    let view_dir = view.dir.normalize();
     let n = reference.n;
     let mut d = Diff { view: view.name.into(), ..Diff::default() };
     let mut mask = vec![0u8; n * n];
@@ -188,7 +189,18 @@ pub fn compare(view: &View, reference: &Image, mesh: &Image, depth_tol: f64) -> 
             if r.is_finite() != m.is_finite() {
                 d.coverage += 1;
                 mask[k] = 1;
-            } else if (r - m).abs() > depth_tol {
+            } else if (r - m).abs() > depth_tol && reference.normal[k].dot(view_dir).abs() > 0.3 {
+                // Seen edge-on, a chord's sag shows as a depth error divided by the
+                // cosine; such pixels are judged by coverage and normal alone.
+                if std::env::var("ANVIL_EVAL_DEBUG").is_ok() {
+                    eprintln!(
+                        "depth {:.4} vs {:.4} normal {:?} cos {:.3}",
+                        r,
+                        m,
+                        reference.normal[k],
+                        reference.normal[k].dot(view_dir)
+                    );
+                }
                 d.depth += 1;
                 mask[k] = 2;
             } else if reference.normal[k].dot(mesh.normal[k]) < 0.94 {

@@ -136,7 +136,7 @@ impl CaseResult {
 
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// Resolution of the reference volume integration grid.
+    /// The reference volume uses this many squared rays (per random shift).
     pub volume_grid: usize,
     /// Points sampled for inside/outside agreement.
     pub membership_samples: usize,
@@ -153,7 +153,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
-            volume_grid: 400,
+            volume_grid: 200,
             membership_samples: 300,
             image_size: 96,
             image_dir: None,
@@ -203,13 +203,10 @@ pub fn run(case: &Case, opt: &Options) -> CaseResult {
         Some(v) => r.reference_volume = v,
         None => {
             // The grid integral converges like the cell size at silhouettes.
-            let fine = case.tree.volume(opt.volume_grid);
-            let mid = case.tree.volume(opt.volume_grid / 2);
-            let coarse = case.tree.volume(opt.volume_grid / 4);
-            r.reference_volume = fine;
-            // Convergence is not monotone at silhouettes, so take the larger of the two
-            // last changes, each scaled to the finest grid.
-            r.reference_error = 2.0 * (fine - mid).abs().max(0.5 * (mid - coarse).abs());
+            let (v, err) = case.tree.volume_estimate(opt.volume_grid * opt.volume_grid, 6);
+            r.reference_volume = v;
+            // Four standard errors: a false alarm about once in fifteen thousand cases.
+            r.reference_error = 4.0 * err;
         }
     }
     let mut bodies = None;
@@ -291,7 +288,18 @@ fn check_bodies(case: &Case, bodies: &[Solid], opt: &Options, r: &mut CaseResult
     }
 
     // Volume, from a fine tessellation.
-    let fine = match tess(&oracle::fine_params()) {
+    let (lo, hi) = case.tree.bounds();
+    let size = (hi - lo).max_element().max(1e-12);
+    // The result can be much smaller than the operands: scale to what was built.
+    let built = bodies
+        .iter()
+        .filter_map(|b| b.bounds())
+        .map(|(a, b)| (b - a).max_element())
+        .fold(0.0, f64::max)
+        .min(size)
+        .max(1e-12);
+    let fine_params = oracle::fine_params(built);
+    let fine = match tess(&fine_params) {
         Ok(m) => m,
         Err(e) => {
             fail(r, format!("fine tessellation failed: {e}"));
@@ -299,14 +307,16 @@ fn check_bodies(case: &Case, bodies: &[Solid], opt: &Options, r: &mut CaseResult
         }
     };
     r.kernel_volume = fine.iter().map(|m| anvil_brep::mass::properties(m).volume).sum();
-    let (lo, hi) = case.tree.bounds();
-    let size = (hi - lo).max_element().max(1e-12);
+    // A mesh within the chord of every face can differ in volume by its area times the
+    // chord, which matters on small, thin results.
+    let mesh_slack: f64 =
+        fine.iter().map(|m| anvil_brep::mass::properties(m).area).sum::<f64>() * fine_params.chord;
     let (want, rel) = match case.volume {
         Some(v) => (v, 5e-4),
-        None => (r.reference_volume, 3e-3),
+        None => (r.reference_volume, 1e-3),
     };
     let err = (r.kernel_volume - want).abs();
-    if err > rel * want.abs() + r.reference_error + 1e-9 * size.powi(3) {
+    if err > rel * want.abs() + r.reference_error + mesh_slack + 1e-9 * size.powi(3) {
         fail(
             r,
             format!(
