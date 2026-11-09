@@ -537,6 +537,19 @@ pub fn cases() -> Vec<Case> {
             .bodies(1)
             .genus(25),
     );
+    let mut grid = cuboid(DVec3::ZERO, v(80.0, 80.0, 5.0));
+    for i in 0..8 {
+        for j in 0..8 {
+            grid = grid.minus(hole(5.0 + 10.0 * i as f64, 5.0 + 10.0 * j as f64, 1.5, -1.0, 7.0));
+        }
+    }
+    c.push(
+        Case::new("chain/plate-64-holes", "chain", grid)
+            .volume(32000.0 - 64.0 * 2.25 * PI * 5.0)
+            .bodies(1)
+            .genus(64)
+            .note("a pattern of holes: each cut must not slow down with the number before it"),
+    );
     let mut stair = cuboid(DVec3::ZERO, v(2.0, 2.0, 1.0));
     for k in 1..12 {
         let k = k as f64;
