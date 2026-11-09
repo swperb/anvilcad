@@ -584,7 +584,7 @@ fn a_band_round_a_ball_imports_exactly() {
     let ct = f.e(format!("CIRCLE('',#{at},{rho:?})"));
     let eb = f.e(format!("EDGE_CURVE('',#{vb},#{vb},#{cb},.T.)"));
     let et = f.e(format!("EDGE_CURVE('',#{vt},#{vt},#{ct},.T.)"));
-    let mut lp = |f: &mut Fixture, e: usize, fw: bool| {
+    let lp = |f: &mut Fixture, e: usize, fw: bool| {
         let oe = f.e(format!("ORIENTED_EDGE('',*,*,#{e},{})", if fw { ".T." } else { ".F." }));
         f.e(format!("EDGE_LOOP('',(#{oe}))"))
     };
