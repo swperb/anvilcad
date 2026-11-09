@@ -127,10 +127,11 @@ nothing to blend) and one unsound, listed below.
   in a thousand.
 - A face that fails to tessellate ("boundary crosses itself in parameter space") after a torus
   is cut by another torus (`fuzz/2-344` at `--prims 4`).
-- About one random result in twenty-five comes back from a STEP round trip as a mesh rather
+- About one random result in thirty comes back from a STEP round trip as a mesh rather
   than exact (recorded as a warning, since nothing is lost or wrong): the importer cannot yet
-  rebuild a sphere face that is a whole sphere or a band round it, some faces that wrap round
-  their axis with one boundary loop, and a few faces whose loops it closes wrongly.
+  rebuild some faces that wrap round their axis with one boundary loop, a few faces whose
+  loops it closes wrongly, and some faces it cannot lay out (sphere bands whose file axis
+  points into the band among them).
 - Blends of edges on freeform-heavy parts: a chamfer whose bevel face's shading normals turn
   against it near one end, a chamfer whose mesh is not watertight (`--blend-fuzz 150 --seed
   31`, `fuzz/31-49 edge 0`), and a face that does not tessellate after a small chamfer.
