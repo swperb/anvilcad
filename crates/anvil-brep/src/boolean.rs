@@ -411,6 +411,7 @@ impl<'a> Engine<'a> {
 
     fn run(mut self, op: BoolOp) -> Result<Vec<Solid>> {
         self.intersect_edges_with_faces();
+        self.cross_coincident_boundaries();
         self.split_edges();
         self.intersect_faces()?;
         let mut pieces = self.split_faces()?;
@@ -473,6 +474,47 @@ impl<'a> Engine<'a> {
         }
         for (p, slack) in found {
             self.add_point(p, slack);
+        }
+    }
+
+    /// Step 2b: where two faces lie on one curved surface (cylinders on one axis with one
+    /// radius, say), each face's boundary lies on the other's surface, so step 2 finds no
+    /// crossings. The boundaries still cross each other (a cap circle across the other
+    /// cylinder's seam), and those crossings must split the edges before the faces are
+    /// imprinted on each other.
+    fn cross_coincident_boundaries(&mut self) {
+        let mut found = Vec::new();
+        for fa in 0..self.solids[0].faces.len() {
+            for fb in 0..self.solids[1].faces.len() {
+                let (sa, sb) = (self.surface(0, fa), self.surface(1, fb));
+                if matches!(sa, Surface::Plane { .. })
+                    || !boxes_overlap(self.infos[0][fa].bbox, self.infos[1][fb].bbox, ON)
+                    || !sa.coincident(sb, ON)
+                {
+                    continue;
+                }
+                let edges = |s: usize, f: usize| -> Vec<usize> {
+                    let mut v: Vec<usize> = self.solids[s].faces[f]
+                        .loops()
+                        .flat_map(|l| l.coedges.iter().map(|c| c.edge.index()))
+                        .collect();
+                    v.sort_unstable();
+                    v.dedup();
+                    v
+                };
+                for ea in edges(0, fa) {
+                    for eb in edges(1, fb) {
+                        let (Some(a), Some(b)) = (self.solids[0].edges.get(ea), self.solids[1].edges.get(eb))
+                        else {
+                            continue;
+                        };
+                        found.extend(edge_crossings(a, b));
+                    }
+                }
+            }
+        }
+        for p in found {
+            self.add_point(p, 0.0);
         }
     }
 
@@ -583,15 +625,15 @@ impl<'a> Engine<'a> {
     }
 
     fn imprint_coincident(&mut self, fa: usize, fb: usize) -> Result<()> {
-        let planar = matches!(self.surface(0, fa), Surface::Plane { .. });
         for (s, f, o, g) in [(1, fb, 0, fa), (0, fa, 1, fb)] {
             let uses: Vec<Use> = self.boundary(s, f).into_iter().flatten().collect();
-            for (e, _) in uses {
+            for &(e, _) in &uses {
+                // A seam (used both ways by its own face) bounds nothing on the other face.
+                if uses.iter().filter(|(u, _)| *u == e).count() > 1 {
+                    continue;
+                }
                 let mid = self.edges[e].at(0.5);
                 if self.locate(o, g, mid) == Loc::Inside {
-                    if !planar {
-                        return Err(KernelError::Unsupported("overlapping coincident curved faces".into()));
-                    }
                     self.cuts[o][g].insert(e);
                 }
             }
@@ -1304,6 +1346,50 @@ pub fn face_contains(solid: &Solid, f: usize, p: DVec3) -> bool {
         return false;
     };
     locate_in(solid, f, &face_info(solid, face), p) != Loc::Outside
+}
+
+/// Points where edges `a` and `b` cross, found as isolated close approaches along `a`.
+/// Edges that run together (overlap) give none: their shared stretch is bounded by
+/// vertices already.
+fn edge_crossings(a: &Edge, b: &Edge) -> Vec<DVec3> {
+    let n = 64;
+    let at = |k: f64| a.t0 + (a.t1 - a.t0) * k;
+    let dist = |k: f64| b.curve.distance_to(a.curve.eval(at(k)), b.t0, b.t1);
+    let d: Vec<f64> = (0..=n).map(|i| dist(i as f64 / n as f64)).collect();
+    let close = d.iter().filter(|x| **x < ON).count();
+    if close > 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for i in 0..=n {
+        let left = if i > 0 { d[i - 1] } else { f64::INFINITY };
+        let right = if i < n { d[i + 1] } else { f64::INFINITY };
+        if d[i] > left || d[i] > right {
+            continue;
+        }
+        // Golden-section search for the closest approach around sample i.
+        let step = 1.0 / n as f64;
+        let (mut lo, mut hi) = (((i as f64) - 1.0) * step, ((i as f64) + 1.0) * step);
+        lo = lo.max(0.0);
+        hi = hi.min(1.0);
+        for _ in 0..80 {
+            let m1 = lo + (hi - lo) * 0.382;
+            let m2 = lo + (hi - lo) * 0.618;
+            if dist(m1) < dist(m2) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let k = 0.5 * (lo + hi);
+        if dist(k) < TOL {
+            let p = a.curve.eval(at(k));
+            if !out.iter().any(|q: &DVec3| (*q - p).length() < ON) {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 /// Which side of the nearest edge of face `f` a point near that edge lies on: true on
