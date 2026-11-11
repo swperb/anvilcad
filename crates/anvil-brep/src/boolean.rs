@@ -1616,6 +1616,84 @@ fn signed_area(poly: &[DVec2]) -> f64 {
 /// constrained Delaunay triangulation: the centroid of the largest interior
 /// triangle.
 fn interior_point(loops: &[Vec<DVec2>]) -> Option<DVec2> {
+    // Triangulating is quadratic in a face with many holes (a plate with a pattern of
+    // them); there, a point found beside the boundary is enough. Smaller faces keep the
+    // triangulation, whose largest triangle is as far from any edge as can be.
+    let points: usize = loops.iter().map(Vec::len).sum();
+    if points > 400
+        && let Some(p) = clear_point(loops)
+    {
+        return Some(p);
+    }
+    largest_triangle_point(loops)
+}
+
+/// A point inside the loops and well clear of all of them, found beside the longest
+/// boundary segments: linear in the number of points, where a triangulation of a face
+/// with many holes is not. `None` when no candidate is clear enough (a sliver), for the
+/// triangulation to decide.
+fn clear_point(loops: &[Vec<DVec2>]) -> Option<DVec2> {
+    let mut segs: Vec<(DVec2, DVec2)> = Vec::new();
+    let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
+    for l in loops {
+        for (k, a) in l.iter().enumerate() {
+            let b = l[(k + 1) % l.len()];
+            if (b - *a).length_squared() > 0.0 {
+                segs.push((*a, b));
+            }
+            lo = lo.min(*a);
+            hi = hi.max(*a);
+        }
+    }
+    if segs.is_empty() || !tol_finite(lo) || !tol_finite(hi) {
+        return None;
+    }
+    // Clear of every boundary by a fiftieth of the face's size, and by far more than
+    // the on-surface tolerance, so classifying the point is never a near call.
+    let need = (0.02 * (hi - lo).length()).max(1000.0 * ON);
+    let clearance = |c: DVec2| {
+        segs.iter()
+            .map(|(a, b)| {
+                let d = *b - *a;
+                let t = ((c - *a).dot(d) / d.length_squared()).clamp(0.0, 1.0);
+                (c - (*a + d * t)).length()
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let mut order: Vec<usize> = (0..segs.len()).collect();
+    order.sort_by(|&i, &j| {
+        let (a, b) = (segs[i], segs[j]);
+        (b.1 - b.0).length_squared().total_cmp(&(a.1 - a.0).length_squared())
+    });
+    // The clearest of the candidates beside the longest segments.
+    let mut best: Option<(f64, DVec2)> = None;
+    for &i in order.iter().take(8) {
+        let (a, b) = segs[i];
+        let d = b - a;
+        let n = d.perp() / d.length();
+        for side in [1.0, -1.0] {
+            for frac in [0.5, 0.25, 0.1] {
+                let c = (a + b) * 0.5 + n * (side * frac * d.length());
+                let inside = loops.iter().filter(|l| point_in_polygon(c, l)).count() % 2 == 1;
+                if !inside {
+                    continue;
+                }
+                let room = clearance(c);
+                if room >= need && best.is_none_or(|(r, _)| room > r) {
+                    best = Some((room, c));
+                }
+            }
+        }
+    }
+    best.map(|(_, c)| c)
+}
+
+fn tol_finite(v: DVec2) -> bool {
+    v.x.is_finite() && v.y.is_finite()
+}
+
+/// The centroid of the largest triangle inside the loops.
+fn largest_triangle_point(loops: &[Vec<DVec2>]) -> Option<DVec2> {
     let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
     for l in loops {
         let handles: Vec<_> = l.iter().filter_map(|p| cdt.insert(Point2::new(p.x, p.y)).ok()).collect();
@@ -1626,17 +1704,20 @@ fn interior_point(loops: &[Vec<DVec2>]) -> Option<DVec2> {
             }
         }
     }
-    let mut best: Option<(f64, DVec2)> = None;
-    for tri in cdt.inner_faces() {
-        let v = tri.vertices().map(|v| DVec2::new(v.position().x, v.position().y));
-        let c = (v[0] + v[1] + v[2]) / 3.0;
-        let area = (v[1] - v[0]).perp_dot(v[2] - v[0]).abs();
-        let inside = loops.iter().filter(|l| point_in_polygon(c, l)).count() % 2 == 1;
-        if inside && best.is_none_or(|(a, _)| area > a) {
-            best = Some((area, c));
-        }
-    }
-    best.map(|(_, c)| c)
+    // The centroid of the largest triangle inside. Testing the triangles largest first
+    // and stopping at the first inside gives the same point without testing every
+    // triangle against every loop, which was quadratic in a face with many holes.
+    let mut tris: Vec<(f64, DVec2)> = cdt
+        .inner_faces()
+        .map(|tri| {
+            let v = tri.vertices().map(|v| DVec2::new(v.position().x, v.position().y));
+            ((v[1] - v[0]).perp_dot(v[2] - v[0]).abs(), (v[0] + v[1] + v[2]) / 3.0)
+        })
+        .collect();
+    tris.sort_by(|a, b| b.0.total_cmp(&a.0));
+    tris.into_iter()
+        .find(|(_, c)| loops.iter().filter(|l| point_in_polygon(*c, l)).count() % 2 == 1)
+        .map(|(_, c)| c)
 }
 
 #[cfg(test)]
