@@ -1,0 +1,554 @@
+//! Evaluations for AnvilCAD's exact kernel (`anvil-brep`).
+//!
+//! Each case is a solid described as an analytic CSG tree ([`csg::Tree`]). Running a
+//! case builds it with the kernel (extrusions, revolutions and booleans, as a user's
+//! features would) and checks the result three ways:
+//!
+//! - **Computational.** Every body passes a deep audit (the kernel's validity check, edges
+//!   and vertices on their surfaces, a closed and outward display mesh); its volume
+//!   matches the exact or integrated reference; points sampled through the part are inside
+//!   the kernel's result exactly when they are inside the reference.
+//! - **Visual.** The display mesh, rendered as depth and normal images from four views,
+//!   matches the reference ray-cast pixel for pixel ([`raster`]).
+//! - **Performance.** Building and tessellating are timed, and `anvil-evals` compares the
+//!   times with a stored baseline.
+//!
+//! A case either passes, fails gracefully (the kernel returns an error, which a user sees
+//! as a message and loses no work), or fails: a wrong or invalid body, or a panic. A
+//! failure is never acceptable. See `docs/kernel/EVALS.md`.
+
+pub mod corpus;
+pub mod csg;
+pub mod fuzz;
+pub mod oracle;
+pub mod raster;
+pub mod rng;
+
+use anvil_brep::Solid;
+use csg::Tree;
+use serde::Serialize;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
+use std::time::Instant;
+
+/// What a case is expected to do with today's kernel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Expect {
+    /// Must build and pass every check.
+    Pass,
+    /// Known to be beyond the kernel today: an error is accepted, a wrong result is not.
+    /// A case that starts passing is reported so it can be promoted.
+    Graceful,
+}
+
+#[derive(Debug, Clone)]
+pub struct Case {
+    pub name: String,
+    pub category: &'static str,
+    pub tree: Tree,
+    pub expect: Expect,
+    /// The exact volume, when known in closed form.
+    pub volume: Option<f64>,
+    pub bodies: Option<usize>,
+    /// The genus of the (single) body, when it is meaningful.
+    pub genus: Option<u32>,
+    /// Why the case exists, in a sentence.
+    pub note: &'static str,
+    /// When set, the kernel builds this tree and then applies `steps` (fillets,
+    /// chamfers) to it, and `tree` is the exact shape the result must have.
+    pub base: Option<Tree>,
+    pub steps: Vec<Step>,
+    /// The exact change of volume the steps make.
+    pub change: Option<f64>,
+}
+
+/// A feature applied to a built body, picking its edge by a point on it, as a user
+/// picks an edge in the viewport.
+#[derive(Debug, Clone, Copy)]
+pub enum Step {
+    Fillet { at: glam::DVec3, radius: f64 },
+    Chamfer { at: glam::DVec3, distance: f64 },
+}
+
+impl Case {
+    pub fn new(name: impl Into<String>, category: &'static str, tree: Tree) -> Case {
+        Case {
+            name: name.into(),
+            category,
+            tree,
+            expect: Expect::Pass,
+            volume: None,
+            bodies: None,
+            genus: None,
+            note: "",
+            base: None,
+            steps: Vec::new(),
+            change: None,
+        }
+    }
+
+    /// Builds `base` and applies `steps`; `tree` stays the reference.
+    pub fn features(mut self, base: Tree, steps: Vec<Step>) -> Case {
+        self.base = Some(base);
+        self.steps = steps;
+        self
+    }
+    pub fn volume(mut self, v: f64) -> Case {
+        self.volume = Some(v);
+        self
+    }
+    pub fn bodies(mut self, n: usize) -> Case {
+        self.bodies = Some(n);
+        self
+    }
+    /// The exact change of volume the feature steps make (negative for material
+    /// taken off).
+    pub fn change(mut self, dv: f64) -> Case {
+        self.change = Some(dv);
+        self
+    }
+    pub fn genus(mut self, g: u32) -> Case {
+        self.genus = Some(g);
+        self
+    }
+    pub fn graceful(mut self) -> Case {
+        self.expect = Expect::Graceful;
+        self
+    }
+    pub fn note(mut self, s: &'static str) -> Case {
+        self.note = s;
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum Status {
+    Pass,
+    /// The kernel returned an error.
+    Graceful,
+    /// A wrong or invalid result.
+    Fail,
+    Panic,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseResult {
+    pub name: String,
+    pub category: String,
+    pub expect: Expect,
+    pub status: Status,
+    /// The kernel's error, the panic message, or the checks that failed.
+    pub reasons: Vec<String>,
+    pub warnings: Vec<String>,
+    pub bodies: usize,
+    pub faces: usize,
+    pub reference_volume: f64,
+    /// An estimate of the integrated reference's error (zero when it is exact).
+    pub reference_error: f64,
+    pub kernel_volume: f64,
+    pub build_ms: f64,
+    pub tess_ms: f64,
+    pub membership: Option<oracle::Membership>,
+    pub views: Vec<raster::Diff>,
+}
+
+impl CaseResult {
+    /// A result that breaks its expectation: a failure or panic always does, and a
+    /// graceful error does when the case should pass.
+    pub fn regressed(&self) -> bool {
+        match self.status {
+            Status::Pass => false,
+            Status::Graceful => self.expect == Expect::Pass,
+            Status::Fail | Status::Panic => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Options {
+    /// The reference volume uses this many squared rays (per random shift).
+    pub volume_grid: usize,
+    /// Points sampled for inside/outside agreement.
+    pub membership_samples: usize,
+    /// Resolution of the visual comparison images (0 to skip).
+    pub image_size: usize,
+    /// Where to write comparison images, if anywhere.
+    pub image_dir: Option<PathBuf>,
+    /// Timing repetitions (the fastest is reported).
+    pub repeats: usize,
+    /// Write images for failing cases only.
+    pub images_on_failure_only: bool,
+    /// Export each result to STEP, read it back and check it is the same solid.
+    pub step_round_trip: bool,
+    /// Where to keep each result's STEP file, if anywhere.
+    pub step_dir: Option<PathBuf>,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options {
+            volume_grid: 200,
+            membership_samples: 300,
+            image_size: 96,
+            image_dir: None,
+            repeats: 1,
+            images_on_failure_only: false,
+            step_round_trip: true,
+            step_dir: None,
+        }
+    }
+}
+
+fn panic_text(p: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panic".into()
+    }
+}
+
+/// Builds a case with the kernel, catching panics.
+pub fn build(tree: &Tree) -> Result<Result<Vec<Solid>, String>, String> {
+    match catch_unwind(AssertUnwindSafe(|| tree.build())) {
+        Ok(r) => Ok(r.map_err(|e| e.to_string())),
+        Err(p) => Err(panic_text(&*p)),
+    }
+}
+
+/// Builds a case: its tree, or its base and feature steps.
+pub fn build_case(case: &Case) -> Result<Result<Vec<Solid>, String>, String> {
+    let Some(base) = &case.base else {
+        return build(&case.tree);
+    };
+    match catch_unwind(AssertUnwindSafe(|| apply_steps(base, &case.steps))) {
+        Ok(r) => Ok(r),
+        Err(p) => Err(panic_text(&*p)),
+    }
+}
+
+fn apply_steps(base: &Tree, steps: &[Step]) -> Result<Vec<Solid>, String> {
+    use anvil_brep::blend::{self, Blend};
+    let mut bodies = base.build().map_err(|e| e.to_string())?;
+    for (k, step) in steps.iter().enumerate() {
+        let [body] = bodies.as_slice() else {
+            return Err(format!("step {k} needs one body, there are {}", bodies.len()));
+        };
+        let (at, kind) = match *step {
+            Step::Fillet { at, radius } => (at, Blend::Fillet(radius)),
+            Step::Chamfer { at, distance } => (at, Blend::Chamfer(distance)),
+        };
+        let Some(edge) = blend::edge_near(body, at, 1e-6) else {
+            return Err(format!("step {k}: no edge passes through {at}"));
+        };
+        bodies = blend::blend_edge(body, edge, kind, 1, 1000 + 8 * k as u32).map_err(|e| e.to_string())?;
+    }
+    Ok(bodies)
+}
+
+pub fn run(case: &Case, opt: &Options) -> CaseResult {
+    let mut r = CaseResult {
+        name: case.name.clone(),
+        category: case.category.into(),
+        expect: case.expect,
+        status: Status::Pass,
+        reasons: Vec::new(),
+        warnings: Vec::new(),
+        bodies: 0,
+        faces: 0,
+        reference_volume: 0.0,
+        reference_error: 0.0,
+        kernel_volume: 0.0,
+        build_ms: 0.0,
+        tess_ms: 0.0,
+        membership: None,
+        views: Vec::new(),
+    };
+    match case.volume {
+        Some(v) => r.reference_volume = v,
+        None => {
+            // The grid integral converges like the cell size at silhouettes.
+            let (v, err) = case.tree.volume_estimate(opt.volume_grid * opt.volume_grid, 6);
+            r.reference_volume = v;
+            // Four standard errors: a false alarm about once in fifteen thousand cases.
+            r.reference_error = 4.0 * err;
+        }
+    }
+    let mut bodies = None;
+    let mut best = f64::INFINITY;
+    for _ in 0..opt.repeats.max(1) {
+        let t = Instant::now();
+        let b = build_case(case);
+        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+        bodies = Some(b);
+    }
+    r.build_ms = best;
+    let bodies = match bodies {
+        Some(Ok(Ok(b))) => b,
+        Some(Ok(Err(e))) => {
+            r.status = Status::Graceful;
+            r.reasons.push(e);
+            return r;
+        }
+        Some(Err(p)) => {
+            r.status = Status::Panic;
+            r.reasons.push(format!("panic while building: {p}"));
+            return r;
+        }
+        None => return r,
+    };
+    check_bodies(case, &bodies, opt, &mut r);
+    r
+}
+
+fn check_bodies(case: &Case, bodies: &[Solid], opt: &Options, r: &mut CaseResult) {
+    r.bodies = bodies.len();
+    r.faces = bodies.iter().map(|b| b.faces.len()).sum();
+    let fail = |r: &mut CaseResult, s: String| {
+        r.status = Status::Fail;
+        r.reasons.push(s);
+    };
+    if let Some(n) = case.bodies
+        && n != bodies.len()
+    {
+        fail(r, format!("{} bodies, expected {n}", bodies.len()));
+    }
+    let tess = |p: &anvil_brep::tess::TessParams| {
+        catch_unwind(AssertUnwindSafe(|| oracle::meshes(bodies, p)))
+            .unwrap_or_else(|p| Err(format!("panic while tessellating: {}", panic_text(&*p))))
+    };
+    let mut best = f64::INFINITY;
+    let mut display = Err(String::new());
+    for _ in 0..opt.repeats.max(1) {
+        let t = Instant::now();
+        display = tess(&oracle::display_params());
+        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+    }
+    r.tess_ms = best;
+    let display = match display {
+        Ok(m) => m,
+        Err(e) => {
+            if e.starts_with("panic") {
+                r.status = Status::Panic;
+                r.reasons.push(e);
+            } else {
+                fail(r, format!("display tessellation failed: {e}"));
+            }
+            return;
+        }
+    };
+    for (i, (b, m)) in bodies.iter().zip(&display).enumerate() {
+        let a = oracle::audit(b, m);
+        for e in a.errors {
+            fail(r, format!("body {i}: {e}"));
+        }
+        for w in a.warnings {
+            r.warnings.push(format!("body {i}: {w}"));
+        }
+        if let (Some(g), 1) = (case.genus, bodies.len())
+            && a.genus != Some(g)
+        {
+            fail(r, format!("genus {:?}, expected {g}", a.genus));
+        }
+    }
+
+    // Volume, from a fine tessellation.
+    let (lo, hi) = case.tree.bounds();
+    let size = (hi - lo).max_element().max(1e-12);
+    // The result can be much smaller than the operands: scale to what was built.
+    let built = bodies
+        .iter()
+        .filter_map(|b| b.bounds())
+        .map(|(a, b)| (b - a).max_element())
+        .fold(0.0, f64::max)
+        .min(size)
+        .max(1e-12);
+    let fine_params = oracle::fine_params(built);
+    let fine = match tess(&fine_params) {
+        Ok(m) => m,
+        Err(e) => {
+            fail(r, format!("fine tessellation failed: {e}"));
+            return;
+        }
+    };
+    r.kernel_volume = fine.iter().map(|m| anvil_brep::mass::properties(m).volume).sum();
+    // A mesh within the chord of every face can differ in volume by its area times the
+    // chord, which matters on small, thin results.
+    // Only curved faces sag; planar ones are exact.
+    let mesh_slack: f64 =
+        bodies.iter().zip(&fine).map(|(b, m)| curved_area(b, m)).sum::<f64>() * fine_params.chord;
+    let (want, rel) = match case.volume {
+        Some(v) => (v, 5e-4),
+        None => (r.reference_volume, 1e-3),
+    };
+    let err = (r.kernel_volume - want).abs();
+    if err > rel * want.abs() + r.reference_error + mesh_slack + 1e-9 * size.powi(3) {
+        fail(
+            r,
+            format!(
+                "volume {:.9} differs from the reference {want:.9} by {:.3e} (relative)",
+                r.kernel_volume,
+                err / want.abs().max(1e-300)
+            ),
+        );
+    }
+
+    // A feature's own change of volume, which a small feature would hide in the part's.
+    if let (Some(change), Some(base)) = (case.change, &case.base) {
+        match base.build() {
+            Ok(before) => match oracle::meshes(&before, &fine_params) {
+                Ok(m) => {
+                    let v0: f64 = m.iter().map(|m| anvil_brep::mass::properties(m).volume).sum();
+                    let slack0: f64 = before.iter().zip(&m).map(|(b, m)| curved_area(b, m)).sum::<f64>()
+                        * fine_params.chord;
+                    let got = r.kernel_volume - v0;
+                    if (got - change).abs() > 1e-3 * change.abs() + 0.1 * (mesh_slack + slack0) + 1e-9 {
+                        fail(r, format!("the feature changed the volume by {got:.9}, expected {change:.9}"));
+                    }
+                }
+                Err(e) => fail(r, format!("the base does not tessellate: {e}")),
+            },
+            Err(e) => fail(r, format!("the base does not build: {e}")),
+        }
+    }
+
+    if opt.step_round_trip && !bodies.is_empty() {
+        step_round_trip(case, bodies, &fine_params, mesh_slack, opt.step_dir.as_deref(), r);
+    }
+
+    // Inside and outside.
+    if opt.membership_samples > 0 {
+        let margin = 2e-3 * size + 0.02;
+        let m = oracle::membership(&case.tree, &display, opt.membership_samples, margin, 7);
+        if m.wrong > 0 {
+            fail(
+                r,
+                format!(
+                    "{} of {} sample points classified wrongly, e.g. {:?}",
+                    m.wrong,
+                    m.samples - m.skipped,
+                    m.examples.first()
+                ),
+            );
+        }
+        r.membership = Some(m);
+    }
+
+    // Pixels.
+    if opt.image_size > 0 {
+        let pad = glam::DVec3::splat(size * 0.02);
+        let (lo, hi) = (lo - pad, hi + pad);
+        let depth_tol = 2e-3 * size + 0.03;
+        let mut rows = Vec::new();
+        for view in &raster::VIEWS {
+            let a = raster::render_reference(&case.tree, view, lo, hi, opt.image_size);
+            let b = raster::render_mesh(&display, view, lo, hi, opt.image_size);
+            let (d, mask) = raster::compare(view, &a, &b, depth_tol);
+            if d.bad_fraction() > 0.005 {
+                fail(
+                    r,
+                    format!(
+                        "view {}: {} of {} pixels differ ({} coverage, {} depth, {} normal)",
+                        d.view,
+                        d.coverage + d.depth + d.normal,
+                        d.judged,
+                        d.coverage,
+                        d.depth,
+                        d.normal
+                    ),
+                );
+            }
+            r.views.push(d);
+            rows.push((*view, a, b, mask));
+        }
+        if let Some(dir) = &opt.image_dir
+            && (!opt.images_on_failure_only || r.status != Status::Pass)
+        {
+            let file = dir.join(format!("{}.png", sanitize(&case.name)));
+            if let Err(e) = raster::write_png(&file, &rows) {
+                r.warnings.push(format!("could not write {}: {e}", file.display()));
+            }
+        }
+    }
+}
+
+pub fn sanitize(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect()
+}
+
+/// Writes the bodies to STEP, reads the file back, and checks that every body returns
+/// exact, valid and with the same volume: what a user exporting the part would get.
+fn step_round_trip(
+    case: &Case,
+    bodies: &[Solid],
+    fine: &anvil_brep::tess::TessParams,
+    slack: f64,
+    keep_in: Option<&std::path::Path>,
+    r: &mut CaseResult,
+) {
+    let text = anvil_step::export::write(bodies, &case.name);
+    if let Some(dir) = keep_in {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(dir.join(format!("{}.step", sanitize(&case.name))), &text);
+    }
+    let fail = |r: &mut CaseResult, s: String| {
+        r.status = Status::Fail;
+        r.reasons.push(format!("STEP round trip: {s}"));
+    };
+    let read = match catch_unwind(AssertUnwindSafe(|| anvil_step::import(&text))) {
+        Ok(Ok(i)) => i,
+        Ok(Err(e)) => return fail(r, format!("the exported file does not read back: {e}")),
+        Err(p) => {
+            r.status = Status::Panic;
+            r.reasons.push(format!("panic while reading the exported STEP: {}", panic_text(&*p)));
+            return;
+        }
+    };
+    if read.bodies.len() != bodies.len() {
+        return fail(r, format!("{} bodies written, {} read back", bodies.len(), read.bodies.len()));
+    }
+    let mut volume = 0.0;
+    for (i, b) in read.bodies.iter().enumerate() {
+        let Some(s) = &b.exact else {
+            // The importer keeps a body as triangles when it cannot rebuild a face
+            // exactly: less fidelity, but nothing lost or wrong. Recorded, not failed.
+            r.warnings.push(format!(
+                "STEP round trip: body {i} came back as a mesh: {}",
+                b.not_exact.clone().unwrap_or_default()
+            ));
+            return;
+        };
+        if let Err(e) = anvil_brep::check::validate(s) {
+            return fail(r, format!("body {i} came back invalid: {e}"));
+        }
+        match anvil_brep::tess::tessellate(s, fine) {
+            Ok(m) => volume += anvil_brep::mass::properties(&m).volume,
+            Err(e) => return fail(r, format!("body {i} does not tessellate after reading back: {e}")),
+        }
+    }
+    // Both volumes come from meshes within the chord of the same surfaces, which the
+    // reader may lay out afresh (a sphere's chart, a seam's place), so they agree to the
+    // meshes' own slack rather than to rounding.
+    if (volume - r.kernel_volume).abs() > slack + 1e-9 * r.kernel_volume.abs() {
+        fail(r, format!("volume {volume:.9} after reading back, {:.9} before", r.kernel_volume));
+    }
+}
+
+/// The mesh area on a body's curved faces, where a mesh within the chord can differ from
+/// the surface.
+fn curved_area(body: &Solid, mesh: &anvil_brep::tess::TriMesh) -> f64 {
+    mesh.triangles
+        .iter()
+        .zip(&mesh.triangle_face)
+        .filter(|(_, f)| {
+            body.faces
+                .get(**f as usize)
+                .is_some_and(|f| !matches!(f.surface, anvil_brep::Surface::Plane { .. }))
+        })
+        .map(|(t, _)| {
+            let [a, b, c] = t.map(|i| mesh.positions[i as usize]);
+            0.5 * (b - a).cross(c - a).length()
+        })
+        .sum()
+}
