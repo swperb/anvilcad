@@ -155,13 +155,18 @@ macOS the command-line tools are also inside the app, in
   tensor and principal moments, bounding box
 
 **Design for manufacturing**
-- Check Design (Evaluate tab or Tools menu) for CNC machining or sheet metal, using the
-  part's material. Click a finding to highlight its faces.
+- Check Design (Evaluate tab or Tools menu) for CNC machining, sheet metal or 3D printing
+  (FDM, SLA, SLS), using the part's material. Click a finding to highlight its faces.
 - CNC machining: thin walls (thinner limits for metals than plastics), small and deep
   holes, tight or deep inside radii, and sharp inside corners no tool end can reach
 - Sheet metal: one thickness throughout, bend radius against the material's smallest
   (A36 1x thickness, 6061-T6 2.5x, Ti-6Al-4V 4.5x...), flange length, hole size, and
   hole distance from edges, other holes and bends
+- 3D printing, for a build direction you choose and limits you can set for your printer:
+  walls thinner than the nozzle or the thinnest printable wall, floors and roofs of fewer
+  than two layers, overhangs past the support angle (small horizontal holes bridge),
+  holes too small to print open, enclosed hollows that trap resin or powder, and bodies
+  that are not closed
 - Limits are common shop rules of thumb; the report says which ones a part breaks
 - Custom properties (text, number, date, yes/no)
 - Part templates (`.anvprtdot`)

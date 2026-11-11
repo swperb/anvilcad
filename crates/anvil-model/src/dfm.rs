@@ -1,4 +1,5 @@
-//! Design-for-manufacturing checks on a built part, for CNC machining or sheet metal.
+//! Design-for-manufacturing checks on a built part, for CNC machining, sheet metal or
+//! 3D printing (FDM, SLA and SLS).
 //!
 //! The checks read the faceted body: every polygon carries its face's name and exact
 //! surface (plane or cylinder axis and radius), so faces, holes and bends are found
@@ -8,6 +9,8 @@
 //! The limits are common shop rules of thumb, scaled by the part's material where it
 //! matters (plastics need thicker walls; each metal has its own smallest bend radius).
 //! They flag what is likely to be costly or to fail, not what is impossible everywhere.
+//! The 3D printing limits depend on the printer, so [`PrintSettings`] holds them, with
+//! defaults for a common machine of each kind.
 
 use crate::material::{Material, MaterialClass};
 use anvil_kernel::{v3, FaceId, Solid, SurfaceKind, Vec3};
@@ -18,15 +21,91 @@ use std::f64::consts::TAU;
 pub enum Process {
     CncMachining,
     SheetMetal,
+    /// Fused deposition: a heated nozzle lays down plastic lines.
+    Fdm,
+    /// Stereolithography: resin cured layer by layer.
+    Sla,
+    /// Selective laser sintering: powder fused layer by layer; the powder bed holds up
+    /// overhangs.
+    Sls,
 }
 
 impl Process {
-    pub const ALL: [Process; 2] = [Process::CncMachining, Process::SheetMetal];
+    pub const ALL: [Process; 5] =
+        [Process::CncMachining, Process::SheetMetal, Process::Fdm, Process::Sla, Process::Sls];
 
     pub fn label(self) -> &'static str {
         match self {
             Process::CncMachining => "CNC machining",
             Process::SheetMetal => "Sheet metal",
+            Process::Fdm => "FDM printing",
+            Process::Sla => "SLA printing",
+            Process::Sls => "SLS printing",
+        }
+    }
+
+    /// The name on the process's button, under a "3D print" heading for printing.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Process::Fdm => "FDM",
+            Process::Sla => "SLA",
+            Process::Sls => "SLS",
+            other => other.label(),
+        }
+    }
+
+    /// True for the 3D printing processes, which take [`PrintSettings`].
+    pub fn is_printing(self) -> bool {
+        matches!(self, Process::Fdm | Process::Sla | Process::Sls)
+    }
+}
+
+/// The printer the 3D printing checks are made for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PrintSettings {
+    /// Which way is up on the printer, in the part's coordinates (a unit vector). The
+    /// part sits on the build plate at its lowest point along it.
+    pub up: Vec3,
+    /// Layer height, mm.
+    pub layer: f64,
+    /// FDM nozzle diameter, mm; `None` for the other processes.
+    pub nozzle: Option<f64>,
+    /// Thinnest wall that prints reliably, measured across the layers, mm.
+    pub min_wall: f64,
+    /// Smallest hole that prints open and near size, mm across.
+    pub min_hole: f64,
+    /// The furthest a downward face may lean from vertical without supports, degrees;
+    /// `None` when the process needs no supports.
+    pub overhang: Option<f64>,
+}
+
+impl PrintSettings {
+    /// Defaults for a common printer of each kind, with AnvilCAD's up (+Y) as the build
+    /// direction. FDM: a 0.4 mm nozzle at 0.2 mm layers, walls of two lines and the
+    /// usual 45 degree overhang. SLA: 0.05 mm layers. SLS: 0.1 mm layers, no supports.
+    /// For the machining and sheet metal processes these are unused; FDM's are returned.
+    pub fn defaults(process: Process) -> PrintSettings {
+        let up = Vec3::Y;
+        match process {
+            Process::Sla => PrintSettings {
+                up,
+                layer: 0.05,
+                nozzle: None,
+                min_wall: 0.5,
+                min_hole: 0.5,
+                overhang: Some(60.0),
+            },
+            Process::Sls => {
+                PrintSettings { up, layer: 0.1, nozzle: None, min_wall: 0.8, min_hole: 1.5, overhang: None }
+            }
+            _ => PrintSettings {
+                up,
+                layer: 0.2,
+                nozzle: Some(0.4),
+                min_wall: 0.8,
+                min_hole: 2.0,
+                overhang: Some(45.0),
+            },
         }
     }
 }
@@ -69,6 +148,8 @@ pub struct DfmReport {
     pub thickness: Option<f64>,
     /// Bends found in a sheet metal part.
     pub bends: usize,
+    /// Height along the build direction, for a 3D printing check.
+    pub height: Option<f64>,
 }
 
 impl DfmReport {
@@ -124,6 +205,8 @@ struct Sample {
     thickness: f64,
     area: f64,
     point: Vec3,
+    /// Outward normal where the ray started.
+    normal: Vec3,
 }
 
 /// A bounding-volume tree over the body's polygons, so rays test only the few
@@ -384,6 +467,7 @@ impl<'a> Part<'a> {
                         thickness: hit.t + 1e-6,
                         area: poly_area(&p.verts),
                         point: c,
+                        normal: p.normal,
                     });
                 }
             }
@@ -433,8 +517,20 @@ fn mm(v: f64) -> String {
     format!("{v:.2} mm")
 }
 
-/// Runs the checks for `process` on `body`.
+/// Runs the checks for `process` on `body`, with the default printer for a 3D printing
+/// process.
 pub fn check(body: &Solid, material: Option<&Material>, process: Process) -> DfmReport {
+    check_with(body, material, process, &PrintSettings::defaults(process))
+}
+
+/// Runs the checks for `process` on `body`; `print` is the printer for a 3D printing
+/// process and is unused otherwise.
+pub fn check_with(
+    body: &Solid,
+    material: Option<&Material>,
+    process: Process,
+    print: &PrintSettings,
+) -> DfmReport {
     let part = Part::new(body);
     let mut report = DfmReport::default();
     if part.faces.is_empty() {
@@ -443,6 +539,7 @@ pub fn check(body: &Solid, material: Option<&Material>, process: Process) -> Dfm
     match process {
         Process::CncMachining => machining(&part, material, &mut report),
         Process::SheetMetal => sheet_metal(&part, material, &mut report),
+        Process::Fdm | Process::Sla | Process::Sls => printing(&part, process, print, &mut report),
     }
     // Merge identical findings (the four corners of one pocket, say).
     let mut merged: Vec<Finding> = Vec::new();
@@ -830,6 +927,223 @@ fn sheet_metal(part: &Part, material: Option<&Material>, report: &mut DfmReport)
     }
 }
 
+/// Horizontal holes up to this size across bridge over without supports (mm).
+const BRIDGED_HOLE: f64 = 10.0;
+/// Downward faces smaller than this are left out of the overhang check (mm^2).
+const MIN_OVERHANG_AREA: f64 = 0.01;
+
+fn printing(part: &Part, process: Process, print: &PrintSettings, report: &mut DfmReport) {
+    let up = print.up.normalized();
+    let what = process.label();
+    let heights = part.body.polygons.iter().flat_map(|p| p.verts.iter()).map(|v| v.dot(up));
+    let (base, top) = heights.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), h| (lo.min(h), hi.max(h)));
+    report.height = Some(top - base);
+
+    let open = part.body.open_edges();
+    if open > 0 {
+        report.findings.push(Finding {
+            severity: Severity::Error,
+            rule: "Not closed",
+            message: format!(
+                "The body has {open} open edges; a slicer needs a closed solid to tell inside from outside."
+            ),
+            faces: vec![],
+            count: 1,
+        });
+    }
+
+    // Walls. One measured along the build direction is a floor or roof, made of layers;
+    // any other is made of lines the nozzle lays (or the laser draws) side by side.
+    let mut thinnest: BTreeMap<(FaceId, FaceId), (f64, bool)> = BTreeMap::new();
+    for s in part.thickness_samples() {
+        let key = if s.face <= s.hit { (s.face, s.hit) } else { (s.hit, s.face) };
+        let stacked = s.normal.dot(up).abs() > 0.99;
+        let e = thinnest.entry(key).or_insert((f64::INFINITY, stacked));
+        if s.thickness < e.0 {
+            *e = (s.thickness, stacked);
+        }
+    }
+    for ((a, b), (t, stacked)) in thinnest {
+        let finding = if stacked {
+            let need = 2.0 * print.layer;
+            (t < need).then(|| {
+                let layers = t / print.layer;
+                if t + 1e-9 < print.layer {
+                    (
+                        Severity::Error,
+                        "Thinner than a layer",
+                        format!(
+                            "Floor or roof is {} thick, less than one {} layer; it will not print.",
+                            mm(t),
+                            mm(print.layer)
+                        ),
+                    )
+                } else {
+                    (
+                        Severity::Warning,
+                        "Few layers",
+                        format!(
+                            "Floor or roof is {} thick, {layers:.1} layers of {}; at least two layers ({}) hold together.",
+                            mm(t),
+                            mm(print.layer),
+                            mm(need)
+                        ),
+                    )
+                }
+            })
+        } else {
+            match print.nozzle {
+                Some(n) if t + 1e-9 < n => Some((
+                    Severity::Error,
+                    "Thinner than the nozzle",
+                    format!(
+                        "Wall is {} thick, narrower than the {} nozzle's line; the slicer will leave it out.",
+                        mm(t),
+                        mm(n)
+                    ),
+                )),
+                _ if t + 1e-9 < print.min_wall => Some((
+                    if print.nozzle.is_none() && t < 0.5 * print.min_wall {
+                        Severity::Error
+                    } else {
+                        Severity::Warning
+                    },
+                    "Thin wall",
+                    format!(
+                        "Wall is {} thick; {what} needs at least {} to print reliably.",
+                        mm(t),
+                        mm(print.min_wall)
+                    ),
+                )),
+                _ => None,
+            }
+        };
+        if let Some((severity, rule, message)) = finding {
+            report.findings.push(Finding { severity, rule, message, faces: vec![a, b], count: 1 });
+        }
+    }
+
+    // Holes.
+    let rounds = part.rounds();
+    let holes: Vec<&Round> = rounds.iter().filter(|r| is_hole(r)).collect();
+    for h in &holes {
+        let d = 2.0 * h.radius;
+        if d + 1e-9 < print.min_hole {
+            report.findings.push(Finding {
+                severity: Severity::Warning,
+                rule: "Small hole",
+                message: format!(
+                    "Hole is {} across; holes under {} print undersized or close up. Print it larger and drill it to size.",
+                    mm(d),
+                    mm(print.min_hole)
+                ),
+                faces: vec![h.id],
+                count: 1,
+            });
+        }
+    }
+
+    // Overhangs: downward faces leaning further from vertical than the limit, other than
+    // those on the build plate and the tops of small horizontal holes, which bridge.
+    if let Some(limit) = print.overhang {
+        let steep = limit.to_radians().sin();
+        let tol = 1e-6 * (top - base).max(1.0);
+        let bridged: Vec<FaceId> = holes
+            .iter()
+            .filter(|h| 2.0 * h.radius <= BRIDGED_HOLE && h.axis.dot(up).abs() < 0.1)
+            .map(|h| h.id)
+            .collect();
+        let mut faces: BTreeMap<FaceId, f64> = BTreeMap::new();
+        for p in &part.body.polygons {
+            if -p.normal.dot(up) <= steep + 1e-9 || bridged.contains(&p.tag.id) {
+                continue;
+            }
+            if p.verts.iter().all(|v| v.dot(up) < base + tol) {
+                continue;
+            }
+            *faces.entry(p.tag.id).or_default() += poly_area(&p.verts);
+        }
+        faces.retain(|_, a| *a >= MIN_OVERHANG_AREA);
+        if !faces.is_empty() {
+            let area: f64 = faces.values().sum();
+            report.findings.push(Finding {
+                severity: Severity::Warning,
+                rule: "Overhang",
+                message: format!(
+                    "{area:.1} mm\u{b2} faces down more than {limit:.0}\u{b0} from vertical and needs supports; turning the part may avoid them."
+                ),
+                count: faces.len(),
+                faces: faces.into_keys().collect(),
+            });
+        }
+    }
+
+    // Enclosed hollows: shells wound inward. FDM prints them as part of the infill; in a
+    // resin or powder bed they trap what the part is made from.
+    if matches!(process, Process::Sla | Process::Sls) {
+        for (volume, faces) in hollows(part.body) {
+            let (severity, message) = if process == Process::Sls {
+                (
+                    Severity::Error,
+                    format!(
+                        "An enclosed hollow of {volume:.1} mm\u{b3} traps unsintered powder; add escape holes so it can be cleared, or fill it."
+                    ),
+                )
+            } else {
+                (
+                    Severity::Warning,
+                    format!(
+                        "An enclosed hollow of {volume:.1} mm\u{b3} traps liquid resin, which can crack the part; add drain holes, or fill it."
+                    ),
+                )
+            };
+            report.findings.push(Finding { severity, rule: "Enclosed hollow", message, faces, count: 1 });
+        }
+    }
+}
+
+/// The body's inward-wound shells (enclosed hollows): each one's volume and faces.
+/// Shells are the sets of polygons joined through shared corners.
+fn hollows(body: &Solid) -> Vec<(f64, Vec<FaceId>)> {
+    let key = |v: Vec3| ((v.x * 1e5).round() as i64, (v.y * 1e5).round() as i64, (v.z * 1e5).round() as i64);
+    let n = body.polygons.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut first: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    for (i, p) in body.polygons.iter().enumerate() {
+        for &v in &p.verts {
+            let j = *first.entry(key(v)).or_insert(i);
+            let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+            parent[a] = b;
+        }
+    }
+    let mut shells: BTreeMap<usize, (f64, Vec<FaceId>)> = BTreeMap::new();
+    for (i, p) in body.polygons.iter().enumerate() {
+        let r = root(&mut parent, i);
+        let e = shells.entry(r).or_default();
+        let v0 = p.verts[0];
+        for k in 1..p.verts.len().saturating_sub(1) {
+            e.0 += v0.dot(p.verts[k].cross(p.verts[k + 1])) / 6.0;
+        }
+        e.1.push(p.tag.id);
+    }
+    shells
+        .into_values()
+        .filter(|(v, _)| *v < -1e-9)
+        .map(|(v, mut faces)| {
+            faces.sort();
+            faces.dedup();
+            (-v, faces)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1021,6 +1335,173 @@ mod tests {
         let rules: Vec<&str> = r.findings.iter().map(|f| f.rule).collect();
         assert_eq!(rules.iter().filter(|r| **r == "Hole too close").count(), 1, "{:#?}", r.findings);
         assert_eq!(rules.iter().filter(|r| **r == "Small hole").count(), 1, "{:#?}", r.findings);
+    }
+
+    // ----- 3D printing -----
+
+    fn print(body: &Solid, process: Process) -> DfmReport {
+        check(body, None, process)
+    }
+
+    fn rules(r: &DfmReport) -> Vec<&'static str> {
+        r.findings.iter().map(|f| f.rule).collect()
+    }
+
+    #[test]
+    fn plain_block_prints_cleanly_and_reports_its_height() {
+        let b = cuboid(v3(0.0, 0.0, 0.0), v3(20.0, 30.0, 10.0), 1);
+        for p in [Process::Fdm, Process::Sla, Process::Sls] {
+            let r = print(&b, p);
+            assert!(r.findings.is_empty(), "{p:?}: {:#?}", r.findings);
+            assert_eq!(r.height, Some(30.0), "built along +Y");
+        }
+        let flat = PrintSettings { up: Vec3::Z, ..PrintSettings::defaults(Process::Fdm) };
+        assert_eq!(check_with(&b, None, Process::Fdm, &flat).height, Some(10.0));
+    }
+
+    #[test]
+    fn a_ledge_overhangs_unless_turned_over_or_sintered() {
+        // A post on the plate with a slab reaching out from its top: the slab's 20 x 10
+        // underside faces straight down.
+        let mut polys = cuboid(v3(0.0, 0.0, 0.0), v3(10.0, 20.0, 10.0), 1).polygons;
+        polys.extend(cuboid(v3(10.0, 15.0, 0.0), v3(30.0, 20.0, 10.0), 2).polygons);
+        let ledge = Solid::new(polys);
+        let r = print(&ledge, Process::Fdm);
+        let over: Vec<&Finding> = r.findings.iter().filter(|f| f.rule == "Overhang").collect();
+        assert_eq!(over.len(), 1, "{:#?}", r.findings);
+        assert_eq!(over[0].faces, vec![FaceId { feature: 2, index: 2 }]);
+        assert!(
+            over[0].message.starts_with("200.0 mm\u{b2} faces down more than 45\u{b0}"),
+            "{}",
+            over[0].message
+        );
+        assert_eq!(over[0].severity, Severity::Warning);
+        // Printed upside down the slab's top is on the plate and nothing hangs over.
+        let flipped = PrintSettings { up: -Vec3::Y, ..PrintSettings::defaults(Process::Fdm) };
+        let r = check_with(&ledge, None, Process::Fdm, &flipped);
+        assert!(!rules(&r).contains(&"Overhang"), "{:#?}", r.findings);
+        // The powder bed holds it up.
+        assert!(!rules(&print(&ledge, Process::Sls)).contains(&"Overhang"));
+    }
+
+    #[test]
+    fn overhang_limit_is_measured_from_vertical() {
+        // A wedge whose underside leans 50 degrees from vertical (rising 1 in tan 40).
+        let rise = 40f64.to_radians().tan() * 20.0;
+        let quad = |a: Vec3, b: Vec3, c: Vec3, d: Vec3, i: u32| {
+            Polygon::new(
+                vec![a, b, c, d],
+                FaceTag { id: FaceId { feature: 1, index: i }, surface: SurfaceKind::Plane },
+            )
+        };
+        // Points: the wall at x = 0 from y = 0 to y = rise + 5; the underside runs from
+        // (0, 0) up to (20, rise); the top is flat at y = rise + 5.
+        let (h, w) = (rise + 5.0, 10.0);
+        let p = |x: f64, y: f64, z: f64| v3(x, y, z);
+        let polys = vec![
+            quad(p(0.0, 0.0, 0.0), p(0.0, 0.0, w), p(0.0, h, w), p(0.0, h, 0.0), 0),
+            quad(p(0.0, 0.0, 0.0), p(20.0, rise, 0.0), p(20.0, rise, w), p(0.0, 0.0, w), 1),
+            quad(p(20.0, rise, 0.0), p(20.0, h, 0.0), p(20.0, h, w), p(20.0, rise, w), 2),
+            quad(p(0.0, h, 0.0), p(0.0, h, w), p(20.0, h, w), p(20.0, h, 0.0), 3),
+            quad(p(0.0, 0.0, 0.0), p(0.0, h, 0.0), p(20.0, h, 0.0), p(20.0, rise, 0.0), 4),
+            quad(p(0.0, 0.0, w), p(20.0, rise, w), p(20.0, h, w), p(0.0, h, w), 5),
+        ];
+        let wedge = Solid::new(polys.into_iter().flatten().collect());
+        assert_eq!(wedge.open_edges(), 0);
+        assert!(wedge.mass_properties().volume > 0.0);
+        let at = |limit: f64| {
+            let s = PrintSettings { overhang: Some(limit), ..PrintSettings::defaults(Process::Fdm) };
+            rules(&check_with(&wedge, None, Process::Fdm, &s)).contains(&"Overhang")
+        };
+        assert!(at(45.0), "50 degrees is past a 45 degree limit");
+        assert!(!at(55.0), "but within 55");
+    }
+
+    #[test]
+    fn walls_too_thin_for_the_nozzle_and_floors_too_few_layers() {
+        let fdm = |b: &Solid| print(b, Process::Fdm);
+        // Upright walls, measured across the nozzle's lines.
+        let r = fdm(&cuboid(v3(0.0, 0.0, 0.0), v3(0.3, 20.0, 20.0), 1));
+        assert!(r
+            .findings
+            .iter()
+            .any(|f| f.rule == "Thinner than the nozzle" && f.severity == Severity::Error));
+        let r = fdm(&cuboid(v3(0.0, 0.0, 0.0), v3(0.6, 20.0, 20.0), 1));
+        assert!(
+            r.findings.iter().any(|f| f.rule == "Thin wall" && f.severity == Severity::Warning),
+            "{:#?}",
+            r.findings
+        );
+        assert!(fdm(&cuboid(v3(0.0, 0.0, 0.0), v3(0.8, 20.0, 20.0), 1)).findings.is_empty());
+        // Flat plates, measured in layers of 0.2 mm.
+        let r = fdm(&cuboid(v3(0.0, 0.0, 0.0), v3(20.0, 0.3, 20.0), 1));
+        let few: Vec<&Finding> = r.findings.iter().filter(|f| f.rule == "Few layers").collect();
+        assert_eq!(few.len(), 1, "{:#?}", r.findings);
+        assert!(few[0].message.contains("1.5 layers"), "{}", few[0].message);
+        let r = fdm(&cuboid(v3(0.0, 0.0, 0.0), v3(20.0, 0.15, 20.0), 1));
+        assert!(r.findings.iter().any(|f| f.rule == "Thinner than a layer" && f.severity == Severity::Error));
+        // SLA prints walls down to 0.5 mm.
+        assert!(print(&cuboid(v3(0.0, 0.0, 0.0), v3(0.6, 20.0, 20.0), 1), Process::Sla).findings.is_empty());
+    }
+
+    #[test]
+    fn holes_small_for_the_process_and_bridged_holes() {
+        // A block with a 1.5 mm hole down through it (along +Y, the build direction).
+        let mut doc = Document::new();
+        extrude(&mut doc, PlaneRef::Top, rect(30.0, 30.0, 0.0, 0.0), 10.0, BodyOp::Boss);
+        let mut sk = SketchFeature::new(PlaneRef::Top);
+        sk.sketch = circles(&[(0.0, 0.0, 1.5)]);
+        let id = doc.add_feature(FeatureKind::Sketch(sk));
+        doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: id,
+            end: EndCondition::ThroughAll,
+            reverse: true,
+            op: BodyOp::Cut,
+            ..Default::default()
+        }));
+        let body = built(&mut doc);
+        let r = print(&body, Process::Fdm);
+        assert_eq!(rules(&r), vec!["Small hole"], "{:#?}", r.findings);
+        assert!(print(&body, Process::Sla).findings.is_empty(), "SLA prints 1.5 mm holes");
+
+        // Holes across the build direction: a 6 mm one bridges, a 14 mm one does not.
+        for (d, overhangs) in [(6.0, false), (14.0, true)] {
+            let mut doc = Document::new();
+            let block = extrude(&mut doc, PlaneRef::Front, rect(40.0, 40.0, 0.0, 20.0), 20.0, BodyOp::Boss);
+            let front = PlaneRef::Face(FaceId { feature: block, index: FaceId::END_CAP });
+            extrude(&mut doc, front, circles(&[(0.0, 20.0, d)]), -1.0, BodyOp::Cut);
+            let r = print(&built(&mut doc), Process::Fdm);
+            assert_eq!(rules(&r).contains(&"Overhang"), overhangs, "{d} mm: {:#?}", r.findings);
+        }
+    }
+
+    #[test]
+    fn enclosed_hollow_traps_resin_and_powder() {
+        let mut polys = cuboid(v3(0.0, 0.0, 0.0), v3(30.0, 30.0, 30.0), 1).polygons;
+        let mut void = cuboid(v3(10.0, 10.0, 10.0), v3(20.0, 20.0, 20.0), 2);
+        void.flip();
+        polys.extend(void.polygons);
+        let hollow = Solid::new(polys);
+        let found = |p: Process| -> Option<Finding> {
+            print(&hollow, p).findings.into_iter().find(|f| f.rule == "Enclosed hollow")
+        };
+        let sls = found(Process::Sls).expect("SLS flags it");
+        assert_eq!(sls.severity, Severity::Error);
+        assert!(sls.message.contains("1000.0 mm\u{b3}"), "{}", sls.message);
+        assert_eq!(sls.faces.len(), 6);
+        assert!(sls.faces.iter().all(|f| f.feature == 2));
+        assert_eq!(found(Process::Sla).map(|f| f.severity), Some(Severity::Warning));
+        assert!(found(Process::Fdm).is_none(), "FDM prints a hollow as infill");
+    }
+
+    #[test]
+    fn open_body_is_not_printable() {
+        let mut b = cuboid(v3(0.0, 0.0, 0.0), v3(20.0, 20.0, 20.0), 1);
+        b.polygons.pop();
+        let r = print(&b, Process::Fdm);
+        let f = r.findings.iter().find(|f| f.rule == "Not closed").expect("flagged");
+        assert_eq!(f.severity, Severity::Error);
+        assert!(f.message.starts_with("The body has 4 open edges"), "{}", f.message);
     }
 
     #[test]
