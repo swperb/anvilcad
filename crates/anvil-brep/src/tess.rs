@@ -414,6 +414,15 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
     // number of times. Unlike a centroid test, this is right for the slivers that
     // nearly collinear boundary points (a circle on a cylinder, say) leave behind.
     let parity = boundary_parity(&cdt);
+    // A pointed cone has no normal at its apex: each triangle meeting there gets its own
+    // copy of the apex, shaded with the normal along the cone line through the
+    // triangle, or one side of the tip would be lit as if it faced the other way.
+    let apex = match face.surface {
+        Surface::Cone { frame, radius, half_angle, apex: true } => {
+            Some(crate::geom::cone_apex(&frame, radius, half_angle))
+        }
+        _ => None,
+    };
     for tri in cdt.inner_faces() {
         if !parity.get(tri.fix().index()).copied().unwrap_or(false) {
             continue;
@@ -431,6 +440,16 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         let ccw = (uv[1] - uv[0]).perp_dot(uv[2] - uv[0]) > 0.0;
         if ccw == face.reversed {
             idx.swap(1, 2);
+        }
+        if let Some(tip) = apex {
+            let at_tip =
+                |i: u32| (mesh.positions[i as usize] - tip).length() <= tol::LINEAR * (1.0 + tip.length());
+            if let Some(k) = (0..3).find(|&k| at_tip(idx[k])) {
+                let centroid = idx.iter().map(|&i| mesh.positions[i as usize]).sum::<DVec3>() / 3.0;
+                mesh.positions.push(mesh.positions[idx[k] as usize]);
+                mesh.normals.push(face.normal_at(centroid));
+                idx[k] = (mesh.positions.len() - 1) as u32;
+            }
         }
         mesh.triangles.push(idx);
         mesh.triangle_face.push(face_index);
@@ -562,4 +581,45 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
 fn point(q: DVec2) -> Point2<f64> {
     let flush = |v: f64| if v.abs() < 1e-15 { 0.0 } else { v };
     Point2::new(flush(q.x), flush(q.y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geom::Frame;
+    use crate::profile::{Loop2, Segment, build_regions};
+
+    #[test]
+    fn a_cone_tip_is_shaded_along_each_side() {
+        // A pointed cone (radius 2, height 3) about z: every vertex normal, the apex's
+        // copies included, must lean the way its triangle faces. A single normal at the
+        // apex points one way and lights the far side of the tip backwards.
+        let pts = [DVec2::ZERO, DVec2::new(2.0, 0.0), DVec2::new(0.0, 3.0)];
+        let l = Loop2::new((0..3).map(|i| Segment::Line { a: pts[i], b: pts[(i + 1) % 3] }).collect());
+        let r = build_regions(&[l]).expect("region");
+        let plane = Frame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Z, z: -DVec3::Y };
+        let s = crate::revolve::revolve(&plane, &r[0], DVec2::ZERO, DVec2::Y, TAU).expect("cone");
+        let m = tessellate(&s, &TessParams::default()).expect("tess");
+        assert!(m.is_watertight());
+        let apex = DVec3::new(0.0, 0.0, 3.0);
+        let mut at_apex = 0;
+        for t in &m.triangles {
+            let [a, b, c] = t.map(|i| m.positions[i as usize]);
+            let n = (b - a).cross(c - a).normalize();
+            for &i in t {
+                let normal = m.normals[i as usize];
+                assert!(
+                    normal.dot(n) > 0.5,
+                    "normal {normal} against triangle {n} at {}",
+                    m.positions[i as usize]
+                );
+                if (m.positions[i as usize] - apex).length() < 1e-9 {
+                    at_apex += 1;
+                    // The slant normal of a cone of half angle atan(2/3).
+                    assert!((normal.z - 2.0 / 13f64.sqrt()).abs() < 1e-9, "{normal}");
+                }
+            }
+        }
+        assert!(at_apex >= 8, "{at_apex} triangles meet at the apex");
+    }
 }
