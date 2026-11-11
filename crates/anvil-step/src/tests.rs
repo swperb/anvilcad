@@ -564,3 +564,53 @@ fn loose_vertices_are_healed_within_the_stated_accuracy() {
     let why = imp.bodies[0].not_exact.clone().unwrap_or_default();
     assert!(why.contains("stated accuracy"), "{why}");
 }
+
+#[test]
+fn a_band_round_a_ball_imports_exactly() {
+    // A ball of radius 3 cut by the planes z = -1 and z = 1, as another system writes it:
+    // one spherical face with two circular loops, whose areas cancel. The importer lays a
+    // sphere face out from the point opposite its loops' mean area and used to give up
+    // here, importing the body as a mesh; it now takes the file's axis, whose opposite
+    // pole lies off the band.
+    let (r, h) = (3.0f64, 1.0f64);
+    let rho = (r * r - h * h).sqrt();
+    let mut f = Fixture::new();
+    let (b, t) = (DVec3::new(rho, 0.0, -h), DVec3::new(rho, 0.0, h));
+    let vb = f.vertex(b);
+    let vt = f.vertex(t);
+    let ab = f.axis(DVec3::new(0.0, 0.0, -h), DVec3::Z, DVec3::X);
+    let cb = f.e(format!("CIRCLE('',#{ab},{rho:?})"));
+    let at = f.axis(DVec3::new(0.0, 0.0, h), DVec3::Z, DVec3::X);
+    let ct = f.e(format!("CIRCLE('',#{at},{rho:?})"));
+    let eb = f.e(format!("EDGE_CURVE('',#{vb},#{vb},#{cb},.T.)"));
+    let et = f.e(format!("EDGE_CURVE('',#{vt},#{vt},#{ct},.T.)"));
+    let lp = |f: &mut Fixture, e: usize, fw: bool| {
+        let oe = f.e(format!("ORIENTED_EDGE('',*,*,#{e},{})", if fw { ".T." } else { ".F." }));
+        f.e(format!("EDGE_LOOP('',(#{oe}))"))
+    };
+    let lb_disc = lp(&mut f, eb, false);
+    let lt_disc = lp(&mut f, et, true);
+    let lb_band = lp(&mut f, eb, true);
+    let lt_band = lp(&mut f, et, false);
+    let pb = f.e(format!("PLANE('',#{ab})"));
+    let bb = f.e(format!("FACE_OUTER_BOUND('',#{lb_disc},.T.)"));
+    let fb = f.e(format!("ADVANCED_FACE('',(#{bb}),#{pb},.F.)"));
+    let pt = f.e(format!("PLANE('',#{at})"));
+    let bt = f.e(format!("FACE_OUTER_BOUND('',#{lt_disc},.T.)"));
+    let ft = f.e(format!("ADVANCED_FACE('',(#{bt}),#{pt},.T.)"));
+    let a0 = f.axis(DVec3::ZERO, DVec3::Z, DVec3::X);
+    let sph = f.e(format!("SPHERICAL_SURFACE('',#{a0},{r:?})"));
+    let b1 = f.e(format!("FACE_OUTER_BOUND('',#{lb_band},.T.)"));
+    let b2 = f.e(format!("FACE_BOUND('',#{lt_band},.T.)"));
+    let fs = f.e(format!("ADVANCED_FACE('',(#{b1},#{b2}),#{sph},.T.)"));
+    let shell = f.e(format!("CLOSED_SHELL('',(#{fb},#{ft},#{fs}))"));
+    f.e(format!("MANIFOLD_SOLID_BREP('band',#{shell})"));
+    let imp = import(&f.text()).expect("import");
+    let body = &imp.bodies[0];
+    let s = body.exact.as_ref().unwrap_or_else(|| panic!("imported as a mesh: {:?}", body.not_exact));
+    check::validate(s).expect("valid");
+    // pi (r^2 (z1 - z0) - (z1^3 - z0^3) / 3) between z0 = -1 and z1 = 1.
+    let want = PI * (r * r * 2.0 * h - 2.0 * h.powi(3) / 3.0);
+    let got = exact_volume(s);
+    assert!((got - want).abs() / want < 2e-3, "{got} vs {want}");
+}
