@@ -946,3 +946,31 @@ fn a_plane_through_a_balls_poles_halves_it() {
         assert!(close(fine_volume(&d), full * (1.0 - frac), 1e-4), "{lo}: {}", fine_volume(&d));
     }
 }
+
+#[test]
+fn cylinders_on_one_axis_with_one_radius_combine() {
+    // Two cylinders of radius 2 on the z axis, from 0 to 5 and from 3 to 8, share part of
+    // their side face. With the second turned about the axis, each cap circle crosses
+    // the other cylinder's seam, which must split it.
+    let a = cylinder(DVec3::ZERO, DVec3::Z, 2.0, 0.0, 5.0);
+    let f = Frame::new(DVec3::ZERO, DVec3::Z, DVec3::new(1.0, 0.7, 0.0)).expect("frame");
+    let l = Loop2::new(vec![Segment::circle(DVec2::ZERO, 2.0)]);
+    let reg = build_regions(&[l]).expect("region");
+    let b = extrude(&f, &reg[0], 3.0, 8.0).expect("turned cylinder");
+    let b_aligned = cylinder(DVec3::ZERO, DVec3::Z, 2.0, 3.0, 8.0);
+    for tool in [&b, &b_aligned] {
+        let u = boolean(&a, tool, BoolOp::Union).expect("union");
+        let d = boolean(&a, tool, BoolOp::Subtract).expect("subtract");
+        let i = boolean(&a, tool, BoolOp::Intersect).expect("intersect");
+        assert_eq!((u.len(), d.len(), i.len()), (1, 1, 1));
+        assert!(close(fine_volume(&u), 32.0 * PI, 1e-4), "{}", fine_volume(&u));
+        assert!(close(fine_volume(&d), 12.0 * PI, 1e-4), "{}", fine_volume(&d));
+        assert!(close(fine_volume(&i), 8.0 * PI, 1e-4), "{}", fine_volume(&i));
+    }
+    // A slice of the same radius taken from the middle leaves two pieces.
+    let long = cylinder(DVec3::ZERO, DVec3::Z, 2.0, 0.0, 8.0);
+    let slice = extrude(&f, &reg[0], 3.0, 5.0).expect("slice");
+    let d = boolean(&long, &slice, BoolOp::Subtract).expect("subtract");
+    assert_eq!(d.len(), 2);
+    assert!(close(fine_volume(&d), 24.0 * PI, 1e-4), "{}", fine_volume(&d));
+}
