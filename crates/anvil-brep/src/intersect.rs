@@ -20,6 +20,14 @@ pub enum Ssi {
 
 /// Intersects two surfaces. `tol` decides tangency and coincidence.
 pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
+    surfaces_within(a, b, tol, None)
+}
+
+/// Like [`surfaces`], with the box (lowest and highest corners) that the faces being
+/// intersected lie in. Curves that run off to infinity (a plane cutting a cone in a
+/// hyperbola or parabola) need it: they are returned as the piece reaching past the
+/// box, where [`surfaces`] reports them unsupported.
+pub fn surfaces_within(a: &Surface, b: &Surface, tol: f64, window: Option<(DVec3, DVec3)>) -> Result<Ssi> {
     if a.coincident(b, tol) {
         return Ok(Ssi::Coincident);
     }
@@ -38,7 +46,7 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
         }
         (Surface::Plane { frame: fp }, Surface::Cone { frame, radius, half_angle, .. })
         | (Surface::Cone { frame, radius, half_angle, .. }, Surface::Plane { frame: fp }) => {
-            plane_cone(fp, frame, *radius, *half_angle, tol)
+            plane_cone(fp, frame, *radius, *half_angle, tol, window)
         }
         (Surface::Cylinder { frame: fc, radius: rc }, Surface::Cone { frame, radius, half_angle, .. })
         | (Surface::Cone { frame, radius, half_angle, .. }, Surface::Cylinder { frame: fc, radius: rc }) => {
@@ -248,7 +256,14 @@ fn torus_with(t: &Frame, major: f64, minor: f64, other: &Surface, tol: f64) -> R
     Ok(if curves.is_empty() { Ssi::None } else { Ssi::Curves(curves) })
 }
 
-fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) -> Result<Ssi> {
+fn plane_cone(
+    plane: &Frame,
+    cone: &Frame,
+    r: f64,
+    half_angle: f64,
+    tol: f64,
+    window: Option<(DVec3, DVec3)>,
+) -> Result<Ssi> {
     let n = plane.z;
     let axis = cone.z;
     let cos = n.dot(axis);
@@ -284,11 +299,130 @@ fn plane_cone(plane: &Frame, cone: &Frame, r: f64, half_angle: f64, tol: f64) ->
         }
         return Ok(Ssi::Curves(curves));
     }
+    // Steeper than the cone's side: a hyperbola or parabola, unbounded, so only the
+    // piece reaching across the faces' box is returned, exactly.
+    if let Some(window) = window
+        && let Some(curves) =
+            open_conic(plane, apex, axis * half_angle.tan().signum(), half_angle.abs(), window)
+    {
+        return Ok(Ssi::Curves(curves));
+    }
     // At an angle: an ellipse when the plane cuts every generator, traced in general.
     Ok(Ssi::Curves(crate::ssi::intersect(
         &Surface::Plane { frame: *plane },
         &cone_surface(cone, r, half_angle),
     )?))
+}
+
+/// Where a plane steeper than a cone's side meets the cone's own nappe (the one `w`
+/// points into from the `apex`): one branch of a hyperbola, or a parabola where the
+/// plane is parallel to a generator. `None` when the plane is shallower (an ellipse,
+/// traced in general) or passes through the apex (handled before). The curve is an
+/// exact rational quadratic spline, long enough to reach past `window`.
+///
+/// In the plane, with its origin where the apex projects onto it, `e1` along the axis's
+/// projection and `e2` across it, a point `(x, y)` is on the cone when
+/// `(q s + p x)^2 = cos^2(a) (s^2 + x^2 + y^2)`: `s` is the apex's height over the plane,
+/// `q` and `p` the axis's components along the normal and `e1`, `a` the half angle.
+/// That is `k x^2 - c^2 y^2 + 2 q s p x + (q^2 - c^2) s^2 = 0` with `c = cos(a)` and
+/// `k = p^2 - c^2`: a hyperbola for `k > 0`, a parabola for `k = 0`.
+fn open_conic(
+    plane: &Frame,
+    apex: DVec3,
+    w: DVec3,
+    half_angle: f64,
+    window: (DVec3, DVec3),
+) -> Option<Vec<Curve>> {
+    let n = plane.z;
+    let c = half_angle.cos();
+    let q = w.dot(n);
+    let along = w - n * q;
+    let p = along.length();
+    let k = p * p - c * c;
+    if k < -1e-12 || p < 1e-12 {
+        return None;
+    }
+    let e1 = along / p;
+    let e2 = n.cross(e1);
+    let s = n.dot(plane.origin - apex);
+    if s.abs() < 1e-12 {
+        return None;
+    }
+    let origin = apex + n * s;
+    let at = |x: f64, y: f64| origin + e1 * x + e2 * y;
+    // Points farther than this from the plane's origin are past the window.
+    let (lo, hi) = window;
+    let reach = ((lo + hi) * 0.5 - origin).length() + (hi - lo).length() * 0.5 + 1.0;
+    let own = |x: f64| q * s + p * x > 0.0;
+    let mut points = Vec::new();
+    let mut weights = Vec::new();
+    let mut knots = Vec::new();
+    if k > 1e-9 {
+        // k (x - x0)^2 - c^2 y^2 = R, with R = s^2 c^2 sin^2(a) / k.
+        let x0 = -q * s * p / k;
+        let big_r = s * s * c * c * (1.0 - c * c) / k;
+        let (ah, bh) = ((big_r / k).sqrt(), big_r.sqrt() / c);
+        if !(ah > 0.0 && bh > 0.0) {
+            return None;
+        }
+        // The branch on the cone's own nappe.
+        let sigma = if own(x0 + ah) {
+            1.0
+        } else if own(x0 - ah) {
+            -1.0
+        } else {
+            return None;
+        };
+        let t_end = (reach / bh).asinh() + 0.5;
+        let m = ((2.0 * t_end / 0.5).ceil() as usize).max(2);
+        let ts: Vec<f64> = (0..=m).map(|i| -t_end + 2.0 * t_end * i as f64 / m as f64).collect();
+        let point = |t: f64| at(x0 + sigma * ah * t.cosh(), bh * t.sinh());
+        for (i, pair) in ts.windows(2).enumerate() {
+            let (mid, half) = (0.5 * (pair[0] + pair[1]), 0.5 * (pair[1] - pair[0]));
+            if i == 0 {
+                points.push(point(pair[0]));
+                weights.push(1.0);
+                knots.extend([pair[0]; 3]);
+            }
+            // Where the tangents at the ends meet; its weight is cosh of half the step.
+            points.push(at(x0 + sigma * ah * mid.cosh() / half.cosh(), bh * mid.sinh() / half.cosh()));
+            weights.push(half.cosh());
+            points.push(point(pair[1]));
+            weights.push(1.0);
+            knots.extend(if i + 2 == ts.len() { [pair[1]; 3].to_vec() } else { vec![pair[1]; 2] });
+        }
+    } else {
+        // Parallel to a generator: x = (c^2 y^2 - (q^2 - c^2) s^2) / (2 q s p).
+        let den = 2.0 * q * s * p;
+        if den.abs() < 1e-12 {
+            return None;
+        }
+        let x_of = |y: f64| (c * c * y * y - (q * q - c * c) * s * s) / den;
+        if !own(x_of(0.0)) {
+            return Some(Vec::new());
+        }
+        let m = 16;
+        let ys: Vec<f64> = (0..=m).map(|i| -reach + 2.0 * reach * i as f64 / m as f64).collect();
+        for (i, pair) in ys.windows(2).enumerate() {
+            let (y0, y1) = (pair[0], pair[1]);
+            if i == 0 {
+                points.push(at(x_of(y0), y0));
+                weights.push(1.0);
+                knots.extend([y0; 3]);
+            }
+            // A parabola is a polynomial quadratic: its middle control point is where
+            // the end tangents meet, half way along in y.
+            let slope = c * c * y0 / den * 2.0;
+            let half = 0.5 * (y1 - y0);
+            points.push(at(x_of(y0) + slope * half, y0 + half));
+            weights.push(1.0);
+            points.push(at(x_of(y1), y1));
+            weights.push(1.0);
+            knots.extend(if i + 2 == ys.len() { [y1; 3].to_vec() } else { vec![y1; 2] });
+        }
+    }
+    let spline = crate::spline::Spline::new(2, knots, points, weights).ok()?;
+    Some(vec![Curve::Spline(std::sync::Arc::new(spline))])
 }
 
 fn cone_surface(frame: &Frame, radius: f64, half_angle: f64) -> Surface {
@@ -771,6 +905,39 @@ mod tests {
 
     fn cone(half_angle: f64) -> Surface {
         Surface::Cone { frame: Frame::world(), radius: 2.0, half_angle, apex: false }
+    }
+
+    #[test]
+    fn planes_steeper_than_a_cone_meet_it_in_open_conics() {
+        let c = cone(0.4);
+        let window = (DVec3::splat(-20.0), DVec3::splat(20.0));
+        // Parallel to the axis, off it: one hyperbola branch (on the cone's own nappe).
+        // Tilted to the side's slope: a parabola.
+        for p in [
+            plane(DVec3::new(0.7, 0.0, 0.0), DVec3::X),
+            plane(DVec3::new(0.5, 0.3, 2.0), DVec3::new(1.0, 0.0, 0.2)),
+            plane(DVec3::new(1.0, 0.0, 0.0), DVec3::new(0.4f64.cos(), 0.0, -0.4f64.sin())),
+        ] {
+            let Ok(Ssi::Curves(cs)) = surfaces_within(&p, &c, 1e-6, Some(window)) else { panic!("{p:?}") };
+            assert_eq!(cs.len(), 1, "{p:?}");
+            let Curve::Spline(sp) = &cs[0] else { panic!("not a spline") };
+            let (lo, hi) = sp.domain();
+            for i in 0..=400 {
+                let x = sp.eval(lo + (hi - lo) * i as f64 / 400.0);
+                assert!(c.distance(x) < 1e-9 * (1.0 + x.length()), "off the cone by {}", c.distance(x));
+                assert!(p.distance(x) < 1e-9 * (1.0 + x.length()), "off the plane by {}", p.distance(x));
+                // On the cone's own nappe (radius 1 at z = 0, growing with z).
+                let Surface::Cone { frame, radius, half_angle, .. } = c else { unreachable!() };
+                assert!(radius + frame.to_local(x).z * half_angle.tan() > -1e-9);
+            }
+            // Long enough to leave the window at both ends.
+            for end in [sp.eval(lo), sp.eval(hi)] {
+                assert!(end.abs().max_element() > 20.0, "{end}");
+            }
+        }
+        // Without a window the open curve is still refused.
+        let p = plane(DVec3::new(0.7, 0.0, 0.0), DVec3::X);
+        assert!(surfaces(&p, &c, 1e-6).is_err());
     }
 
     #[test]

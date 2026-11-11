@@ -602,8 +602,15 @@ impl<'a> Engine<'a> {
                 // few microns apart neither merged nor intersected (a boss sketched a hair
                 // into a plate), and their pieces would not close up.
                 let (sa, sb) = (self.surface(0, fa), self.surface(1, fb));
-                let ssi =
-                    if sa.coincident(sb, ON) { Ssi::Coincident } else { intersect::surfaces(sa, sb, TOL)? };
+                let ssi = if sa.coincident(sb, ON) {
+                    Ssi::Coincident
+                } else {
+                    // Unbounded curves are wanted only across where both faces lie.
+                    let (lo_a, hi_a) = self.infos[0][fa].bbox;
+                    let (lo_b, hi_b) = self.infos[1][fb].bbox;
+                    let window = (lo_a.max(lo_b), hi_a.min(hi_b));
+                    intersect::surfaces_within(sa, sb, TOL, Some(window))?
+                };
                 match ssi {
                     Ssi::None => {}
                     Ssi::Coincident => self.imprint_coincident(fa, fb)?,
