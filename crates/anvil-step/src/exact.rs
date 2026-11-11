@@ -154,7 +154,11 @@ fn surface(
                 area = -area;
             }
             if area.length() < 1e-6 * radius * radius {
-                return None;
+                // A band round the sphere (cut by two parallel planes, say): its loops'
+                // areas cancel. The file's own axis then points at a pole, and the pole
+                // opposite, where the layout is taken from, lies off the band. If it does
+                // not, the face fails to lay out later and is imported as a mesh.
+                return Some(Surface::Sphere { frame: *frame, radius: *radius });
             }
             let hint = if area.x.abs() < 0.9 * area.length() { DVec3::X } else { DVec3::Y };
             let frame = Frame::new(frame.origin, area, hint).ok()?;
