@@ -1,0 +1,22 @@
+[package]
+name = "anvil-evals"
+description = "Robustness, visual and performance evaluations for AnvilCAD's exact kernel (anvil-brep)"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[dependencies]
+anvil-brep.workspace = true
+glam = { version = "0.34", features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+png = "0.17"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
