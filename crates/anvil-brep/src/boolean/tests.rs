@@ -918,3 +918,31 @@ fn bosses_within_microns_of_a_plate_merge_or_stay_apart_cleanly() {
         }
     }
 }
+
+#[test]
+fn a_plane_through_a_balls_poles_halves_it() {
+    // A revolved ball has a cap face round each pole, each laid out from the point
+    // opposite its middle. A cut through both poles used to put the far half of the
+    // cutting circle inside the near cap (the far pole mapped to the cap's middle).
+    let half = Loop2::new(vec![
+        Segment::Arc { center: DVec2::ZERO, radius: 2.0, start: -0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(0.0, 2.0), b: DVec2::new(0.0, -2.0) },
+    ]);
+    let r = build_regions(&[half]).expect("region");
+    let plane = Frame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Z, z: -DVec3::Y };
+    let ball = crate::revolve::revolve(&plane, &r[0], DVec2::ZERO, DVec2::Y, 2.0 * PI).expect("ball");
+    let full = 32.0 * PI / 3.0;
+    for (lo, hi, frac) in [
+        (DVec3::new(0.0, -3.0, -3.0), DVec3::splat(3.0), 0.5),
+        (DVec3::new(-3.0, 0.0, -3.0), DVec3::splat(3.0), 0.5),
+        (DVec3::new(0.0, 0.0, -3.0), DVec3::splat(3.0), 0.25),
+        (DVec3::ZERO, DVec3::splat(3.0), 0.125),
+    ] {
+        let block = cuboid(lo, hi);
+        let i = boolean(&ball, &block, BoolOp::Intersect).expect("intersect");
+        let d = boolean(&ball, &block, BoolOp::Subtract).expect("subtract");
+        assert_eq!((i.len(), d.len()), (1, 1));
+        assert!(close(fine_volume(&i), full * frac, 1e-4), "{lo}: {}", fine_volume(&i));
+        assert!(close(fine_volume(&d), full * (1.0 - frac), 1e-4), "{lo}: {}", fine_volume(&d));
+    }
+}
