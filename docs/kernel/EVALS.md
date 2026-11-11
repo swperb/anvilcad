@@ -35,6 +35,18 @@ limit, which may refuse but must not be wrong. The gate fails when a case breaks
 expectation, and also when a `Graceful` case starts passing, so the fix is recorded by promoting
 it.
 
+## Features
+
+A case can also build a base tree and then apply feature steps to the result, the way a
+user would: a fillet or chamfer on the edge through a given point (`Step`). Its `tree` is
+then the exact shape the feature must produce, written in CSG (a round is a square prism
+less a cylinder, a hole-rim round less a torus, a bevel a slab or a cone), and every check
+above applies. Such a case also states the exact volume the feature takes off or adds, by
+formula (Pappus for rounds on circular edges) and checks it on its own, since a small
+feature's error hides in the part's total: a hole-rim round 4% too big fails this check.
+Rounds much smaller than a millimetre change the volume less than the mesh resolves and
+are judged by the other checks alone.
+
 ## The corpus
 
 `src/corpus.rs` holds the configurations that break kernels in practice, with closed-form
@@ -114,8 +126,8 @@ change's pull request; compare on the same machine they came from. Timings are n
 
 ## What it does not cover yet
 
-- Freeform (B-spline) faces, sweeps, lofts, fillets, chamfers, shells and drafts: the reference
-  model has no exact counterpart for them yet. Their own tests in `anvil-brep` and `anvil-model`
+- Freeform (B-spline) faces, sweeps, lofts, shells and drafts, and fillets that meet at a
+  corner: the reference model has no exact counterpart for them yet. Their own tests in `anvil-brep` and `anvil-model`
   check them against exact values.
 - Results with internal voids or non-manifold contact, which the kernel refuses by design today.
 - Self-intersection of a single face, which neither this audit nor SMLib's checker tests.
