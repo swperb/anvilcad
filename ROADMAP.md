@@ -14,21 +14,66 @@ AnvilCAD connects to through panels, so the whole stack feels like one app.
 
 ## CAD
 
-1. Kernel: overflow choices and round corners,
-   spherical corner blends, variable-radius fillets, draft; shells of freeform faces,
-   sealed hollows (a second shell inside a solid), and walls thick enough to change a
-   part's shape; freeform faces that touch other surfaces without crossing them, and
-   results that would touch themselves at a single point.
-2. Features: more hole options (up-to-surface and offset end conditions, far-side and
-   under-head countersinks, slots, tapered taps, modelled and cosmetic threads, holes on
-   curved faces), mirror, sweep, loft, multi-body parts, sheet metal
-   (base and edge flanges, bends, unfold to a flat pattern).
-3. Assemblies: dragging components within their remaining freedom, subassemblies,
-   component patterns and mirrors, interference detection, limit, width and mechanical
-   mates, and choosing which mate breaks when a new one conflicts. Drawings with views,
-   dimensions and title blocks fed by custom properties.
-4. STEP: assembly placement, colours and names; AP242 product structure and PMI.
-5. A scripting and plugin API.
+### Priorities
+
+The order below comes from comparing AnvilCAD with the other open-source parametric CAD
+projects on 2026-11-10, chiefly SolidCraft (Rust, Fusion-style, v0.40 release candidates)
+and FreeCAD. SolidCraft has more commands than AnvilCAD today: more sketch entities, sheet
+metal, surfacing, joints and motion, and more file formats. Its tracker also has over 500
+open bug reports, many of them features that fail with no reason given. AnvilCAD aims to
+match that breadth one working slice at a time, and to beat it on reliability, on the
+SOLIDWORKS workflow and migration, and on going from design to manufacturing. Re-check the
+comparison before relying on it months later (see [docs/POSITIONING.md](docs/POSITIONING.md)).
+The work is split into issues tracked in [#104](https://github.com/swperb/anvilcad/issues/104).
+
+1. **Never lose work.** Autosave and crash recovery: after a crash, offer to restore the
+   open documents. A test round-trips every saved-file format version, so a file from an
+   older release reopens and rebuilds to the same geometry ([#86](https://github.com/swperb/anvilcad/issues/86), [#87](https://github.com/swperb/anvilcad/issues/87)).
+2. **Show that it is reliable.** Publish the `anvil-evals` results (corpus, random cases,
+   image comparisons and timings) with every release, as a page anyone can read and rerun.
+   Every feature failure tells the user why and what to try; none fails with a bare
+   "operation failed" ([#89](https://github.com/swperb/anvilcad/issues/89), [#88](https://github.com/swperb/anvilcad/issues/88)).
+3. **Sketching.** Splines and ellipses ([#69](https://github.com/swperb/anvilcad/issues/69)),
+   then conics ([#102](https://github.com/swperb/anvilcad/issues/102)); text, with emboss and engrave
+   ([#62](https://github.com/swperb/anvilcad/issues/62)). Slots, polygons, trim, extend,
+   offset, sketch fillet and chamfer, and symmetric and collinear relations are already in
+   the sketcher.
+4. **Sheet metal.** Base and edge flanges, hems, bends with bend tables, unfold and refold,
+   and the flat pattern exported as DXF ([#91](https://github.com/swperb/anvilcad/issues/91), [#92](https://github.com/swperb/anvilcad/issues/92)).
+5. **Assemblies.** Subassemblies ([#93](https://github.com/swperb/anvilcad/issues/93)); interference and clearance checks
+   ([#66](https://github.com/swperb/anvilcad/issues/66)); dragging components within their
+   remaining freedom ([#94](https://github.com/swperb/anvilcad/issues/94)); component patterns and mirrors; limit, width and mechanical mates
+   (gear, rack and pinion, screw) ([#95](https://github.com/swperb/anvilcad/issues/95)); choosing which mate breaks when a new one conflicts.
+6. **Drawings** with views, sections, dimensions and title blocks fed by custom properties
+   ([#70](https://github.com/swperb/anvilcad/issues/70)), exported as PDF and DXF ([#96](https://github.com/swperb/anvilcad/issues/96), [#97](https://github.com/swperb/anvilcad/issues/97),
+   [#98](https://github.com/swperb/anvilcad/issues/98)).
+7. **A CAM tab in the application**, so a part goes from design, through Check Design, to
+   verified G-code in one app (item 1 under CAM below; [#99](https://github.com/swperb/anvilcad/issues/99), [#100](https://github.com/swperb/anvilcad/issues/100)).
+8. **A browser build**, so anyone can try AnvilCAD without installing it, running the same
+   kernels compiled to WebAssembly ([#101](https://github.com/swperb/anvilcad/issues/101)).
+
+### Also planned
+
+- Kernel: overflow choices and round corners, spherical corner blends, variable-radius
+  fillets; shells of freeform faces, sealed hollows (a second shell inside a solid), and
+  walls thick enough to change a part's shape; freeform faces that touch other surfaces
+  without crossing them, and results that would touch themselves at a single point.
+- Features: more hole options (up-to-surface and offset end conditions, far-side and
+  under-head countersinks, slots, tapered taps, holes on curved faces); modelled and
+  cosmetic threads; coil and pipe; offset, replace and split face; plastic-part features:
+  mounting bosses ([#65](https://github.com/swperb/anvilcad/issues/65)), lips and grooves
+  ([#64](https://github.com/swperb/anvilcad/issues/64)) and snap-fit hooks
+  ([#63](https://github.com/swperb/anvilcad/issues/63)); moldability checks
+  ([#68](https://github.com/swperb/anvilcad/issues/68)).
+- Surfacing: surface loft, sweep, extrude and revolve, boundary and patch surfaces, trim,
+  extend, stitch, offset and thicken, with zebra, curvature and draft analysis.
+- Files: STEP assembly placement, colours and names; AP242 product structure and PMI;
+  IGES in and out; glTF and mesh import; FreeCAD and Rhino import.
+- SOLIDWORKS: native `.sldprt` geometry reading from a `docs/re/` specification, and
+  migration of assemblies and drawings.
+- A scripting and plugin API that reaches every feature
+  ([#71](https://github.com/swperb/anvilcad/issues/71)); an MCP server that can drive the
+  running app so a user can watch an agent work ([#103](https://github.com/swperb/anvilcad/issues/103)).
 
 ## CAM
 
