@@ -202,12 +202,14 @@ pub fn run(case: &Case, opt: &Options) -> CaseResult {
     match case.volume {
         Some(v) => r.reference_volume = v,
         None => {
-            // The grid integral converges like the cell size at silhouettes; twice the
-            // change from halving the grid bounds its error.
+            // The grid integral converges like the cell size at silhouettes.
             let fine = case.tree.volume(opt.volume_grid);
-            let coarse = case.tree.volume(opt.volume_grid / 2);
+            let mid = case.tree.volume(opt.volume_grid / 2);
+            let coarse = case.tree.volume(opt.volume_grid / 4);
             r.reference_volume = fine;
-            r.reference_error = 2.0 * (fine - coarse).abs();
+            // Convergence is not monotone at silhouettes, so take the larger of the two
+            // last changes, each scaled to the finest grid.
+            r.reference_error = 2.0 * (fine - mid).abs().max(0.5 * (mid - coarse).abs());
         }
     }
     let mut bodies = None;

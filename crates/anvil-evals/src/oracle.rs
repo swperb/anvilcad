@@ -106,7 +106,12 @@ fn audit_mesh(solid: &Solid, mesh: &TriMesh, a: &mut Audit) {
         return;
     }
     if !mesh.is_watertight() {
-        a.errors.push("the display mesh is not watertight".into());
+        let open = open_edges(mesh);
+        let at = open.first().map(|(p, q)| format!(" (one from {p:.5} to {q:.5})")).unwrap_or_default();
+        a.errors.push(format!(
+            "the display mesh is not watertight: {} triangle edges not used once each way{at}",
+            open.len()
+        ));
     }
     let props = mass::properties(mesh);
     if props.volume <= 0.0 {
@@ -218,4 +223,26 @@ pub fn membership(tree: &Tree, meshes: &[TriMesh], n: usize, margin: f64, seed: 
 /// Tessellates every body, returning the first failure as text.
 pub fn meshes(bodies: &[Solid], params: &TessParams) -> Result<Vec<TriMesh>, String> {
     bodies.iter().map(|b| tess::tessellate(b, params).map_err(|e| e.to_string())).collect()
+}
+
+/// Triangle edges not used exactly once in each direction, by position.
+pub fn open_edges(mesh: &TriMesh) -> Vec<(DVec3, DVec3)> {
+    use std::collections::HashMap;
+    let key = |p: DVec3| (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
+    let mut count: HashMap<((u64, u64, u64), (u64, u64, u64)), (i32, DVec3, DVec3)> = HashMap::new();
+    for t in &mesh.triangles {
+        for k in 0..3 {
+            let (p, q) = (mesh.positions[t[k] as usize], mesh.positions[t[(k + 1) % 3] as usize]);
+            count.entry((key(p), key(q))).or_insert((0, p, q)).0 += 1;
+        }
+    }
+    // An edge is closed when it is used once each way.
+    let mut open = Vec::new();
+    for (k, (n, p, q)) in &count {
+        let back = count.get(&(k.1, k.0)).map_or(0, |b| b.0);
+        if *n != 1 || back != 1 {
+            open.push((*p, *q));
+        }
+    }
+    open
 }
