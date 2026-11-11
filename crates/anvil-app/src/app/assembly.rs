@@ -1097,4 +1097,40 @@ mod tests {
         assert_eq!(app.asm.as_ref().map(|s| s.asm.mates.len()), Some(3));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn export_3mf_writes_each_component_in_place() {
+        let (ctx, mut app, dir) = harness();
+        app.new_assembly();
+        app.insert_part(&dir.join("base.anvprt"));
+        app.insert_part(&dir.join("cube.anvprt"));
+        step(&ctx, &mut app);
+        let s = app.asm.as_ref().expect("assembly");
+        let names: Vec<String> = s.asm.components.iter().map(|c| c.name.clone()).collect();
+        let cube_at = s.asm.components[1].placement.origin;
+
+        let file = dir.join("pair.3mf");
+        let how = app.write_export(&file).expect("exported");
+        assert_eq!(how, " (2 bodies)");
+        let parts = anvil_io::threemf::read_parts(&std::fs::read(&file).expect("read")).expect("package");
+        let model = parts.iter().find(|p| p.0 == "3D/3dmodel.model").expect("model part");
+        let model = String::from_utf8(model.1.clone()).expect("utf-8");
+        assert!(model.contains(r#"<metadata name="Title">Assembly1</metadata>"#), "{model}");
+        for (k, name) in names.iter().enumerate() {
+            let line = format!(
+                r#"<object id="{}" type="model" name="{}">"#,
+                k + 2,
+                name.replace('<', "&lt;").replace('>', "&gt;")
+            );
+            assert!(model.contains(&line), "{line} in {model}");
+        }
+        // The cube's far corner is where the assembly placed it.
+        let corner = cube_at + v3(10.0, 10.0, 10.0);
+        // 3MF coordinates are written to the nearest nanometre.
+        let nm = |x: f64| (x * 1e6).round() / 1e6;
+        let vertex = format!(r#"<vertex x="{}" y="{}" z="{}"/>"#, nm(corner.x), nm(corner.y), nm(corner.z));
+        assert!(model.contains(&vertex), "{vertex} in {model}");
+        assert_eq!(model.matches("<vertex ").count(), 16);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

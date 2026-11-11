@@ -177,7 +177,8 @@ macOS the command-line tools are also inside the app, in
   else imports as a watertight mesh body. AP242 tessellated bodies (triangulated faces)
   import as meshes too. Open a `.step` or `.stp` file to start a part.
 - Export to STEP AP214 (exact geometry whenever the whole part was built exactly, facets
-  otherwise), STL (binary) and OBJ
+  otherwise), 3MF (for 3D printing: millimetres, each body or assembly component a named
+  object, material names), STL (binary) and OBJ
 - SOLIDWORKS files are identified and explained, and their custom properties shown
   without SOLIDWORKS (see below)
 
@@ -364,7 +365,7 @@ crates/
                  custom properties, file format
   anvil-step     STEP reader (ISO 10303-21, never panics on malformed files), B-rep
                  import as exact solids or meshes, exact AP214 export
-  anvil-io       faceted STEP / STL / OBJ export, SOLIDWORKS file identification,
+  anvil-io       faceted STEP / 3MF / STL / OBJ export, SOLIDWORKS file identification,
                  file properties (compound files, OLE property sets, Document Manager,
                  .anvilprops.json sidecars), late-bound COM automation
   anvil-app      desktop application (egui + wgpu: Metal, Vulkan, DX12)
@@ -490,7 +491,7 @@ focus or touches your mouse and keyboard), use `anvilcad-agent`; see
 
 `anvilcad-agent mcp` is a Model Context Protocol server, so Claude Code, Cursor and other
 agents can model parts headlessly: create or open a part, add sketches and extrusions, set
-dimensions and variables, read mass properties, export STEP or STL and take screenshots.
+dimensions and variables, read mass properties, export STEP, 3MF or STL and take screenshots.
 Install it and add it to Claude Code:
 
 ```bash

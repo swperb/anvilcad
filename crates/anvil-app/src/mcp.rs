@@ -23,7 +23,7 @@ const INSTRUCTIONS: &str = "\
 AnvilCAD models parts in millimetres. A typical session: new_part, add_sketch (rectangles \
 and circles on the front, top or right plane, or on an extrusion's end face), add_extrude \
 (a boss, or a cut with cut=true), then mass_properties to check the result, set_dimension \
-or set_variable to change it, export (STEP or STL) and screenshot to look at it. \
+or set_variable to change it, export (STEP, 3MF or STL) and screenshot to look at it. \
 list_features shows the feature ids that sketches, extrusions and dimensions refer to. \
 run_lua runs any script in AnvilCAD's Lua API for anything the other tools do not cover.";
 
@@ -262,9 +262,9 @@ impl Server {
             "export" => {
                 let path = a.out_path("path")?;
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-                if !["step", "stp", "stl", "obj"].contains(&ext.as_str()) {
+                if !["step", "stp", "3mf", "stl", "obj"].contains(&ext.as_str()) {
                     return Err(format!(
-                        "export writes .step, .stp, .stl or .obj files, not {}",
+                        "export writes .step, .stp, .3mf, .stl or .obj files, not {}",
                         path.display()
                     ));
                 }
@@ -622,7 +622,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "export",
         title: "Export",
-        description: "Export the body by extension: .step or .stp (exact B-rep where possible), .stl or .obj (mesh).",
+        description: "Export the body by extension: .step or .stp (exact B-rep where possible), .3mf (mesh for 3D printing: millimetres, one object per body or component, material names), .stl or .obj (mesh).",
         properties: r#"{ "path": { "type": "string", "description": "Such as out/part.step" } }"#,
         required: &["path"],
         read_only: false,

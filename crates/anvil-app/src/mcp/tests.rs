@@ -247,6 +247,41 @@ fn exports_step_and_stl_and_reopens_them() {
 }
 
 #[test]
+fn exports_3mf_with_a_named_object_for_each_body() {
+    let mut s = server();
+    call(&mut s, "new_part", json!({}));
+    // Two separate rectangles extrude to two bodies.
+    let sk = call(&mut s, "add_sketch", json!({ "plane": "top", "rects": [[0, 0, 10, 10], [20, 0, 30, 5]] }));
+    let sketch = sk["sketch"].as_u64().expect("sketch id");
+    let ex = call(&mut s, "add_extrude", json!({ "sketch": sketch, "depth": 4 }));
+    assert!(close(&ex["body"]["volume"], 600.0), "{ex}");
+    call(&mut s, "set_material", json!({ "name": "ABS" }));
+    let dir = scratch("export-3mf");
+    let path = dir.join("pair.3mf");
+    let r = call(&mut s, "export", json!({ "path": path.display().to_string() }));
+    assert_eq!(r["path"], path.display().to_string());
+
+    let parts = anvil_io::threemf::read_parts(&std::fs::read(&path).unwrap()).unwrap();
+    let model = parts.iter().find(|p| p.0 == "3D/3dmodel.model").expect("the model part");
+    let model = String::from_utf8(model.1.clone()).unwrap();
+    assert!(model.contains(r#"unit="millimeter""#));
+    assert!(model.contains(r#"<metadata name="Title">Part1</metadata>"#), "{model}");
+    assert!(model.contains(r##"<base name="ABS" displaycolor="#B8BFCC"/>"##), "{model}");
+    // Named as the Bodies list names them.
+    assert!(model.contains(r#"<object id="2" type="model" name="Boss-Extrude1[1]" pid="1" pindex="0">"#));
+    assert!(model.contains(r#"<object id="3" type="model" name="Boss-Extrude1[2]" pid="1" pindex="0">"#));
+    assert_eq!(model.matches("<object ").count(), 2, "{model}");
+    assert_eq!(model.matches("<item ").count(), 2);
+    // Each block has its own eight corners and twelve triangles.
+    assert_eq!(model.matches("<vertex ").count(), 16);
+    assert_eq!(model.matches("<triangle ").count(), 24);
+
+    let e = call_err(&mut s, "export", json!({ "path": dir.join("pair.dwg").display().to_string() }));
+    assert!(e.contains(".3mf"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn mistakes_are_tool_errors_and_protocol_errors() {
     let mut s = server();
     // Tool errors: the call ran, and says what was wrong.

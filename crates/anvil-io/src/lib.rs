@@ -2,6 +2,7 @@
 //!
 //! - [`stl`]: binary and ASCII STL export
 //! - [`obj`]: Wavefront OBJ export
+//! - [`threemf`]: 3MF export for 3D printing, with units, named bodies and materials
 //! - [`step`]: STEP AP214 export (faceted boundary representation)
 //! - [`solidworks`]: identifies SOLIDWORKS files and their container generation
 //! - [`props`]: reads custom properties from other programs' files without modifying them,
@@ -14,6 +15,7 @@ pub mod props;
 pub mod solidworks;
 pub mod step;
 pub mod stl;
+pub mod threemf;
 
 use std::path::Path;
 
@@ -24,6 +26,10 @@ pub fn export_by_extension(solid: &anvil_kernel::Solid, path: &Path, name: &str)
         "stl" => stl::write_binary(solid, name),
         "obj" => obj::write(solid, name).into_bytes(),
         "step" | "stp" => step::write(solid, name).into_bytes(),
+        "3mf" => threemf::write(&threemf::Package {
+            title: name.to_string(),
+            objects: vec![threemf::Object { name: name.to_string(), solid: solid.clone(), material: None }],
+        })?,
         other => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,

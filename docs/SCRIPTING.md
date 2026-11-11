@@ -120,7 +120,7 @@ made before the error, which Undo reverses.
 | `anvil.new([{ force = true }])` | starts a new part from the template and material options |
 | `anvil.open(path [, { force = true }])` | opens a part, template, STEP or SOLIDWORKS file |
 | `anvil.save([path])` | saves, to `path` or the part's file |
-| `anvil.export(path)` | writes STEP (exact where possible), STL or OBJ, by extension |
+| `anvil.export(path)` | writes STEP (exact where possible), 3MF, STL or OBJ, by extension |
 | `anvil.var(name, value)` | sets a global variable to a number or an equation, such as `"width / 2"` |
 | `anvil.dim(feature, dimension, value)` | sets a feature's dimension (`"depth"`, `"angle"`, `"offset"`, `"spacing"`, `"count"`, `"radius"`, `"distance"`, `"chamfer angle"` or `"thickness"`) to a number or an equation, then rebuilds; `feature` is its id or name. If the rebuild fails, the old value is kept and the call raises the error |
 | `anvil.delete(feature)` | deletes a feature (by id or name) and the features that depend on it, and returns their ids |

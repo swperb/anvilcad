@@ -1,6 +1,6 @@
 [package]
 name = "anvil-io"
-description = "AnvilCAD import/export: STL, OBJ, STEP, SOLIDWORKS file detection and file properties"
+description = "AnvilCAD import/export: STL, 3MF, OBJ, STEP, SOLIDWORKS file detection and file properties"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,8 @@ anvil-kernel.workspace = true
 anvil-model.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+flate2 = "1"
+crc32fast = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant"] }
