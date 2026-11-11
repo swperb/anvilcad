@@ -58,7 +58,7 @@ server writes are created as needed.
 | `set_material` | `name` | assigns a library material, such as `6061 Alloy` or `Plain Carbon Steel` |
 | `rebuild` | | rebuilds and reports the body and any feature errors |
 | `mass_properties` | | volume (mm³), surface area (mm²), centroid, bounding box and size (mm); mass (g) and principal moments of inertia (g·mm²) when a material is set. They are computed from the tessellated body, so curved faces make them slightly approximate; `exact` says whether STEP export writes an exact B-rep |
-| `export` | `path` | `.step` or `.stp` (exact B-rep where possible), `.stl` or `.obj` |
+| `export` | `path` | `.step` or `.stp` (exact B-rep where possible), `.3mf` (for 3D printing), `.stl` or `.obj` |
 | `screenshot` | `path`, `view`, `fit` (default true), `crop` (`viewport` or `window`), `width`, `height`, `inline` (default true) | renders a PNG to `path` and, unless `inline` is false, returns it as an image |
 | `run_lua` | `code` | runs Lua with the `anvil` API, for anything else; returns the chunk's return value as `result` and what it printed as `printed` |
 | `run_command` | `name` | runs a built-in command, such as `Undo`, `Redo` or `Isometric` |

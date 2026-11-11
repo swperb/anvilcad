@@ -584,27 +584,91 @@ impl AnvilApp {
         if let Some(path) = self.file_dialog("Export", || {
             rfd::FileDialog::new()
                 .add_filter("STEP AP214", &["step", "stp"])
+                .add_filter("3MF (3D printing)", &["3mf"])
                 .add_filter("STL", &["stl"])
                 .add_filter("Wavefront OBJ", &["obj"])
                 .set_file_name(name)
                 .save_file()
         }) {
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-            // Exact geometry when the whole part was built exactly, facets otherwise.
-            let exact = (ext == "step" || ext == "stp")
-                .then(|| anvil_model::step::exact_step(&self.state, &self.part_name()))
-                .flatten();
-            let result = match exact {
-                Some(text) => std::fs::write(&path, text).map(|()| " (exact geometry)"),
-                None => {
-                    anvil_io::export_by_extension(&self.state.body, &path, &self.part_name()).map(|()| "")
-                }
-            };
-            match result {
+            match self.write_export(&path) {
                 Ok(how) => self.status = format!("Exported {}{how}", path.display()),
                 Err(e) => self.message = Some(("Export failed".into(), e.to_string())),
             }
         }
+    }
+
+    /// Writes the part or assembly to `path` in the format its extension names, and says
+    /// how (" (exact geometry)" for an exact STEP file, the body count for a 3MF file).
+    fn write_export(&mut self, path: &Path) -> std::io::Result<String> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let name = self.part_name();
+        if ext == "3mf" {
+            let package = self.print_package();
+            let n = package.objects.len();
+            std::fs::write(path, anvil_io::threemf::write(&package)?)?;
+            return Ok(match n {
+                1 => String::new(),
+                n => format!(" ({n} bodies)"),
+            });
+        }
+        // Exact geometry when the whole part was built exactly, facets otherwise.
+        let exact = (ext == "step" || ext == "stp")
+            .then(|| anvil_model::step::exact_step(&self.state, &name))
+            .flatten();
+        match exact {
+            Some(text) => std::fs::write(path, text).map(|()| " (exact geometry)".into()),
+            None => anvil_io::export_by_extension(&self.state.body, path, &name).map(|()| String::new()),
+        }
+    }
+
+    /// The bodies a 3MF file holds: each visible component of an assembly, in place;
+    /// each body of a multibody part; or the part's one body. Each carries its part's
+    /// material, shown in the colour AnvilCAD draws bodies in.
+    fn print_package(&mut self) -> anvil_io::threemf::Package {
+        use anvil_io::threemf::{Material as PrintMaterial, Object, Package};
+        let color = crate::render::BODY_COLOR.map(|c| (c * 255.0).round() as u8);
+        let material =
+            |m: &Option<Material>| m.as_ref().map(|m| PrintMaterial { name: m.name.clone(), color });
+        let title = self.part_name();
+        if let Some(s) = &mut self.asm {
+            let mut objects = Vec::new();
+            for c in s.asm.components.iter().filter(|c| !c.hidden) {
+                // Components that failed to load are listed in the assembly's errors already.
+                if let Ok(part) = s.parts.get(&c.path, c.configuration.as_deref()) {
+                    objects.push(Object {
+                        name: c.name.clone(),
+                        solid: part.state.body.transformed(&c.placement),
+                        material: material(&part.doc.material),
+                    });
+                }
+            }
+            return Package { title, objects };
+        }
+        let mut objects = Vec::new();
+        if let Some(bodies) = self.state.exact.as_ref().filter(|b| b.len() > 1) {
+            let names: HashMap<u32, String> =
+                self.doc.features.iter().map(|f| (f.id, f.name.clone())).collect();
+            for (k, b) in bodies.iter().enumerate() {
+                let Ok(solid) = anvil_model::exact::faceted(std::slice::from_ref(b)) else {
+                    // A body that will not tessellate on its own goes out with the rest.
+                    objects.clear();
+                    break;
+                };
+                let name = match self.state.body_names.get(k) {
+                    Some(&r) => body_label(&self.state.body_names, &names, r),
+                    None => format!("Body {}", k + 1),
+                };
+                objects.push(Object { name, solid, material: material(&self.doc.material) });
+            }
+        }
+        if objects.is_empty() {
+            objects.push(Object {
+                name: title.clone(),
+                solid: self.state.body.clone(),
+                material: material(&self.doc.material),
+            });
+        }
+        Package { title, objects }
     }
 
     // ----- commands -------------------------------------------------------------------

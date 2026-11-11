@@ -19,7 +19,7 @@ pub const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("Save", "Save the part"),
     ("Save As", "Save the part under a new name"),
     ("Save as Part Template", "Save the part as a template for new parts"),
-    ("Export", "Export STEP, STL or OBJ"),
+    ("Export", "Export STEP, 3MF, STL or OBJ"),
     ("Open Sample Part", "Open the sample mounting block"),
     ("Undo", "Undo the last change"),
     ("Redo", "Redo the last undone change"),
@@ -820,16 +820,7 @@ impl Host for AppHost<'_> {
         if self.app.state.body.is_empty() {
             return Err("there is no solid body to export".into());
         }
-        let name = self.app.part_name();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        let exact = (ext == "step" || ext == "stp")
-            .then(|| anvil_model::step::exact_step(&self.app.state, &name))
-            .flatten();
-        match exact {
-            Some(text) => std::fs::write(path, text),
-            None => anvil_io::export_by_extension(&self.app.state.body, path, &name),
-        }
-        .map_err(|e| format!("export to {}: {e}", path.display()))
+        self.app.write_export(path).map(|_| ()).map_err(|e| format!("export to {}: {e}", path.display()))
     }
 
     fn set_variable(&mut self, name: &str, expr: &str) -> Result<(), String> {

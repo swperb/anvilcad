@@ -245,6 +245,8 @@ version = "0.1.1"
 dependencies = [
  "anvil-kernel",
  "anvil-model",
+ "crc32fast",
+ "flate2",
  "serde",
  "serde_json",
  "windows 0.61.3",
