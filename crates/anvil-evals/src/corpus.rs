@@ -348,23 +348,20 @@ pub fn cases() -> Vec<Case> {
         Case::new("cyl/cross-holes-equal", "cyl", block().minus(cx(2.0)).minus(cy(2.0)))
             .volume(1000.0 - (80.0 * PI - 128.0 / 3.0))
             .bodies(1)
-            .graceful()
-            .note("equal-radius cross holes: the tangent intersection points are not traced yet"),
+            .note("equal-radius cross holes meet at points where their surfaces are tangent"),
     );
     c.push(Case::new("cyl/cross-holes-unequal", "cyl", block().minus(cx(2.0)).minus(cy(1.0))).bodies(1));
     c.push(
         Case::new("cyl/steinmetz-2", "cyl", cx(2.0).and(cy(2.0)))
             .volume(128.0 / 3.0)
             .bodies(1)
-            .graceful()
-            .note("equal-radius cylinders: the tangent intersection points are not traced yet"),
+            .note("the two ellipses of equal cylinders cross where the surfaces are tangent"),
     );
     c.push(
         Case::new("cyl/steinmetz-3", "cyl", cx(2.0).and(cy(2.0)).and(cz(2.0)))
             .volume((16.0 - 8.0 * 2f64.sqrt()) * 8.0)
             .bodies(1)
-            .graceful()
-            .note("equal-radius cylinders: the tangent intersection points are not traced yet"),
+            .note("three equal cylinders: six ellipse arcs meeting at tangent points"),
     );
     c.push(
         Case::new(
