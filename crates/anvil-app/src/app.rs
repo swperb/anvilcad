@@ -87,7 +87,19 @@ struct DfmState {
     focus: Option<usize>,
     /// The material the report was made for.
     material: Option<String>,
+    /// The printer, for the 3D printing processes.
+    print: dfm::PrintSettings,
 }
+
+/// Build directions offered by the Check Design window, with their labels.
+const BUILD_DIRECTIONS: [(Vec3, &str); 6] = [
+    (Vec3::Y, "+Y (Top up)"),
+    (Vec3 { x: 0.0, y: -1.0, z: 0.0 }, "-Y (upside down)"),
+    (Vec3::Z, "+Z (Front up)"),
+    (Vec3 { x: 0.0, y: 0.0, z: -1.0 }, "-Z (Back up)"),
+    (Vec3::X, "+X (Right up)"),
+    (Vec3 { x: -1.0, y: 0.0, z: 0.0 }, "-X (Left up)"),
+];
 
 pub struct AnvilApp {
     doc: Document,
@@ -197,6 +209,7 @@ impl AnvilApp {
                 stale: false,
                 focus: None,
                 material: None,
+                print: dfm::PrintSettings::defaults(dfm::Process::Fdm),
             },
             sketch: None,
             editor: None,
@@ -268,7 +281,8 @@ impl AnvilApp {
 
     fn run_dfm(&mut self) {
         let material = self.doc.material.as_ref().map(|m| m.resolved());
-        self.dfm.report = Some(dfm::check(&self.state.body, material.as_ref(), self.dfm.process));
+        self.dfm.report =
+            Some(dfm::check_with(&self.state.body, material.as_ref(), self.dfm.process, &self.dfm.print));
         self.dfm.material = material.map(|m| m.name);
         self.dfm.stale = false;
         self.dfm.focus = None;
@@ -3818,10 +3832,20 @@ impl AnvilApp {
             ui.horizontal(|ui| {
                 ui.label("Process");
                 for p in dfm::Process::ALL {
-                    if ui.selectable_label(self.dfm.process == p, p.label()).clicked()
+                    if p == dfm::Process::Fdm {
+                        ui.separator();
+                        ui.label("3D print");
+                    }
+                    if ui
+                        .selectable_label(self.dfm.process == p, p.short_label())
+                        .on_hover_text(p.label())
+                        .clicked()
                         && self.dfm.process != p
                     {
                         self.dfm.process = p;
+                        // Each kind of printer has its own limits; keep the build direction.
+                        let up = self.dfm.print.up;
+                        self.dfm.print = dfm::PrintSettings { up, ..dfm::PrintSettings::defaults(p) };
                         rerun = true;
                     }
                 }
@@ -3830,10 +3854,14 @@ impl AnvilApp {
                 }
             });
             let material = self.doc.material.as_ref().map(|m| m.name.clone());
-            ui.label(match &material {
-                Some(name) => format!("Material: {name}"),
-                None => "No material assigned: general limits are used.".into(),
-            });
+            if self.dfm.process.is_printing() {
+                rerun |= print_settings_ui(ui, self.dfm.process, &mut self.dfm.print);
+            } else {
+                ui.label(match &material {
+                    Some(name) => format!("Material: {name}"),
+                    None => "No material assigned: general limits are used.".into(),
+                });
+            }
             if self.dfm.stale || (self.dfm.report.is_some() && material != self.dfm.material) {
                 ui.colored_label(
                     Color32::from_rgb(200, 120, 0),
@@ -3847,9 +3875,16 @@ impl AnvilApp {
                 report.count(dfm::Severity::Warning),
                 report.count(dfm::Severity::Note),
             );
-            let mut summary = format!("{e} errors, {w} warnings, {n} notes");
+            let plural =
+                |n: usize, one: &str| if n == 1 { format!("1 {one}") } else { format!("{n} {one}s") };
+            let mut summary =
+                format!("{}, {}, {}", plural(e, "error"), plural(w, "warning"), plural(n, "note"));
             if let Some(t) = report.thickness {
                 summary += &format!(" · sheet {t:.2} mm thick, {} bends", report.bends);
+            }
+            if let Some(h) = report.height.filter(|_| self.dfm.process.is_printing()) {
+                let layers = (h / self.dfm.print.layer).ceil();
+                summary += &format!(" · {h:.1} mm tall, {layers:.0} layers");
             }
             ui.strong(summary);
             if report.findings.is_empty() {
@@ -3879,7 +3914,11 @@ impl AnvilApp {
                     });
                 }
             });
-            ui.weak("Limits are common shop rules of thumb; check them with your supplier.");
+            ui.weak(if self.dfm.process.is_printing() {
+                "Limits are rules of thumb for a common printer; set them for yours and its material."
+            } else {
+                "Limits are common shop rules of thumb; check them with your supplier."
+            });
         });
         if open && rerun {
             self.run_dfm();
@@ -4335,6 +4374,58 @@ fn dim_edit(
 
 /// A body's name as the tree shows it: its feature's name, with `[n]` when that
 /// feature left several bodies.
+/// The printer settings in the Check Design window. Returns true when one changed.
+fn print_settings_ui(ui: &mut egui::Ui, process: dfm::Process, s: &mut dfm::PrintSettings) -> bool {
+    let mut changed = false;
+    egui::Grid::new("print_settings").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+        let name = ui.label("Build direction").id;
+        let current = BUILD_DIRECTIONS.iter().find(|(v, _)| *v == s.up).map_or("Custom", |d| d.1);
+        egui::ComboBox::from_id_salt("print_up")
+            .selected_text(current)
+            .show_ui(ui, |ui| {
+                for (v, label) in BUILD_DIRECTIONS {
+                    changed |= ui.selectable_value(&mut s.up, v, label).changed();
+                }
+            })
+            .response
+            .labelled_by(name);
+        ui.end_row();
+        let mut length = |ui: &mut egui::Ui, label: &str, v: &mut f64, lo: f64, hi: f64| {
+            ui.label(label);
+            let drag = egui::DragValue::new(v).range(lo..=hi).speed(0.01).max_decimals(3).suffix(" mm");
+            changed |= ui.add(drag).changed();
+            ui.end_row();
+        };
+        length(ui, "Layer height", &mut s.layer, 0.01, 1.0);
+        if let Some(n) = s.nozzle.as_mut() {
+            length(ui, "Nozzle", n, 0.1, 2.0);
+        }
+        length(ui, "Thinnest wall", &mut s.min_wall, 0.05, 10.0);
+        length(ui, "Smallest hole", &mut s.min_hole, 0.05, 20.0);
+        if let Some(a) = s.overhang.as_mut() {
+            ui.label("Overhang limit");
+            let drag = egui::DragValue::new(a)
+                .range(0.0..=89.0)
+                .speed(0.5)
+                .max_decimals(1)
+                .suffix("° from vertical");
+            changed |= ui.add(drag).changed();
+            ui.end_row();
+        }
+    });
+    ui.horizontal(|ui| {
+        if process == dfm::Process::Sls {
+            ui.weak("The powder bed holds overhangs up, so none need supports.");
+        }
+        if ui.button("Printer defaults").on_hover_text("Reset the limits for this kind of printer").clicked()
+        {
+            *s = dfm::PrintSettings { up: s.up, ..dfm::PrintSettings::defaults(process) };
+            changed = true;
+        }
+    });
+    changed
+}
+
 fn body_label(all: &[BodyRef], names: &HashMap<u32, String>, b: BodyRef) -> String {
     let name = names.get(&b.feature).cloned().unwrap_or_else(|| format!("#{}", b.feature));
     if all.iter().filter(|x| x.feature == b.feature).count() > 1 {
