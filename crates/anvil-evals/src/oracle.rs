@@ -12,9 +12,10 @@ pub fn display_params() -> TessParams {
     TessParams::default()
 }
 
-/// A finer tessellation, for volumes and areas compared at tight tolerances.
-pub fn fine_params() -> TessParams {
-    TessParams { chord: 1e-3, max_angle: 0.02 }
+/// A finer tessellation, for volumes and areas compared at tight tolerances, its chord
+/// scaled to a part `size` across so small parts are as accurate as large ones.
+pub fn fine_params(size: f64) -> TessParams {
+    TessParams { chord: (2e-4 * size).clamp(1e-5, 1e-3), max_angle: 0.02 }
 }
 
 /// How far an edge or vertex may stray from the surfaces it bounds. The kernel's own
@@ -34,6 +35,8 @@ pub struct Audit {
     pub genus: Option<u32>,
     /// Largest distance found from an edge to a surface it bounds.
     pub max_edge_gap: f64,
+    /// Largest distance found from the display mesh to its faces' surfaces.
+    pub max_sag: f64,
 }
 
 /// Audits one body: the kernel's own validity check, then geometry against topology
@@ -41,6 +44,12 @@ pub struct Audit {
 /// display mesh (closed, consistently oriented, outward, normals agreeing with the
 /// faces).
 pub fn audit(solid: &Solid, mesh: &TriMesh) -> Audit {
+    audit_with(solid, mesh, &display_params())
+}
+
+/// [`audit`] for a mesh made with `params`, whose chord bounds how far a triangle may
+/// stray from its face's surface.
+pub fn audit_with(solid: &Solid, mesh: &TriMesh, params: &TessParams) -> Audit {
     let mut a = Audit {
         faces: solid.faces.len(),
         edges: solid.edges.len(),
@@ -93,7 +102,34 @@ pub fn audit(solid: &Solid, mesh: &TriMesh) -> Audit {
         a.errors.push(format!("{} more edge samples off their surfaces", bad_edges - 5));
     }
     audit_mesh(solid, mesh, &mut a);
+    audit_sag(solid, mesh, params, &mut a);
     a
+}
+
+/// Every triangle's centre and edge midpoints within the chord (plus a little) of its
+/// face's true surface: the display tolerance the tessellator promises.
+fn audit_sag(solid: &Solid, mesh: &TriMesh, params: &TessParams, a: &mut Audit) {
+    let allowed = 2.0 * params.chord + 1e-6;
+    let mut worst = (0.0f64, 0usize, DVec3::ZERO);
+    for (ti, t) in mesh.triangles.iter().enumerate() {
+        let Some(face) = mesh.triangle_face.get(ti).and_then(|&f| solid.faces.get(f as usize)) else {
+            continue;
+        };
+        let [p, q, r] = t.map(|i| mesh.positions[i as usize]);
+        for x in [(p + q + r) / 3.0, (p + q) * 0.5, (q + r) * 0.5, (r + p) * 0.5] {
+            let d = face.surface.distance(x);
+            if d.is_finite() && d > worst.0 {
+                worst = (d, mesh.triangle_face[ti] as usize, x);
+            }
+        }
+    }
+    a.max_sag = worst.0;
+    if worst.0 > allowed {
+        a.errors.push(format!(
+            "the mesh strays {:.4} mm from face {} (allowed {:.4}) at {:.4} {:.4} {:.4}",
+            worst.0, worst.1, allowed, worst.2.x, worst.2.y, worst.2.z
+        ));
+    }
 }
 
 fn audit_mesh(solid: &Solid, mesh: &TriMesh, a: &mut Audit) {

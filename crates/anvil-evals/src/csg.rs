@@ -217,6 +217,41 @@ impl Tree {
         sum * dx * dy
     }
 
+    /// The reference volume and its standard error, from `n` rays parallel to world z at
+    /// quasi-random points (a Halton sequence) over the box, under `shifts` independent
+    /// random shifts of the sequence. Each ray's inside length is exact, so the estimate
+    /// is unbiased; a regular grid can alias with edges that line up with it.
+    pub fn volume_estimate(&self, n: usize, shifts: usize) -> (f64, f64) {
+        let (lo, hi) = self.bounds();
+        let size = hi - lo;
+        if size.x <= 0.0 || size.y <= 0.0 || size.z <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let z0 = lo.z - 1.0 - size.z;
+        let mut rng = crate::rng::Rng::new(0xA11CE);
+        let estimates: Vec<f64> = (0..shifts.max(2))
+            .map(|_| {
+                let (sx, sy) = (rng.unit(), rng.unit());
+                let mut sum = 0.0;
+                for k in 1..=n {
+                    let u = (halton(k, 2) + sx).fract();
+                    let w = (halton(k, 3) + sy).fract();
+                    let o = DVec3::new(lo.x + u * size.x, lo.y + w * size.y, z0);
+                    for s in self.spans(o, DVec3::Z) {
+                        if s.t0.is_finite() && s.t1.is_finite() {
+                            sum += s.t1 - s.t0;
+                        }
+                    }
+                }
+                sum * size.x * size.y / n as f64
+            })
+            .collect();
+        let m = estimates.len() as f64;
+        let mean = estimates.iter().sum::<f64>() / m;
+        let var = estimates.iter().map(|e| (e - mean).powi(2)).sum::<f64>() / (m - 1.0);
+        (mean, (var / m).sqrt())
+    }
+
     /// Builds the tree with the kernel. A union whose operands stay apart keeps both
     /// bodies; later operations apply to each body.
     pub fn build(&self) -> Result<Vec<Solid>, KernelError> {
@@ -229,6 +264,17 @@ impl Tree {
             }
         }
     }
+}
+
+/// The `k`th term of the van der Corput sequence in `base`.
+fn halton(mut k: usize, base: usize) -> f64 {
+    let (mut f, mut r) = (1.0, 0.0);
+    while k > 0 {
+        f /= base as f64;
+        r += f * (k % base) as f64;
+        k /= base;
+    }
+    r
 }
 
 /// Applies a boolean to two sets of bodies with the kernel.
@@ -717,6 +763,9 @@ mod tests {
             let Tree::Prim(p) = &t else { continue };
             let v = t.volume(400);
             assert!((v - p.volume()).abs() < 2e-4 * p.volume(), "{p:?}: {v} vs {}", p.volume());
+            let (q, err) = t.volume_estimate(40_000, 6);
+            assert!((q - p.volume()).abs() < 4.0 * err + 1e-9, "{p:?}: {q} +- {err} vs {}", p.volume());
+            assert!(err < 2e-3 * p.volume(), "{p:?}: error {err}");
         }
     }
 
