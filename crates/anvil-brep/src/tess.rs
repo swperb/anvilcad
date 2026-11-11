@@ -410,6 +410,14 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         }
     }
 
+    // The grid misses parts of some faces (a thin crescent between two curves, say),
+    // where a triangle can then span far across the surface. Insert the middle of any
+    // triangle that strays more than the chord from the surface until none does, so
+    // every face meets the display tolerance whatever its shape.
+    if scale_of.is_some() && params.chord > 0.0 {
+        refine_to_chord(face, &mut cdt, &mut vmap, mesh, params.chord)?;
+    }
+
     // A triangle is inside when reaching it from outside crosses the boundary an odd
     // number of times. Unlike a centroid test, this is right for the slivers that
     // nearly collinear boundary points (a circle on a cylinder, say) leave behind.
@@ -487,6 +495,70 @@ fn normal_at_uv(face: &Face, p: DVec3, uv: DVec2) -> DVec3 {
         }
         _ => face.normal_at(p),
     }
+}
+
+/// Inserts the parameter-space middle of every inside triangle whose flat middle lies
+/// more than `chord` from the surface there, pass after pass, until none does (or a
+/// budget runs out: a face that needs more is left as good as the budget makes it).
+fn refine_to_chord(
+    face: &Face,
+    cdt: &mut ConstrainedDelaunayTriangulation<Point2<f64>>,
+    vmap: &mut Vec<Option<u32>>,
+    mesh: &mut TriMesh,
+    chord: f64,
+) -> Result<()> {
+    const PASSES: usize = 8;
+    const BUDGET: usize = 20_000;
+    let mut added = 0;
+    for _ in 0..PASSES {
+        let parity = boundary_parity(cdt);
+        let mut wanted: Vec<DVec2> = Vec::new();
+        for tri in cdt.inner_faces() {
+            if !parity.get(tri.fix().index()).copied().unwrap_or(false) {
+                continue;
+            }
+            let vs = tri.vertices();
+            let mut corners = [DVec3::ZERO; 3];
+            let mut uv = DVec2::ZERO;
+            let mut mapped = true;
+            for (k, v) in vs.iter().enumerate() {
+                match vmap.get(v.fix().index()).copied().flatten() {
+                    Some(i) => corners[k] = mesh.positions[i as usize],
+                    None => mapped = false,
+                }
+                uv += DVec2::new(v.position().x, v.position().y) / 3.0;
+            }
+            if !mapped {
+                continue;
+            }
+            let flat = (corners[0] + corners[1] + corners[2]) / 3.0;
+            let on = face.surface.eval_uv(uv);
+            if (on - flat).length() > chord && tol::is_finite3(on) {
+                wanted.push(uv);
+            }
+        }
+        if wanted.is_empty() {
+            break;
+        }
+        for q in wanted {
+            if added >= BUDGET {
+                return Ok(());
+            }
+            let h = cdt.insert(point(q)).map_err(|e| KernelError::Tessellation(format!("{e:?}")))?;
+            let hi = h.index();
+            if vmap.len() <= hi {
+                vmap.resize(hi + 1, None);
+            }
+            if vmap[hi].is_none() {
+                let p = face.surface.eval_uv(q);
+                vmap[hi] = Some(mesh.positions.len() as u32);
+                mesh.positions.push(p);
+                mesh.normals.push(normal_at_uv(face, p, q));
+                added += 1;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// For every face of the triangulation, whether it lies inside the constraints.
@@ -588,6 +660,65 @@ mod tests {
     use super::*;
     use crate::geom::Frame;
     use crate::profile::{Loop2, Segment, build_regions};
+
+    /// Revolves a closed profile (x radius, y along `axis`) a full turn about `axis`
+    /// through `origin`.
+    fn turned(origin: DVec3, axis: DVec3, x: DVec3, profile: Loop2) -> Solid {
+        let z = axis.normalize();
+        let x = (x - z * x.dot(z)).normalize();
+        let plane = Frame { origin, x, y: z, z: -z.cross(x) };
+        let r = build_regions(&[profile]).expect("region");
+        crate::revolve::revolve(&plane, &r[0], DVec2::ZERO, DVec2::Y, TAU).expect("revolve")
+    }
+
+    #[test]
+    fn thin_curved_faces_stay_within_the_chord() {
+        // A cone frustum minus a torus, cut by a ball, leaves a thin crescent of the cone
+        // that the interior grid used to miss: triangles spanned half a radian of it and
+        // stood 0.03 mm off the surface (three times the chord). Every triangle's middle
+        // must now lie within the chord of its face.
+        let line = |a: DVec2, b: DVec2| Segment::Line { a, b };
+        let pts =
+            [DVec2::ZERO, DVec2::new(1.1, 0.0), DVec2::new(0.12134383624560117, 2.7), DVec2::new(0.0, 2.7)];
+        let cone = turned(
+            DVec3::new(1.5, 1.5, 0.6383915842052987),
+            DVec3::X,
+            DVec3::Y,
+            Loop2::new((0..4).map(|i| line(pts[i], pts[(i + 1) % 4])).collect()),
+        );
+        let ring = turned(
+            DVec3::new(-0.5, 1.046023721712534, 1.0),
+            DVec3::Z,
+            DVec3::X,
+            Loop2::new(vec![Segment::circle(DVec2::new(1.4, 0.0), 0.2)]),
+        );
+        let ball = turned(
+            DVec3::new(0.5, 0.10230688456877068, 2.0),
+            DVec3::Z,
+            DVec3::X,
+            Loop2::new(vec![
+                Segment::Arc {
+                    center: DVec2::ZERO,
+                    radius: 1.45,
+                    start: -0.5 * std::f64::consts::PI,
+                    sweep: std::f64::consts::PI,
+                },
+                line(DVec2::new(0.0, 1.45), DVec2::new(0.0, -1.45)),
+            ]),
+        );
+        use crate::boolean::{BoolOp, boolean};
+        let cut = boolean(&cone, &ring, BoolOp::Subtract).expect("subtract");
+        let piece = boolean(&cut[0], &ball, BoolOp::Intersect).expect("intersect");
+        assert_eq!(piece.len(), 1);
+        let params = TessParams::default();
+        let m = tessellate(&piece[0], &params).expect("tess");
+        assert!(m.is_watertight());
+        for (t, &f) in m.triangles.iter().zip(&m.triangle_face) {
+            let c = t.iter().map(|&i| m.positions[i as usize]).sum::<DVec3>() / 3.0;
+            let d = piece[0].faces[f as usize].surface.distance(c);
+            assert!(d <= params.chord, "a triangle of face {f} stands {d} mm off it");
+        }
+    }
 
     #[test]
     fn a_cone_tip_is_shaded_along_each_side() {
