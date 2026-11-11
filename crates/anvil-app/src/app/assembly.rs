@@ -1128,7 +1128,8 @@ mod tests {
         let corner = cube_at + v3(10.0, 10.0, 10.0);
         // 3MF coordinates are written to the nearest nanometre.
         let nm = |x: f64| (x * 1e6).round() / 1e6;
-        let vertex = format!(r#"<vertex x="{}" y="{}" z="{}"/>"#, nm(corner.x), nm(corner.y), nm(corner.z));
+        let [x, y, z] = anvil_io::threemf::to_build(corner);
+        let vertex = format!(r#"<vertex x="{}" y="{}" z="{}"/>"#, nm(x), nm(y), nm(z));
         assert!(model.contains(&vertex), "{vertex} in {model}");
         assert_eq!(model.matches("<vertex ").count(), 16);
         let _ = std::fs::remove_dir_all(&dir);

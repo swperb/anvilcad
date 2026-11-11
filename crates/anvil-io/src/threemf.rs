@@ -7,6 +7,11 @@
 //! unit (always millimetres here), keeps bodies apart and names them, and can carry a
 //! material name and display colour for each.
 //!
+//! AnvilCAD is Y-up: the Top plane faces +Y. The 3MF build direction is +Z, so the
+//! writer turns the model a quarter turn about X, taking AnvilCAD's (x, y, z) to the
+//! file's (x, -z, y). A part then lands on the build plate the way it stands in
+//! AnvilCAD, with its top up, and AnvilCAD's front faces the front of the printer (-Y).
+//!
 //! The core specification asks for meshes whose triangles share vertices by index, with
 //! every edge used by exactly two triangles and every triangle wound counter-clockwise
 //! seen from outside. Faceted solids come from booleans with T-junctions and from convex
@@ -22,7 +27,7 @@ use std::io::{self, Write as _};
 pub struct Object {
     /// Shown by slicers in their object list.
     pub name: String,
-    /// The body, in millimetres, in the coordinates it should be placed at.
+    /// The body, in millimetres, in AnvilCAD's (Y-up) coordinates, where it should be placed.
     pub solid: Solid,
     /// Written as a base material, which slicers show by name and colour.
     pub material: Option<Material>,
@@ -196,7 +201,8 @@ pub fn model_xml(pkg: &Package) -> String {
         }
         s.push_str(">\n   <mesh>\n    <vertices>\n");
         for v in &mesh.vertices {
-            let _ = writeln!(s, r#"     <vertex x="{}" y="{}" z="{}"/>"#, num(v.x), num(v.y), num(v.z));
+            let [x, y, z] = to_build(*v);
+            let _ = writeln!(s, r#"     <vertex x="{}" y="{}" z="{}"/>"#, num(x), num(y), num(z));
         }
         s.push_str("    </vertices>\n    <triangles>\n");
         for [a, b, c] in &mesh.triangles {
@@ -210,6 +216,12 @@ pub fn model_xml(pkg: &Package) -> String {
     }
     s.push_str(" </build>\n</model>\n");
     s
+}
+
+/// AnvilCAD's Y-up coordinates in the file's Z-up ones: a proper rotation, so the
+/// triangles keep their outward winding.
+pub fn to_build(v: Vec3) -> [f64; 3] {
+    [v.x, -v.z, v.y]
 }
 
 /// A coordinate to the nearest nanometre, in the shortest form that reads back exactly.
@@ -380,6 +392,22 @@ mod tests {
     }
 
     #[test]
+    fn y_up_becomes_z_up_keeping_the_winding() {
+        let to = |v: Vec3| {
+            let [x, y, z] = to_build(v);
+            v3(x, y, z)
+        };
+        // Top goes up; the viewer's side in the Front view goes to the printer's front.
+        assert_eq!(to(Vec3::Y), Vec3::Z);
+        assert_eq!(to(Vec3::Z), -Vec3::Y);
+        assert_eq!(to(Vec3::X), Vec3::X);
+        // Turned, the mesh still encloses the same positive volume: outward winding kept.
+        let mut m = indexed_mesh(&cube());
+        m.vertices = m.vertices.into_iter().map(to).collect();
+        assert!((m.volume() - 6000.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn cube_mesh_shares_its_eight_corners() {
         let m = indexed_mesh(&cube());
         assert_eq!(m.vertices.len(), 8);
@@ -447,7 +475,8 @@ mod tests {
         assert!(model.contains(r#"<object id="3" type="model" name="Body 2" pid="1" pindex="0">"#));
         assert_eq!(model.matches("<vertex ").count(), 16);
         assert_eq!(model.matches("<triangle ").count(), 24);
-        assert!(model.contains(r#"<vertex x="60" y="20" z="30"/>"#));
+        // The far corner (60, 20, 30) turned so +Y is up.
+        assert!(model.contains(r#"<vertex x="60" y="-30" z="20"/>"#));
         assert!(model.contains("<item objectid=\"2\"/>\n  <item objectid=\"3\"/>"));
     }
 
