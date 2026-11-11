@@ -21,7 +21,9 @@ The kernel's result is then checked three ways (`src/lib.rs`, `src/oracle.rs`, `
 | Check | What it catches |
 |---|---|
 | **Audit**: `check::validate`; every edge sample within 1e-5 mm of the surfaces of both faces that use it; the display mesh closed and finite, enclosing a positive volume, its triangles facing the way their faces do, its vertex normals agreeing with their triangles | Invalid topology, edges off their faces, inside-out faces, shading that lights a face from behind (this found the cone-tip normals fixed alongside it) |
-| **Volume**: the fine mesh's volume against the closed-form volume (to 5e-4) or against the reference integrated along a grid of exact ray spans (to 3e-3 plus twice the grid's own convergence error) | Missing or extra pieces, faces bulging off their surfaces |
+| **Sag**: every display triangle within twice the chord of its face's true surface | Faces drawn flat across curvature (this found the cone slivers fixed alongside it) |
+| **Volume**: the fine mesh's volume against the closed-form volume (to 5e-4) or against an unbiased quasi-Monte Carlo reference (exact inside lengths along Halton-placed rays under six random shifts; to 1e-3 plus four standard errors), allowing the mesh's own area times chord | Missing or extra pieces, faces bulging off their surfaces |
+| **STEP round trip**: every result written with `anvil-step`, read back, exact, valid and of the same volume | Export or import losing or bending geometry (the rational conic edges included) |
 | **Membership**: 300 points spread through the part, inside the kernel's result (by the mesh's winding number) exactly when inside the reference; points near a primitive's boundary are skipped | Material on the wrong side, cavities filled, cuts missing |
 | **Pixels**: depth and normal images of the display mesh from four views, against the reference ray-cast, pixel by pixel; silhouettes and creases are not judged | Cracks, holes in the mesh, flipped or bent shading normals, faces drawn in the wrong place |
 | **Panics**: building and tessellating run under `catch_unwind` | Any panic, which the kernel must never raise |
@@ -70,7 +72,14 @@ cargo run -p anvil-evals -- --fuzz 300 --seed 1 --filter 1-136 --probe
 ```
 
 An image has one row per view: the reference, the kernel's mesh, and their difference with bad
-pixels red (coverage), blue (depth) or green (normal).
+pixels red (coverage), blue (depth) or green (normal). Depth is not judged where the surface is
+seen nearly edge-on, where a chord's sag shows divided by the cosine.
+
+To look at the results in the real app, `scripts/kernel-gallery.sh [OUT_DIR] [anvil-evals
+arguments]` builds each case, writes it to STEP, opens it in the headless harness
+(`anvilcad-agent`, see [AGENT_HARNESS.md](../AGENT_HARNESS.md)) and saves a screenshot, beside the
+oracle comparison images. On Linux without a GPU it needs Mesa's lavapipe
+(`mesa-vulkan-drivers`).
 
 ## Timing baselines
 
@@ -88,6 +97,16 @@ cargo run --release -p anvil-evals -- --repeats 5 --baseline target/evals/before
 Baselines are per machine. `crates/anvil-evals/baselines/` keeps the ones recorded for a
 change's pull request; compare on the same machine they came from. Timings are not part of
 `cargo test`, because CI machines vary too much.
+
+## Known kernel defects the evaluations have found and not yet fixed
+
+- A display mesh that is not watertight where an intersection edge runs into a torus's seam
+  circle at a shallow angle (`fuzz/2-28` at `--prims 4`, `fuzz/13-66`): about one random case
+  in a thousand.
+- A face that fails to tessellate ("boundary crosses itself in parameter space") after a torus
+  is cut by another torus (`fuzz/2-344` at `--prims 4`).
+- Unbounded intersection curves between two cones, or a cone and a cylinder, are still refused
+  (about one random case in seven hundred); plane and cone are solved exactly.
 
 ## What it does not cover yet
 

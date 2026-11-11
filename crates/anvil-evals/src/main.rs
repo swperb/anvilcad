@@ -7,13 +7,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 const USAGE: &str = "usage: anvil-evals [corpus] [--filter TEXT] [--fuzz N] [--seed S] [--kinds 0,1,2,3,4]
-                  [--prims N] [--images DIR] [--failed-images] [--repeats N]
+                  [--prims N] [--images DIR] [--failed-images] [--step DIR] [--no-step] [--repeats N]
                   [--report FILE.json] [--baseline FILE.json] [--save-baseline FILE.json]
                   [--slower PCT] [--quiet] [--probe]
 
 corpus runs the hand-built cases (the default when --fuzz is not given). --fuzz N runs N
 random cases from --seed. --baseline compares build times with a saved report and fails
-on any case slower by more than --slower percent (default 30) and 5 ms.";
+on any case slower by more than --slower percent (default 30) and 5 ms. Every result is
+written to STEP and read back; --step DIR keeps the files, --no-step skips the check.";
 
 struct Args {
     corpus: bool,
@@ -70,6 +71,8 @@ fn parse() -> Result<Args, String> {
                 }
             }
             "--images" => a.opt.image_dir = it.next().map(PathBuf::from),
+            "--step" => a.opt.step_dir = it.next().map(PathBuf::from),
+            "--no-step" => a.opt.step_round_trip = false,
             "--failed-images" => a.opt.images_on_failure_only = true,
             "--repeats" => a.opt.repeats = num(it.next(), "--repeats")? as usize,
             "--report" => a.report = it.next().map(PathBuf::from),

@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 anvil-brep.workspace = true
+anvil-step.workspace = true
 glam = { version = "0.34", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
