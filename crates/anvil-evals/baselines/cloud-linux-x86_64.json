@@ -1,0 +1,4418 @@
+[
+  {
+    "name": "box/overlap-union",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 15.0,
+    "reference_error": 0.0,
+    "kernel_volume": 15.0,
+    "build_ms": 0.355253,
+    "tess_ms": 0.03535,
+    "membership": {
+      "samples": 300,
+      "skipped": 19,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 2603,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/overlap-subtract",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 7.0,
+    "reference_error": 0.0,
+    "kernel_volume": 7.000000000000002,
+    "build_ms": 0.35710000000000003,
+    "tess_ms": 0.025231,
+    "membership": {
+      "samples": 300,
+      "skipped": 39,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3414,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/overlap-intersect",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 1.0,
+    "reference_error": 0.0,
+    "kernel_volume": 0.9999999999999994,
+    "build_ms": 0.41992100000000004,
+    "tess_ms": 0.017488,
+    "membership": {
+      "samples": 300,
+      "skipped": 51,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3924,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/nested-union",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 64.0,
+    "reference_error": 0.0,
+    "kernel_volume": 63.99999999999999,
+    "build_ms": 0.11235600000000001,
+    "tess_ms": 0.025057,
+    "membership": {
+      "samples": 300,
+      "skipped": 17,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3924,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/nested-intersect",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 1.0,
+    "reference_error": 0.0,
+    "kernel_volume": 0.9999999999999999,
+    "build_ms": 0.075155,
+    "tess_ms": 0.011833,
+    "membership": {
+      "samples": 300,
+      "skipped": 47,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3924,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/nested-subtract-void",
+    "category": "box",
+    "expect": "Graceful",
+    "status": "Graceful",
+    "reasons": [
+      "not supported yet: a cut that leaves an empty pocket inside the part"
+    ],
+    "warnings": [],
+    "bodies": 0,
+    "faces": 0,
+    "reference_volume": 63.0,
+    "reference_error": 0.0,
+    "kernel_volume": 0.0,
+    "build_ms": 0.092099,
+    "tess_ms": 0.0,
+    "membership": null,
+    "views": []
+  },
+  {
+    "name": "box/identical-union",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 1.0,
+    "reference_error": 0.0,
+    "kernel_volume": 0.9999999999999999,
+    "build_ms": 0.086343,
+    "tess_ms": 0.011371000000000001,
+    "membership": {
+      "samples": 300,
+      "skipped": 47,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3924,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/identical-intersect",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 1.0,
+    "reference_error": 0.0,
+    "kernel_volume": 0.9999999999999999,
+    "build_ms": 0.082874,
+    "tess_ms": 0.011477999999999999,
+    "membership": {
+      "samples": 300,
+      "skipped": 47,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3924,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/identical-subtract",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 0,
+    "faces": 0,
+    "reference_volume": 0.0,
+    "reference_error": 0.0,
+    "kernel_volume": -0.0,
+    "build_ms": 0.07461000000000001,
+    "tess_ms": 0.00006400000000000001,
+    "membership": {
+      "samples": 300,
+      "skipped": 47,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/boss-on-face",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 236.0,
+    "reference_error": 0.0,
+    "kernel_volume": 236.00000000000003,
+    "build_ms": 0.135856,
+    "tess_ms": 0.027037,
+    "membership": {
+      "samples": 300,
+      "skipped": 14,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2968,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 816,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/shared-face",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 10,
+    "reference_volume": 2.0,
+    "reference_error": 0.0,
+    "kernel_volume": 2.0,
+    "build_ms": 0.111662,
+    "tess_ms": 0.019135,
+    "membership": {
+      "samples": 300,
+      "skipped": 59,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2380,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2380,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1156,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3122,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/shared-partial-face",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 1.25,
+    "reference_error": 0.0,
+    "kernel_volume": 1.2499999999999998,
+    "build_ms": 0.21755400000000003,
+    "tess_ms": 0.046257,
+    "membership": {
+      "samples": 300,
+      "skipped": 49,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1700,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1700,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1012,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 2072,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/touching-edge",
+    "category": "box",
+    "expect": "Graceful",
+    "status": "Graceful",
+    "reasons": [
+      "not supported yet: zero-thickness geometry (bodies would touch along an edge)"
+    ],
+    "warnings": [],
+    "bodies": 0,
+    "faces": 0,
+    "reference_volume": 2.0,
+    "reference_error": 0.0,
+    "kernel_volume": 0.0,
+    "build_ms": 0.085255,
+    "tess_ms": 0.0,
+    "membership": null,
+    "views": []
+  },
+  {
+    "name": "box/touching-vertex",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 2,
+    "faces": 12,
+    "reference_volume": 2.0,
+    "reference_error": 0.0,
+    "kernel_volume": 1.9999999999999998,
+    "build_ms": 0.09635300000000001,
+    "tess_ms": 0.024474,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1152,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1152,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1152,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1683,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/through-slot",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 10,
+    "reference_volume": 72.0,
+    "reference_error": 0.0,
+    "kernel_volume": 72.0,
+    "build_ms": 0.467621,
+    "tess_ms": 0.02684,
+    "membership": {
+      "samples": 300,
+      "skipped": 31,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2220,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 948,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 420,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 992,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/cut-in-two",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 2,
+    "faces": 12,
+    "reference_volume": 32.0,
+    "reference_error": 0.0,
+    "kernel_volume": 32.0,
+    "build_ms": 0.5076940000000001,
+    "tess_ms": 0.034094,
+    "membership": {
+      "samples": 300,
+      "skipped": 41,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 896,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 896,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 196,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 448,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/flush-side-notch",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 10,
+    "reference_volume": 480.0,
+    "reference_error": 0.0,
+    "kernel_volume": 479.99999999999983,
+    "build_ms": 0.49311600000000005,
+    "tess_ms": 0.02667,
+    "membership": {
+      "samples": 300,
+      "skipped": 14,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2982,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1456,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/flush-top-pocket",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 428.0,
+    "reference_error": 0.0,
+    "kernel_volume": 427.99999999999994,
+    "build_ms": 0.15152500000000002,
+    "tess_ms": 0.026815,
+    "membership": {
+      "samples": 300,
+      "skipped": 18,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2848,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/rotated-45-intersect",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 16.0,
+    "reference_error": 0.0,
+    "kernel_volume": 15.999999999999993,
+    "build_ms": 0.425873,
+    "tess_ms": 0.024422,
+    "membership": {
+      "samples": 300,
+      "skipped": 17,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 840,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1920,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/rotated-45-subtract",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 10,
+    "reference_volume": 48.0,
+    "reference_error": 0.0,
+    "kernel_volume": 47.999999999999986,
+    "build_ms": 0.430795,
+    "tess_ms": 0.042468,
+    "membership": {
+      "samples": 300,
+      "skipped": 19,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1668,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3764,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/thin-wall",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 4.992003999999952,
+    "reference_error": 0.0,
+    "kernel_volume": 4.992003999999714,
+    "build_ms": 0.301309,
+    "tess_ms": 0.030886999999999998,
+    "membership": {
+      "samples": 300,
+      "skipped": 11,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "box/foil",
+    "category": "box",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 0.1,
+    "reference_error": 0.0,
+    "kernel_volume": 0.10000000000003338,
+    "build_ms": 0.26833100000000004,
+    "tess_ms": 0.015962999999999998,
+    "membership": {
+      "samples": 300,
+      "skipped": 13,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 3136,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/boss-gap-1e-3",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 2,
+    "faces": 12,
+    "reference_volume": 247.984,
+    "reference_error": 0.0,
+    "kernel_volume": 247.98400000000004,
+    "build_ms": 0.010054,
+    "tess_ms": 0.022660999999999997,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/boss-overlap-1e-3",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 248.0,
+    "reference_error": 0.0,
+    "kernel_volume": 248.00000000000006,
+    "build_ms": 0.32532900000000003,
+    "tess_ms": 0.040477,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/side-offset-1e-3",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 283.990997,
+    "reference_error": 0.0,
+    "kernel_volume": 283.99099700000005,
+    "build_ms": 0.190556,
+    "tess_ms": 0.043835000000000006,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2928,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1184,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 956,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/boss-gap-1e-4",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 2,
+    "faces": 12,
+    "reference_volume": 247.9984,
+    "reference_error": 0.0,
+    "kernel_volume": 247.99840000000003,
+    "build_ms": 0.00814,
+    "tess_ms": 0.022186,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/boss-overlap-1e-4",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 248.0,
+    "reference_error": 0.0,
+    "kernel_volume": 248.00000000000006,
+    "build_ms": 0.278071,
+    "tess_ms": 0.026557,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/side-offset-1e-4",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [
+      "body 0: edge 21 is only 1.00e-4 mm long",
+      "body 0: edge 23 is only 1.00e-4 mm long"
+    ],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 283.99909997,
+    "reference_error": 0.0,
+    "kernel_volume": 283.9990999700001,
+    "build_ms": 0.185166,
+    "tess_ms": 0.033873,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2928,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1184,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 956,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/boss-gap-1e-5",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 247.99984,
+    "reference_error": 0.0,
+    "kernel_volume": 248.00036000000006,
+    "build_ms": 0.14760700000000002,
+    "tess_ms": 0.027056,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/boss-overlap-1e-5",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 248.0,
+    "reference_error": 0.0,
+    "kernel_volume": 247.99964,
+    "build_ms": 0.144649,
+    "tess_ms": 0.026872,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/side-offset-1e-5",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 283.9999099997,
+    "reference_error": 0.0,
+    "kernel_volume": 283.99998999966675,
+    "build_ms": 0.148959,
+    "tess_ms": 0.02657,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2928,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1184,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 956,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "near/boss-gap-1e-7",
+    "category": "near",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 11,
+    "reference_volume": 248.0,
+    "reference_error": 0.0,
+    "kernel_volume": 248.00000359999996,
+    "build_ms": 0.18982,
+    "tess_ms": 0.028181,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 912,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/tiny-0.01-union",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 0.000015000000000000002,
+    "reference_error": 0.0,
+    "kernel_volume": 0.000015000000000000004,
+    "build_ms": 0.41515799999999997,
+    "tess_ms": 0.033559,
+    "membership": {
+      "samples": 300,
+      "skipped": 179,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1922,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1922,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1922,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 2603,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/tiny-0.01-subtract",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 7.000000000000001e-6,
+    "reference_error": 0.0,
+    "kernel_volume": 6.999999999999999e-6,
+    "build_ms": 0.35468,
+    "tess_ms": 0.036828,
+    "membership": {
+      "samples": 300,
+      "skipped": 232,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3414,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/huge-1000-union",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 15000000000.0,
+    "reference_error": 0.0,
+    "kernel_volume": 15000000000.000002,
+    "build_ms": 0.358093,
+    "tess_ms": 0.032855,
+    "membership": {
+      "samples": 300,
+      "skipped": 5,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/huge-1000-subtract",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 7000000000.0,
+    "reference_error": 0.0,
+    "kernel_volume": 7000000000.000002,
+    "build_ms": 0.35266699999999995,
+    "tess_ms": 0.021537999999999998,
+    "membership": {
+      "samples": 300,
+      "skipped": 8,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/far-1e4-union",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 15.0,
+    "reference_error": 0.0,
+    "kernel_volume": 15.0,
+    "build_ms": 0.35992199999999996,
+    "tess_ms": 0.032292,
+    "membership": {
+      "samples": 300,
+      "skipped": 19,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 2603,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/far-1e4-subtract",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 7.0,
+    "reference_error": 0.0,
+    "kernel_volume": 6.999999999997726,
+    "build_ms": 0.354184,
+    "tess_ms": 0.020716,
+    "membership": {
+      "samples": 300,
+      "skipped": 39,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3414,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/far-1e5-union",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 15.0,
+    "reference_error": 0.0,
+    "kernel_volume": 15.000000000043656,
+    "build_ms": 0.368531,
+    "tess_ms": 0.032598999999999996,
+    "membership": {
+      "samples": 300,
+      "skipped": 19,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1854,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 2603,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/far-1e5-subtract",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 7.0,
+    "reference_error": 0.0,
+    "kernel_volume": 6.999999999949068,
+    "build_ms": 0.343707,
+    "tess_ms": 0.021373,
+    "membership": {
+      "samples": 300,
+      "skipped": 39,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2400,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 3414,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "scale/far-1e4-hole",
+    "category": "scale",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 437.1681469282041,
+    "reference_error": 0.0,
+    "kernel_volume": 437.1723383840154,
+    "build_ms": 1.390619,
+    "tess_ms": 5.796324,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2596,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 90,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/through-hole",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 437.1681469282041,
+    "reference_error": 0.0,
+    "kernel_volume": 437.1723164991934,
+    "build_ms": 3.064024,
+    "tess_ms": 6.850333,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2596,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 90,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/blind-hole",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 8,
+    "reference_volume": 462.3008881569225,
+    "reference_error": 0.0,
+    "kernel_volume": 462.3033898995026,
+    "build_ms": 2.148756,
+    "tess_ms": 4.435732000000001,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 90,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/hole-flush-both-ends",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 437.1681469282041,
+    "reference_error": 0.0,
+    "kernel_volume": 437.1723164991904,
+    "build_ms": 2.570024,
+    "tess_ms": 7.098245,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2596,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 90,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/hole-tangent-inside",
+    "category": "cyl",
+    "expect": "Graceful",
+    "status": "Graceful",
+    "reasons": [
+      "not supported yet: zero-thickness geometry (the result would touch itself along a curve)"
+    ],
+    "warnings": [],
+    "bodies": 0,
+    "faces": 0,
+    "reference_volume": 437.1681469282041,
+    "reference_error": 0.0,
+    "kernel_volume": 0.0,
+    "build_ms": 4.499238,
+    "tess_ms": 0.0,
+    "membership": null,
+    "views": []
+  },
+  {
+    "name": "cyl/hole-breaks-out",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 449.4518439142917,
+    "reference_error": 0.0,
+    "kernel_volume": 449.45461719308554,
+    "build_ms": 4.0551010000000005,
+    "tess_ms": 4.8391720000000005,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2754,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/hole-on-edge",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 484.29203673205103,
+    "reference_error": 0.0,
+    "kernel_volume": 484.2930735393078,
+    "build_ms": 2.959521,
+    "tess_ms": 1.548489,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 3038,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1456,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/overlapping-holes",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 470.8506322339901,
+    "reference_error": 0.0,
+    "kernel_volume": 470.8522414289097,
+    "build_ms": 6.618398,
+    "tess_ms": 14.983293,
+    "membership": {
+      "samples": 300,
+      "skipped": 13,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2852,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 22,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/coaxial-stack",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 4,
+    "reference_volume": 100.53096491487338,
+    "reference_error": 0.0,
+    "kernel_volume": 100.52429360107156,
+    "build_ms": 8.262435,
+    "tess_ms": 10.638497000000001,
+    "membership": {
+      "samples": 300,
+      "skipped": 19,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 872,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2100,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2100,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1592,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/coaxial-seams-apart",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 3,
+    "reference_volume": 37.69911184307752,
+    "reference_error": 0.0,
+    "kernel_volume": 37.69661107620012,
+    "build_ms": 10.239676,
+    "tess_ms": 7.010237,
+    "membership": {
+      "samples": 300,
+      "skipped": 20,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1528,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1320,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1320,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1680,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/coaxial-inside",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 2,
+    "faces": 6,
+    "reference_volume": 75.39822368615503,
+    "reference_error": 0.0,
+    "kernel_volume": 75.39322215229683,
+    "build_ms": 9.286042,
+    "tess_ms": 8.167903,
+    "membership": {
+      "samples": 300,
+      "skipped": 19,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 872,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1618,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/hole-continues-hole",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 8,
+    "reference_volume": 524.601776313845,
+    "reference_error": 0.0,
+    "kernel_volume": 524.6067802389879,
+    "build_ms": 11.927171,
+    "tess_ms": 7.4984459999999995,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2636,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1792,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1792,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 64,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/coaxial-tube",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 4,
+    "reference_volume": 125.66370614359172,
+    "reference_error": 0.0,
+    "kernel_volume": 125.65536700134845,
+    "build_ms": 6.858124,
+    "tess_ms": 29.131363,
+    "membership": {
+      "samples": 300,
+      "skipped": 12,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1748,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1848,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1848,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1966,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/coaxial-step",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 5,
+    "reference_volume": 150.79644737231007,
+    "reference_error": 0.0,
+    "kernel_volume": 150.78644040169362,
+    "build_ms": 4.933673000000001,
+    "tess_ms": 20.284920000000003,
+    "membership": {
+      "samples": 300,
+      "skipped": 8,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1316,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1536,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1536,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 724,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/tangent-outside",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 2,
+    "faces": 9,
+    "reference_volume": 562.8318530717959,
+    "reference_error": 0.0,
+    "kernel_volume": 562.8276835008604,
+    "build_ms": 2.214251,
+    "tess_ms": 10.719688999999999,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2498,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1320,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 880,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 88,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/cross-holes-equal",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 10,
+    "reference_volume": 791.3392543794832,
+    "reference_error": 0.0,
+    "kernel_volume": 791.3517562300228,
+    "build_ms": 11.07953,
+    "tess_ms": 19.253877,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2084,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2084,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 86,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/cross-holes-unequal",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 9,
+    "reference_volume": 855.0814258791619,
+    "reference_error": 0.01568485030642611,
+    "kernel_volume": 855.0899442818724,
+    "build_ms": 31.473063000000003,
+    "tess_ms": 104.671145,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2500,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 2376,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 2084,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 48,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/steinmetz-2",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 42.666666666666664,
+    "reference_error": 0.0,
+    "kernel_volume": 42.66239421102428,
+    "build_ms": 5.948189,
+    "tess_ms": 4.915745,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1684,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1788,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1788,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1728,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/steinmetz-3",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 12,
+    "reference_volume": 37.49033200812191,
+    "reference_error": 0.0,
+    "kernel_volume": 37.486569224962444,
+    "build_ms": 24.485068,
+    "tess_ms": 4.288283000000001,
+    "membership": {
+      "samples": 300,
+      "skipped": 27,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1540,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1540,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1540,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1512,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/angled-hole",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 477.7844517038791,
+    "reference_error": 0.006139962328216646,
+    "kernel_volume": 477.78714355743585,
+    "build_ms": 2.7039389999999996,
+    "tess_ms": 9.895869,
+    "membership": {
+      "samples": 300,
+      "skipped": 15,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2918,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/tee-unequal",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 5,
+    "reference_volume": 260.9491598796721,
+    "reference_error": 0.05313192843587074,
+    "kernel_volume": 260.9370417748834,
+    "build_ms": 23.337824,
+    "tess_ms": 57.244671,
+    "membership": {
+      "samples": 300,
+      "skipped": 9,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 896,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 924,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 188,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 377,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cyl/tee-equal",
+    "category": "cyl",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 5,
+    "reference_volume": 292.83791487015316,
+    "reference_error": 0.05505017405636498,
+    "kernel_volume": 292.80674310586085,
+    "build_ms": 6.973914000000001,
+    "tess_ms": 19.233606,
+    "membership": {
+      "samples": 300,
+      "skipped": 12,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 900,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1016,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 272,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 338,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "sphere/octant",
+    "category": "sphere",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 4,
+    "reference_volume": 4.1887902047863905,
+    "reference_error": 0.0,
+    "kernel_volume": 4.1883005463728376,
+    "build_ms": 1.658193,
+    "tess_ms": 0.9212629999999999,
+    "membership": {
+      "samples": 300,
+      "skipped": 30,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1708,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1901,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1708,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1960,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "sphere/half",
+    "category": "sphere",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 3,
+    "reference_volume": 16.755160819145562,
+    "reference_error": 0.0,
+    "kernel_volume": 16.753202654295478,
+    "build_ms": 2.01745,
+    "tess_ms": 4.333226,
+    "membership": {
+      "samples": 300,
+      "skipped": 10,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 636,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 636,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1852,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1142,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "sphere/lens",
+    "category": "sphere",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 4,
+    "reference_volume": 10.471975511965978,
+    "reference_error": 0.0,
+    "kernel_volume": 10.470309300272305,
+    "build_ms": 2.2114399999999996,
+    "tess_ms": 4.269188,
+    "membership": {
+      "samples": 300,
+      "skipped": 20,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 488,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 488,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1836,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 909,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "sphere/pair-union",
+    "category": "sphere",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 4,
+    "reference_volume": 56.548667764616276,
+    "reference_error": 0.0,
+    "kernel_volume": 56.54251383361718,
+    "build_ms": 3.08583,
+    "tess_ms": 15.635934,
+    "membership": {
+      "samples": 300,
+      "skipped": 25,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1492,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1492,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 884,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1251,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "sphere/dent",
+    "category": "sphere",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 492.93141652942296,
+    "reference_error": 0.0,
+    "kernel_volume": 492.93224249061257,
+    "build_ms": 1.5537050000000001,
+    "tess_ms": 4.531516,
+    "membership": {
+      "samples": 300,
+      "skipped": 14,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2896,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 72,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "sphere/ball-on-corner",
+    "category": "sphere",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 8,
+    "reference_volume": 503.6651914291881,
+    "reference_error": 0.0,
+    "kernel_volume": 503.66476315386547,
+    "build_ms": 1.370825,
+    "tess_ms": 6.847395,
+    "membership": {
+      "samples": 300,
+      "skipped": 4,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2603,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1283,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1273,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 23,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "sphere/in-bore",
+    "category": "sphere",
+    "expect": "Graceful",
+    "status": "Graceful",
+    "reasons": [
+      "not supported yet: a cut that leaves an empty pocket inside the part"
+    ],
+    "warnings": [],
+    "bodies": 0,
+    "faces": 0,
+    "reference_volume": 41.88790204786391,
+    "reference_error": 0.0,
+    "kernel_volume": 0.0,
+    "build_ms": 2.899469,
+    "tess_ms": 0.0,
+    "membership": null,
+    "views": []
+  },
+  {
+    "name": "sphere/tangent-to-face",
+    "category": "sphere",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 2,
+    "faces": 8,
+    "reference_volume": 76.18879020478639,
+    "reference_error": 0.0,
+    "kernel_volume": 76.1883007463032,
+    "build_ms": 1.244396,
+    "tess_ms": 7.5828120000000006,
+    "membership": {
+      "samples": 300,
+      "skipped": 9,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2700,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1058,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1058,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1384,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cone/through-box",
+    "category": "cone",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 123.31893575640738,
+    "reference_error": 0.003446176368463228,
+    "kernel_volume": 123.31929450853472,
+    "build_ms": 3.251287,
+    "tess_ms": 5.732894,
+    "membership": {
+      "samples": 300,
+      "skipped": 21,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2700,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1944,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1488,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cone/countersink",
+    "category": "cone",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 491.6224195904272,
+    "reference_error": 0.0,
+    "kernel_volume": 491.62284445047055,
+    "build_ms": 2.3895169999999997,
+    "tess_ms": 2.3934949999999997,
+    "membership": {
+      "samples": 300,
+      "skipped": 14,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2668,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 116,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cone/countersink-breaks-out",
+    "category": "cone",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 477.73437499457646,
+    "reference_error": 0.007644054179182333,
+    "kernel_volume": 477.7359913032937,
+    "build_ms": 1.597806,
+    "tess_ms": 1.663845,
+    "membership": {
+      "samples": 300,
+      "skipped": 13,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2530,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 88,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "cone/sliced-along-axis",
+    "category": "cone",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 5,
+    "reference_volume": 7.077541841607835,
+    "reference_error": 0.0007241707088599778,
+    "kernel_volume": 7.0766647122218584,
+    "build_ms": 1.8070199999999998,
+    "tess_ms": 1.686177,
+    "membership": {
+      "samples": 300,
+      "skipped": 22,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 474,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1728,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1516,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "torus/half",
+    "category": "torus",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 2,
+    "reference_volume": 39.47841760435743,
+    "reference_error": 0.0,
+    "kernel_volume": 39.46001769280808,
+    "build_ms": 5.181873,
+    "tess_ms": 17.964984,
+    "membership": {
+      "samples": 300,
+      "skipped": 33,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1148,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 84,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 84,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 536,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "torus/quarter-box",
+    "category": "torus",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 4,
+    "reference_volume": 19.739208802178716,
+    "reference_error": 0.0,
+    "kernel_volume": 19.7300664377925,
+    "build_ms": 4.628867,
+    "tess_ms": 7.806216,
+    "membership": {
+      "samples": 300,
+      "skipped": 18,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 1368,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 872,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 788,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 565,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "torus/threaded-rod",
+    "category": "torus",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 82.1515398277038,
+    "reference_error": 0.044153464793255284,
+    "kernel_volume": 82.11244456477404,
+    "build_ms": 71.252151,
+    "tess_ms": 131.478941,
+    "membership": {
+      "samples": 300,
+      "skipped": 8,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 880,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 200,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 200,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 435,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "torus/ring-groove",
+    "category": "torus",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 6,
+    "reference_volume": 165.77230243017573,
+    "reference_error": 0.0,
+    "kernel_volume": 165.7674148995449,
+    "build_ms": 7.410279,
+    "tess_ms": 17.194464,
+    "membership": {
+      "samples": 300,
+      "skipped": 18,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2488,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 828,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 828,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 556,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "blend/fillet-box-edge",
+    "category": "blend",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 237.85398163397448,
+    "reference_error": 0.0,
+    "kernel_volume": 237.8534632303781,
+    "build_ms": 0.872356,
+    "tess_ms": 2.2671089999999996,
+    "membership": {
+      "samples": 300,
+      "skipped": 21,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2730,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1820,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1032,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1241,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "blend/fillet-small-radius",
+    "category": "blend",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 239.99463495408494,
+    "reference_error": 0.0,
+    "kernel_volume": 239.99463365807912,
+    "build_ms": 0.75412,
+    "tess_ms": 2.0879779999999997,
+    "membership": {
+      "samples": 300,
+      "skipped": 18,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2800,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1820,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1040,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1496,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "blend/fillet-four-vertical-edges",
+    "category": "blend",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 10,
+    "reference_volume": 236.5663706143592,
+    "reference_error": 0.0,
+    "kernel_volume": 236.56554116860087,
+    "build_ms": 4.788212,
+    "tess_ms": 7.366301,
+    "membership": {
+      "samples": 300,
+      "skipped": 25,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2752,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1768,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 988,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1624,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "blend/chamfer-box-edge",
+    "category": "blend",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 7,
+    "reference_volume": 235.0,
+    "reference_error": 0.0,
+    "kernel_volume": 235.0,
+    "build_ms": 0.29752,
+    "tess_ms": 0.017329999999999998,
+    "membership": {
+      "samples": 300,
+      "skipped": 19,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2660,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1820,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1019,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 1232,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "blend/fillet-boss-root",
+    "category": "blend",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [
+      "body 0: 56 zero-area triangles"
+    ],
+    "bodies": 1,
+    "faces": 14,
+    "reference_volume": 236.64380550980766,
+    "reference_error": 0.0,
+    "kernel_volume": 236.64396099547153,
+    "build_ms": 0.889837,
+    "tess_ms": 2.996807,
+    "membership": {
+      "samples": 300,
+      "skipped": 18,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2938,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 913,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 816,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "blend/fillet-hole-rim",
+    "category": "blend",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 8,
+    "reference_volume": 436.44625234185514,
+    "reference_error": 0.14365684871630438,
+    "kernel_volume": 436.45990507059537,
+    "build_ms": 9.216954,
+    "tess_ms": 14.878662,
+    "membership": {
+      "samples": 300,
+      "skipped": 18,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2428,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 88,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "blend/chamfer-hole-rim",
+    "category": "blend",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 8,
+    "reference_volume": 435.4664509075096,
+    "reference_error": 0.0,
+    "kernel_volume": 435.47071458903537,
+    "build_ms": 8.678902,
+    "tess_ms": 7.071466999999999,
+    "membership": {
+      "samples": 300,
+      "skipped": 16,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2340,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 1568,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 118,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "chain/plate-25-holes",
+    "category": "chain",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 31,
+    "reference_volume": 11616.42706617787,
+    "reference_error": 0.0,
+    "kernel_volume": 11616.48570076533,
+    "build_ms": 268.788508,
+    "tess_ms": 240.453681,
+    "membership": {
+      "samples": 300,
+      "skipped": 32,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2852,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 240,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 240,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "chain/plate-64-holes",
+    "category": "chain",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 70,
+    "reference_volume": 29738.053289415348,
+    "reference_error": 0.0,
+    "kernel_volume": 29738.20339396772,
+    "build_ms": 1065.6875949999999,
+    "tess_ms": 618.486663,
+    "membership": {
+      "samples": 300,
+      "skipped": 50,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 2432,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 120,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 120,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "chain/staircase-12",
+    "category": "chain",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 72,
+    "reference_volume": 37.00000416666666,
+    "reference_error": 0.00021666666666912235,
+    "kernel_volume": 37.0,
+    "build_ms": 8.577301,
+    "tess_ms": 0.205923,
+    "membership": {
+      "samples": 300,
+      "skipped": 17,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 540,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 420,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 140,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 0,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  },
+  {
+    "name": "chain/perforated-ball",
+    "category": "chain",
+    "expect": "Pass",
+    "status": "Pass",
+    "reasons": [],
+    "warnings": [],
+    "bodies": 1,
+    "faces": 8,
+    "reference_volume": 397.3279441277246,
+    "reference_error": 0.14706554164611127,
+    "kernel_volume": 397.25511483957234,
+    "build_ms": 233.94326600000002,
+    "tess_ms": 196.19050900000002,
+    "membership": {
+      "samples": 300,
+      "skipped": 8,
+      "wrong": 0,
+      "examples": []
+    },
+    "views": [
+      {
+        "view": "top",
+        "judged": 496,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "front",
+        "judged": 576,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "right",
+        "judged": 628,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      },
+      {
+        "view": "iso",
+        "judged": 769,
+        "coverage": 0,
+        "depth": 0,
+        "normal": 0
+      }
+    ]
+  }
+]
