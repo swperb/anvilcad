@@ -228,8 +228,9 @@ pub fn meshes(bodies: &[Solid], params: &TessParams) -> Result<Vec<TriMesh>, Str
 /// Triangle edges not used exactly once in each direction, by position.
 pub fn open_edges(mesh: &TriMesh) -> Vec<(DVec3, DVec3)> {
     use std::collections::HashMap;
-    let key = |p: DVec3| (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
-    let mut count: HashMap<((u64, u64, u64), (u64, u64, u64)), (i32, DVec3, DVec3)> = HashMap::new();
+    type Key = (u64, u64, u64);
+    let key = |p: DVec3| -> Key { (p.x.to_bits(), p.y.to_bits(), p.z.to_bits()) };
+    let mut count: HashMap<(Key, Key), (i32, DVec3, DVec3)> = HashMap::new();
     for t in &mesh.triangles {
         for k in 0..3 {
             let (p, q) = (mesh.positions[t[k] as usize], mesh.positions[t[(k + 1) % 3] as usize]);

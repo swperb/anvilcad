@@ -279,8 +279,42 @@ pub fn cases() -> Vec<Case> {
         )
         .volume(32.0 * PI)
         .bodies(1)
-        .graceful()
-        .note("overlapping coincident cylindrical faces are not merged yet"),
+        .note("two cylinders of the same radius on one axis share a cylindrical face"),
+    );
+    let turned = |z0: f64, len: f64| {
+        Tree::Prim(crate::csg::Prim::Cylinder {
+            frame: crate::csg::frame(v(0.0, 0.0, z0), DVec3::Z, v(1.0, 0.7, 0.0)),
+            radius: 2.0,
+            z0: 0.0,
+            z1: len,
+        })
+    };
+    c.push(
+        Case::new("cyl/coaxial-seams-apart", "cyl", hole(0.0, 0.0, 2.0, 0.0, 5.0).minus(turned(3.0, 5.0)))
+            .volume(12.0 * PI)
+            .bodies(1)
+            .note(
+                "the cylinders' seams lie at different angles, so each cap circle crosses the other's seam",
+            ),
+    );
+    c.push(
+        Case::new("cyl/coaxial-inside", "cyl", hole(0.0, 0.0, 2.0, 0.0, 8.0).minus(turned(3.0, 2.0)))
+            .volume(24.0 * PI)
+            .bodies(2)
+            .note("a slice of the same radius cut from the middle leaves two cylinders"),
+    );
+    c.push(
+        Case::new(
+            "cyl/hole-continues-hole",
+            "cyl",
+            cuboid(v(-5.0, -5.0, 0.0), v(5.0, 5.0, 6.0))
+                .minus(hole(0.0, 0.0, 2.0, -1.0, 4.0))
+                .minus(turned(2.0, 5.0)),
+        )
+        .volume(600.0 - 24.0 * PI)
+        .bodies(1)
+        .genus(1)
+        .note("a hole drilled from each side that meet in the middle"),
     );
     c.push(
         Case::new(
