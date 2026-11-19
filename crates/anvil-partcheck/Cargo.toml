@@ -1,0 +1,31 @@
+[package]
+name = "anvil-partcheck"
+description = "AnvilCAD Part Check: machining features, DFM flags and an estimated machine time from a STEP file, as a versioned JSON result"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+
+[[bin]]
+name = "anvil-partcheck"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anvil-kernel.workspace = true
+anvil-model.workspace = true
+anvil-cam = { path = "../anvil-cam" }
+schemars = "1"
+sha2 = "0.11"
+thiserror = "2"
+
+[dev-dependencies]
+anvil-sketch.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"
