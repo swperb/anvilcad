@@ -36,10 +36,13 @@ without the Visual C++ Redistributable; their winget manifests depend on
 `Microsoft.VCRedist.2015+.x64`, which `update-package-managers.sh` adds when it finds the
 import.
 
-The AppImage is compressed with gzip rather than appimagetool's zstd default, and
-`package.sh` refuses to ship one that is not. AppImageLauncher 2.x, common on Linux Mint
-and Ubuntu, intercepts every AppImage launch and reads only xz and zlib images, so 0.1.0
-and 0.1.1 (zstd) fail under it with "Squashfs image uses (null) compression" (#107).
+The AppImage is the pinned AppImage runtime followed by a gzip squashfs image made with
+the system's `mksquashfs` (squashfs-tools), and `package.sh` refuses to ship one that is
+not gzip or does not open. AppImageLauncher 2.x, common on Linux Mint and Ubuntu,
+intercepts every AppImage launch and reads only xz and zlib images, so 0.1.0 and 0.1.1,
+which appimagetool compressed with zstd, fail under it with "Squashfs image uses (null)
+compression" (#107). appimagetool is no longer used, because the `mksquashfs` it bundles
+supports only zstd.
 Users of those releases can run the `.tar.gz` instead.
 
 The macOS app is signed with a Developer ID and notarized by `package.sh` when the signing
