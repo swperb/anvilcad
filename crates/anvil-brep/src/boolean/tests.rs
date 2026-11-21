@@ -996,3 +996,62 @@ fn equal_cylinders_crossing_meet_at_their_tangent_points() {
     let want = 1000.0 - (2.0 * 4.0 * PI * 10.0 - 16.0 * 8.0 / 3.0);
     assert!(close(fine_volume(&d), want, 1e-4), "{} vs {want}", fine_volume(&d));
 }
+
+/// A ball of radius `r` about `c`, revolved from a half disc.
+fn ball(c: DVec3, r: f64) -> Solid {
+    let half = Loop2::new(vec![
+        Segment::Arc { center: DVec2::ZERO, radius: r, start: -0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(0.0, r), b: DVec2::new(0.0, -r) },
+    ]);
+    let reg = build_regions(&[half]).expect("region");
+    let f = Frame { origin: c, ..Frame::world() };
+    crate::revolve::revolve(&f, &reg[0], DVec2::ZERO, DVec2::Y, 2.0 * PI).expect("ball")
+}
+
+fn too_thin(r: Result<Vec<Solid>>) -> bool {
+    matches!(r, Err(KernelError::Unsupported(m)) if m.contains("thinner than"))
+}
+
+#[test]
+fn results_thinner_than_tolerance_are_refused_not_lost() {
+    // A tube with a wall of 7.5e-6, below the 1e-5 at which faces merge.
+    let outer = cylinder(DVec3::ZERO, DVec3::Z, 0.0007575, 0.0, 0.0015);
+    let inner = cylinder(DVec3::ZERO, DVec3::Z, 0.00075, 0.0, 0.0015);
+    assert!(too_thin(boolean(&outer, &inner, BoolOp::Subtract)));
+    // A lens 1e-6 thick where two balls overlap: their section circle is traced, but its
+    // pieces are too small to place.
+    let a = ball(DVec3::ZERO, 5.0);
+    assert!(too_thin(boolean(&a, &ball(DVec3::new(9.999999, 0.0, 0.0), 5.0), BoolOp::Intersect)));
+    // The same lens a hundredth thick is made.
+    let lens = boolean(&a, &ball(DVec3::new(9.99, 0.0, 0.0), 5.0), BoolOp::Intersect).expect("lens");
+    let h: f64 = 0.005;
+    let want = 2.0 * PI * h * h * (15.0 - h) / 3.0;
+    let fine = tess::tessellate(&lens[0], &TessParams { chord: 1e-6, max_angle: 0.0005 }).expect("tess");
+    let v = mass::properties(&fine).volume;
+    assert!((v - want).abs() < 1e-3 * want, "{v} vs {want}");
+    // Boxes overlapping by 5e-6.
+    let b = cuboid(DVec3::ZERO, DVec3::ONE);
+    let c = cuboid(DVec3::new(1.0 - 5e-6, 0.0, 0.0), DVec3::new(2.0, 1.0, 1.0));
+    assert!(too_thin(boolean(&b, &c, BoolOp::Intersect)));
+    // A box less one 5e-6 smaller all round leaves a skin 5e-6 thick.
+    let d = cuboid(DVec3::splat(5e-6), DVec3::splat(1.0 - 5e-6));
+    assert!(too_thin(boolean(&b, &d, BoolOp::Subtract)));
+}
+
+#[test]
+fn empty_results_stay_empty() {
+    let b = cuboid(DVec3::ZERO, DVec3::ONE);
+    let empty = |r: Result<Vec<Solid>>| matches!(r, Ok(v) if v.is_empty());
+    assert!(empty(boolean(&b, &b, BoolOp::Subtract)));
+    // Less a box 5e-6 larger all round: within the merging distance, but nothing is left.
+    assert!(empty(boolean(&b, &cuboid(DVec3::splat(-5e-6), DVec3::splat(1.0 + 5e-6)), BoolOp::Subtract)));
+    // A box 5e-6 away, and one touching.
+    let gap = cuboid(DVec3::new(1.0 + 5e-6, 0.0, 0.0), DVec3::new(2.0, 1.0, 1.0));
+    assert!(empty(boolean(&b, &gap, BoolOp::Intersect)));
+    let touching = cuboid(DVec3::new(1.0, 0.0, 0.0), DVec3::new(2.0, 1.0, 1.0));
+    assert!(empty(boolean(&b, &touching, BoolOp::Intersect)));
+    // A ball inside a larger one, and two balls touching at a point.
+    assert!(empty(boolean(&ball(DVec3::ZERO, 1.0), &ball(DVec3::ZERO, 2.0), BoolOp::Subtract)));
+    let (p, q) = (ball(DVec3::ZERO, 1.0), ball(DVec3::new(2.0, 0.0, 0.0), 1.0));
+    assert!(empty(boolean(&p, &q, BoolOp::Intersect)));
+}
