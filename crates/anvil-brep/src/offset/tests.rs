@@ -150,6 +150,41 @@ fn revolved_cup_with_a_rounded_bottom() {
 }
 
 #[test]
+fn shell_open_at_a_step_stops_at_the_opening() {
+    // An L-block opened at its short leg's end (y = 5), where the face x = 15 rises past
+    // it. Its moved wall (x = 16) runs down to y = 5 and ends there: the cavity must not
+    // carry on past the opening into the wall at x = 15.
+    let l = prism(
+        &[polygon(&[(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (15.0, 20.0), (15.0, 5.0), (0.0, 5.0)])],
+        0.0,
+        20.0,
+    );
+    let open = l
+        .faces
+        .iter()
+        .position(|f| {
+            f.surface.distance(glam::DVec3::new(7.0, 5.0, 10.0)) < 1e-9
+                && f.surface.distance(glam::DVec3::new(1.0, 5.0, 1.0)) < 1e-9
+        })
+        .expect("face at y = 5");
+    let s = shell(&l, &[open], 1.0).expect("shell");
+    // The block (175 x 20) less the cavity: 1..19 in z, over the region x 1..19, y 1..5
+    // plus x 16..19, y 5..19.
+    let want = 175.0 * 20.0 - 18.0 * (18.0 * 4.0 + 3.0 * 14.0);
+    assert!(close(volume(&s), want, 1e-9), "{} vs {want}", volume(&s));
+    assert!(close(want, 1448.0, 1e-12));
+}
+
+#[test]
+fn shell_open_through_a_curved_face() {
+    // A cylinder opened through its side keeps two discs 1 thick.
+    let cyl = prism(&[Loop2::new(vec![Segment::circle(DVec2::ZERO, 5.0)])], 0.0, 10.0);
+    let side = cyl.faces.iter().position(|f| matches!(f.surface, Surface::Cylinder { .. })).expect("side");
+    let s = shell(&cyl, &[side], 1.0).expect("shell");
+    assert!(close(volume(&s), 50.0 * PI, 5e-5), "{}", volume(&s));
+}
+
+#[test]
 fn offsets_that_run_faces_into_each_other_are_refused() {
     // Two holes of radius 3, 10 apart, widened by 3 each: their walls would cross.
     let plate = prism(&[polygon(&[(0.0, 0.0), (40.0, 0.0), (40.0, 30.0), (0.0, 30.0)])], 0.0, 8.0);
