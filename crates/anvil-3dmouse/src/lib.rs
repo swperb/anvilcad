@@ -18,9 +18,12 @@ pub mod spnav;
 #[cfg(any(target_os = "macos", windows))]
 mod desktop;
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::Arc;
+#[cfg(not(any(target_os = "macos", windows)))]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 pub use devices::Layout;
@@ -55,11 +58,18 @@ pub enum Event {
     Status(Status),
 }
 
-/// Reads 3D mice on a background thread. Dropping it stops the thread at its next wake-up
-/// (within about half a second, or at the device's next report).
+/// Reads 3D mice in the background. Dropping it stops the reading within about half a
+/// second, or at the device's next report.
+///
+/// On Linux each reader has a thread of its own. On macOS and Windows one service thread
+/// reads for the whole process and serves the newest reader (see `desktop.rs` for why), so
+/// starting a second reader takes the device from the first.
 pub struct Reader {
     events: Receiver<Event>,
+    #[cfg(not(any(target_os = "macos", windows)))]
     stop: Arc<AtomicBool>,
+    #[cfg(any(target_os = "macos", windows))]
+    generation: u64,
 }
 
 /// How long to wait before looking for a device again when there is none.
@@ -70,18 +80,27 @@ impl Reader {
     /// thread, so a UI can repaint; it must not block.
     pub fn start(wake: impl Fn() + Send + 'static) -> Reader {
         let (tx, events) = channel();
+        let send = move |e: Event| -> bool {
+            let ok = Sender::send(&tx, e).is_ok();
+            if ok {
+                wake();
+            }
+            ok
+        };
+        Reader::serve(events, send)
+    }
+
+    #[cfg(any(target_os = "macos", windows))]
+    fn serve(events: Receiver<Event>, send: impl FnMut(Event) -> bool + Send + 'static) -> Reader {
+        Reader { events, generation: desktop::subscribe(Box::new(send)) }
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    fn serve(events: Receiver<Event>, mut send: impl FnMut(Event) -> bool + Send + 'static) -> Reader {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let spawned = std::thread::Builder::new().name("anvil-3dmouse".into()).spawn(move || {
-            let mut send = |e: Event| -> bool {
-                let ok = Sender::send(&tx, e).is_ok();
-                if ok {
-                    wake();
-                }
-                ok
-            };
-            watch(&flag, &mut send);
-        });
+        let spawned =
+            std::thread::Builder::new().name("anvil-3dmouse".into()).spawn(move || watch(&flag, &mut send));
         // If the thread cannot be made the app simply has no 3D mouse; the sender is gone,
         // so the receiver yields nothing.
         drop(spawned);
@@ -96,10 +115,14 @@ impl Reader {
 
 impl Drop for Reader {
     fn drop(&mut self) {
+        #[cfg(not(any(target_os = "macos", windows)))]
         self.stop.store(true, Ordering::Relaxed);
+        #[cfg(any(target_os = "macos", windows))]
+        desktop::unsubscribe(self.generation);
     }
 }
 
+#[cfg(not(any(target_os = "macos", windows)))]
 fn sleep_unless_stopped(stop: &AtomicBool) {
     let step = Duration::from_millis(100);
     let mut waited = Duration::ZERO;
@@ -187,36 +210,6 @@ fn watch(stop: &AtomicBool, send: &mut dyn FnMut(Event) -> bool) {
     }
 }
 
-/// hidapi's C library must not be used from two threads at once: its macOS backend
-/// crashes the process (SIGTRAP) when two threads enumerate or open devices together. A
-/// reader that was just dropped can still be finishing while a new one starts (turning
-/// `anvil.opt.mouse_3d` off and on), so watchers take turns: a new one waits here until the
-/// old one, already told to stop, has finished (within about 250 ms).
-#[cfg(any(target_os = "macos", windows))]
-static HIDAPI_IN_USE: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[cfg(any(target_os = "macos", windows))]
-fn watch(stop: &AtomicBool, send: &mut dyn FnMut(Event) -> bool) {
-    let _turn = HIDAPI_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if stop.load(Ordering::Relaxed) {
-        return;
-    }
-    let mut api = match hidapi::HidApi::new() {
-        Ok(a) => a,
-        Err(e) => {
-            send(Event::Status(Status::Problem(format!("3D mouse support could not start: {e}"))));
-            return;
-        }
-    };
-    let mut last_problem = None;
-    while !stop.load(Ordering::Relaxed) {
-        if !desktop::run_once(&mut api, stop, send, &mut last_problem) {
-            return;
-        }
-        sleep_unless_stopped(stop);
-    }
-}
-
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn watch(_stop: &AtomicBool, _send: &mut dyn FnMut(Event) -> bool) {}
 
@@ -235,10 +228,11 @@ mod tests {
     }
 
     #[test]
-    fn readers_started_and_dropped_in_quick_succession_do_not_overlap() {
-        // Turning the 3D mouse off and on again drops a reader and starts another while the
-        // first is still finishing. On macOS two readers using hidapi at once crashed the
-        // process; this must run to the end on every platform.
+    fn readers_started_and_dropped_in_quick_succession_do_not_crash() {
+        // Turning the 3D mouse off and on again drops a reader and starts another. On macOS
+        // a second reader used hidapi from a new thread after the first reader's thread,
+        // where hidapi had been initialised, had exited, and that crashed the process. This
+        // must run to the end on every platform.
         let mut readers = Vec::new();
         for _ in 0..8 {
             readers.push(Reader::start(|| {}));
