@@ -1469,6 +1469,21 @@ pub fn contains_point(solid: &Solid, p: DVec3) -> Result<bool> {
     point_in_solid(solid, p, |g, q| locate_in(solid, g, &infos[g], q))
 }
 
+/// Where each of `points` lies against `solid`: `Some(true)` inside it, `Some(false)`
+/// outside, `None` on its boundary.
+pub(crate) fn locate_points(solid: &Solid, points: &[DVec3]) -> Result<Vec<Option<bool>>> {
+    let infos: Vec<FaceInfo> = solid.faces.iter().map(|f| face_info(solid, f)).collect();
+    points
+        .iter()
+        .map(|&p| {
+            if infos.iter().enumerate().any(|(g, info)| locate_in(solid, g, info, p) != Loc::Outside) {
+                return Ok(None);
+            }
+            point_in_solid(solid, p, |g, q| locate_in(solid, g, &infos[g], q)).map(Some)
+        })
+        .collect()
+}
+
 /// True when `p` lies on face `f` of `solid` (inside or on its boundary).
 pub fn face_contains(solid: &Solid, f: usize, p: DVec3) -> bool {
     let Some(face) = solid.faces.get(f) else {
