@@ -187,8 +187,20 @@ fn watch(stop: &AtomicBool, send: &mut dyn FnMut(Event) -> bool) {
     }
 }
 
+/// hidapi's C library must not be used from two threads at once: its macOS backend
+/// crashes the process (SIGTRAP) when two threads enumerate or open devices together. A
+/// reader that was just dropped can still be finishing while a new one starts (turning
+/// `anvil.opt.mouse_3d` off and on), so watchers take turns: a new one waits here until the
+/// old one, already told to stop, has finished (within about 250 ms).
+#[cfg(any(target_os = "macos", windows))]
+static HIDAPI_IN_USE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(any(target_os = "macos", windows))]
 fn watch(stop: &AtomicBool, send: &mut dyn FnMut(Event) -> bool) {
+    let _turn = HIDAPI_IN_USE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
     let mut api = match hidapi::HidApi::new() {
         Ok(a) => a,
         Err(e) => {
@@ -220,5 +232,23 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         assert!(r.events().all(|e| matches!(e, Event::Status(_))));
         drop(r);
+    }
+
+    #[test]
+    fn readers_started_and_dropped_in_quick_succession_do_not_overlap() {
+        // Turning the 3D mouse off and on again drops a reader and starts another while the
+        // first is still finishing. On macOS two readers using hidapi at once crashed the
+        // process; this must run to the end on every platform.
+        let mut readers = Vec::new();
+        for _ in 0..8 {
+            readers.push(Reader::start(|| {}));
+            std::thread::sleep(Duration::from_millis(5));
+            if readers.len() > 2 {
+                drop(readers.remove(0));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        drop(readers);
+        std::thread::sleep(Duration::from_millis(300));
     }
 }
