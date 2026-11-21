@@ -512,6 +512,7 @@ Tools, other clients and examples are in [docs/MCP.md](docs/MCP.md).
 | Rotate | Middle mouse drag, or arrow keys |
 | Pan | Ctrl + middle drag, or right drag |
 | Zoom | Mouse wheel (about the cursor), Shift + middle drag |
+| 3D mouse | A 3Dconnexion SpaceMouse moves the model the way you move the cap; no driver needed ([docs/3D_MOUSE.md](docs/3D_MOUSE.md)) |
 | Standard views | Ctrl+1 Front, 2 Back, 3 Left, 4 Right, 5 Top, 6 Bottom, 7 Isometric, 8 Normal To |
 | Zoom to fit | F |
 | Undo / Redo | Ctrl+Z / Ctrl+Y |

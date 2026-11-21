@@ -1,0 +1,23 @@
+[package]
+name = "anvil-3dmouse"
+description = "3D mouse input for AnvilCAD: 3Dconnexion SpaceMouse and compatible devices, read natively or through spacenavd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Linux reads /dev/hidraw* and the spacenavd socket with the standard library alone. macOS
+# and Windows read the device through hidapi (MIT): IOKit on macOS, and on Windows its
+# pure-Rust backend, so there is no C to build for either Windows target.
+[target.'cfg(target_os = "macos")'.dependencies]
+hidapi = { version = "2.6.7", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "warn"

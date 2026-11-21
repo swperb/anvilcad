@@ -170,9 +170,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "anvil-3dmouse"
+version = "0.1.1"
+dependencies = [
+ "hidapi",
+]
+
+[[package]]
 name = "anvil-app"
 version = "0.1.1"
 dependencies = [
+ "anvil-3dmouse",
  "anvil-io",
  "anvil-kernel",
  "anvil-model",
@@ -1892,6 +1900,19 @@ name = "hexf-parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
+
+[[package]]
+name = "hidapi"
+version = "2.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "818c0e1d27887aaf76fe737042e27a66b796a7b099e6d2e1a72d106c2dff3fa6"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "pkg-config",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "http"

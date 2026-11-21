@@ -57,9 +57,14 @@ fn main() -> eframe::Result<()> {
                 render::install(rs, 4, eframe::egui_wgpu::depth_format_from_bits(24, 0));
             }
             let startup = open.is_none();
+            let screenshot_run = screenshot.clone();
             let mut app = app::AnvilApp::new(&cc.egui_ctx, open, screenshot, edit_sketch);
             if let Some(path) = config {
                 app.load_config(&cc.egui_ctx, path);
+            }
+            // Only the window reads a 3D mouse (not the headless harness or a screenshot run).
+            if screenshot_run.is_none() {
+                app.enable_3d_mouse(&cc.egui_ctx);
             }
             if startup {
                 app.open_startup();

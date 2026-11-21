@@ -114,6 +114,24 @@ impl Camera {
         self.up = self.back.cross(self.right);
     }
 
+    /// Turns the model about axes through the view centre, in radians, right-handed: `rx`
+    /// about screen right, `ry` about screen up and `rz` about the axis toward the viewer.
+    /// The three make one rotation (about their sum as a vector), so the result does not
+    /// depend on an order. `turn(0.0, a, 0.0)` is the same as `orbit(a / 0.008, 0.0)`.
+    pub fn turn(&mut self, rx: f64, ry: f64, rz: f64) {
+        let axis = self.right * rx + self.up * ry + self.back * rz;
+        let angle = axis.length();
+        if !angle.is_finite() || angle <= 1e-12 {
+            return;
+        }
+        // Turning the model one way is turning the camera the other way about the same axis.
+        let a = axis * (1.0 / angle);
+        self.up = rotate(self.up, a, -angle);
+        self.back = rotate(self.back, a, -angle).normalized();
+        self.right = self.up.cross(self.back).normalized();
+        self.up = self.back.cross(self.right);
+    }
+
     pub fn pixels_per_unit(&self, rect: Rect) -> f64 {
         (rect.height() as f64 / 2.0) / self.half_height
     }
@@ -181,5 +199,62 @@ impl Camera {
             }
         }
         m
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn close(a: Vec3, b: Vec3) -> bool {
+        (a - b).length() < 1e-9
+    }
+
+    #[test]
+    fn turn_about_up_matches_orbit() {
+        let mut a = Camera::default();
+        let mut b = Camera::default();
+        a.turn(0.0, 0.3, 0.0);
+        b.orbit(0.3 / 0.008, 0.0);
+        assert!(close(a.right, b.right) && close(a.up, b.up) && close(a.back, b.back));
+    }
+
+    #[test]
+    fn turn_rotates_the_model_right_handed_about_screen_axes() {
+        let q = std::f64::consts::FRAC_PI_2;
+        // From the front, a quarter turn about screen up brings the model's +Z face, which
+        // was facing the viewer, round to the right: the camera now looks from -X.
+        let mut c = Camera::default();
+        c.set_view(StdView::Front);
+        c.turn(0.0, q, 0.0);
+        assert!(close(c.back, -Vec3::X) && close(c.up, Vec3::Y), "{c:?}");
+        // A quarter turn about screen right tips the top face toward the viewer.
+        let mut c = Camera::default();
+        c.set_view(StdView::Front);
+        c.turn(q, 0.0, 0.0);
+        assert!(close(c.back, Vec3::Y) && close(c.right, Vec3::X), "{c:?}");
+        // A quarter turn about the view axis turns the model anticlockwise on screen, so the
+        // model's +X now points up the screen.
+        let mut c = Camera::default();
+        c.set_view(StdView::Front);
+        c.turn(0.0, 0.0, q);
+        assert!(close(c.up, Vec3::X) && close(c.back, Vec3::Z), "{c:?}");
+    }
+
+    #[test]
+    fn turn_keeps_the_basis_orthonormal_and_ignores_bad_input() {
+        let mut c = Camera::default();
+        for i in 0..10_000 {
+            let t = i as f64 * 1e-3;
+            c.turn(0.01 * t.sin(), 0.013, 0.007 * t.cos());
+        }
+        assert!((c.right.length() - 1.0).abs() < 1e-12 && (c.up.length() - 1.0).abs() < 1e-12);
+        assert!(c.right.dot(c.up).abs() < 1e-12 && c.up.dot(c.back).abs() < 1e-12);
+        assert!(close(c.right.cross(c.up), c.back));
+        let before = c;
+        c.turn(f64::NAN, 0.0, 0.0);
+        c.turn(0.0, f64::INFINITY, 0.0);
+        c.turn(0.0, 0.0, 0.0);
+        assert!(close(c.back, before.back) && close(c.up, before.up));
     }
 }

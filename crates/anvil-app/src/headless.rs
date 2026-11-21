@@ -745,6 +745,7 @@ impl Headless {
                 self.settle();
                 Ok(json!({}))
             }
+            "mouse3d" => self.mouse_3d(cmd),
             "frames" => {
                 for _ in 0..cmd.get("n").and_then(Value::as_u64).unwrap_or(1) {
                     self.step(Vec::new());
@@ -848,6 +849,58 @@ fn modifiers(cmd: &Value) -> Result<Modifiers, String> {
     Ok(m)
 }
 
+impl Headless {
+    /// `mouse3d`: plays a 3D mouse into the app, as the device reader would.
+    fn mouse_3d(&mut self, cmd: &Value) -> Result<Value, String> {
+        use anvil_3dmouse::{devices, Axes, Event as M, Layout, Status};
+        let ctx = self.ctx.clone();
+        if let Some(name) = cmd.get("connect").and_then(Value::as_str) {
+            let (name, layout) = if name.eq_ignore_ascii_case("spacenavd") {
+                ("3D mouse (spacenavd)".to_string(), Layout::Spacenavd)
+            } else {
+                let m =
+                    devices::MODELS.iter().find(|m| m.name.eq_ignore_ascii_case(name)).ok_or_else(|| {
+                        format!("no 3D mouse model is called \"{name}\" (see docs/3D_MOUSE.md)")
+                    })?;
+                (m.name.to_string(), m.layout)
+            };
+            self.app.inject_3d_mouse(&ctx, M::Status(Status::Connected { name, layout }));
+            self.step(Vec::new());
+        }
+        if let Some(a) = cmd.get("axes") {
+            let v: Vec<f64> =
+                a.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+            let axes: [f64; 6] = v.try_into().map_err(|_| "mouse3d \"axes\" is six numbers from -1 to 1")?;
+            let seconds = cmd.get("seconds").and_then(Value::as_f64).unwrap_or(0.5).clamp(0.0, 30.0);
+            let frames = (seconds / FRAME_DT).round() as usize;
+            // The device repeats its report while the cap is held, so the app sees one a frame.
+            for _ in 0..frames {
+                self.app.inject_3d_mouse(&ctx, M::Motion(Axes(axes)));
+                self.step(Vec::new());
+            }
+            self.app.inject_3d_mouse(&ctx, M::Motion(Axes::default()));
+            self.settle();
+        }
+        if let Some(b) = cmd.get("button") {
+            let layout = self.app.mouse_3d_device().map_or(Layout::Unnamed, |(_, l)| l);
+            let number = match b {
+                Value::String(s) => layout.button_number(s),
+                v => v.as_u64().and_then(|n| u16::try_from(n).ok()),
+            }
+            .ok_or_else(|| format!("mouse3d: the connected device has no button {b}"))?;
+            self.app.inject_3d_mouse(&ctx, M::Button { number, pressed: true });
+            self.step(Vec::new());
+            self.app.inject_3d_mouse(&ctx, M::Button { number, pressed: false });
+            self.settle();
+        }
+        if cmd.get("disconnect").and_then(Value::as_bool) == Some(true) {
+            self.app.inject_3d_mouse(&ctx, M::Status(Status::Disconnected));
+            self.settle();
+        }
+        Ok(json!({ "device": self.app.mouse_3d_device().map(|(n, _)| n) }))
+    }
+}
+
 const COMMANDS: &[&str] = &[
     "state                      what the user would see: features, errors, body, sketch, dialogs",
     "document                   the full part document",
@@ -868,6 +921,7 @@ const COMMANDS: &[&str] = &[
     "config source|path         load an init.lua (none is loaded by default)",
     "command name               run a built-in or user command by name",
     "frames [n] | wait [seconds]",
+    "mouse3d [connect:MODEL] [axes:[tx,ty,tz,rx,ry,rz] seconds] [button:N|label] [disconnect]",
     "project TARGET             screen point of a target",
     "TARGET: x,y | label [role] [index] | model:[x,y,z] | sketch:[x,y], plus offset:[dx,dy]",
 ];

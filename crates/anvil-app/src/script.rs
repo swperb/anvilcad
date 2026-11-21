@@ -24,6 +24,7 @@ anvil = {
   leader = nil,
   _keys = {},
   _commands = {},
+  _buttons = {},
 }
 function anvil.key(keys, action, description)
   if type(keys) ~= "string" then error("anvil.key: the first argument is the keys, such as \"ctrl+e\"", 2) end
@@ -31,6 +32,13 @@ function anvil.key(keys, action, description)
     error("anvil.key: the second argument is a command name or a function", 2)
   end
   table.insert(anvil._keys, { keys = keys, action = action, description = description or "" })
+end
+function anvil.mouse_3d_button(button, action, description)
+  if type(button) ~= "string" then error("anvil.mouse_3d_button: the first argument is the button, such as \"Fit\" or \"Button 3\"", 2) end
+  if action ~= false and type(action) ~= "string" and type(action) ~= "function" then
+    error("anvil.mouse_3d_button: the second argument is a command name, a function, or false for nothing", 2)
+  end
+  table.insert(anvil._buttons, { button = button, action = action, description = description or "" })
 end
 function anvil.command(name, fn, opts)
   if type(name) ~= "string" or name == "" then error("anvil.command: the first argument is the command's name", 2) end
@@ -52,7 +60,16 @@ pub const OPTIONS: &[(&str, &str)] = &[
     ("view", "the starting view: front, back, left, right, top, bottom or isometric"),
     ("edges", "true to draw model edges (Shaded with edges), false for shaded only"),
     ("snap_px", "the sketch snap and pick radius in pixels, 2 to 40"),
+    ("mouse_3d", "true to navigate with a 3D mouse (the default), false to leave the device alone"),
+    ("mouse_3d_speed", "the 3D mouse speed, 0.1 to 10 (1 is the default)"),
+    (
+        "mouse_3d_invert",
+        "a list of 3D mouse axes to reverse, from \"tx\", \"ty\", \"tz\", \"rx\", \"ry\", \"rz\"",
+    ),
 ];
+
+/// The 3D mouse axes `anvil.opt.mouse_3d_invert` names, in [`anvil_3dmouse::Axes`] order.
+pub const MOUSE_3D_AXES: [&str; 6] = ["tx", "ty", "tz", "rx", "ry", "rz"];
 
 /// Colours `anvil.theme.light` and `anvil.theme.dark` accept; the names are [`crate::theme::Palette`]'s.
 pub const THEME_COLORS: &[&str] = &[
@@ -91,6 +108,10 @@ pub struct Options {
     pub view: Option<String>,
     pub edges: Option<bool>,
     pub snap_px: Option<f64>,
+    pub mouse_3d: Option<bool>,
+    pub mouse_3d_speed: Option<f64>,
+    /// Reversed axes, in [`MOUSE_3D_AXES`] order.
+    pub mouse_3d_invert: Option<[bool; 6]>,
 }
 
 /// Colour overrides from `anvil.theme`.
@@ -125,6 +146,17 @@ pub struct Binding {
     pub description: String,
 }
 
+/// What a 3D mouse button does, from `anvil.mouse_3d_button`.
+#[derive(Clone, Debug)]
+pub struct ButtonBinding {
+    /// The button as written: a label such as "Fit", or "Button 3".
+    pub button: String,
+    /// `None` to do nothing (the button's default is switched off). A Lua action is the
+    /// index in `anvil._buttons`.
+    pub action: Option<Action>,
+    pub description: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct UserCommand {
     pub name: String,
@@ -140,6 +172,7 @@ pub struct Config {
     pub theme: ThemeOverrides,
     pub bindings: Vec<Binding>,
     pub commands: Vec<UserCommand>,
+    pub buttons: Vec<ButtonBinding>,
 }
 
 /// Where `init.lua` lives: `$ANVILCAD_CONFIG` if set; otherwise `%APPDATA%\AnvilCAD\init.lua`
@@ -328,14 +361,7 @@ impl Engine {
             let action = match entry.get::<Value>("action").map_err(lua_err)? {
                 Value::String(s) => {
                     let name = s.to_string_lossy();
-                    if !crate::app::BUILTIN_COMMANDS.iter().any(|(n, _)| n.eq_ignore_ascii_case(&name))
-                        && !self.has_user_command(&name)?
-                    {
-                        return Err(format!(
-                            "anvil.key(\"{text}\", \"{name}\"): no command is called \"{name}\" \
-                             (see the command palette, Ctrl+Shift+P, for the names)"
-                        ));
-                    }
+                    self.check_command(&format!("anvil.key(\"{text}\", \"{name}\")"), &name)?;
                     Action::Builtin(name)
                 }
                 _ => Action::Lua(i + 1),
@@ -353,7 +379,46 @@ impl Engine {
                 index: i + 1,
             });
         }
-        Ok(Config { options, theme, bindings, commands })
+        let mut buttons = Vec::new();
+        let list: Table = anvil.get("_buttons").map_err(lua_err)?;
+        let labels = anvil_3dmouse::devices::all_button_labels();
+        for (i, entry) in list.sequence_values::<Table>().enumerate() {
+            let entry = entry.map_err(lua_err)?;
+            let button: String = entry.get("button").map_err(lua_err)?;
+            let known = labels.iter().any(|l| l.eq_ignore_ascii_case(button.trim()))
+                || anvil_3dmouse::devices::parse_button_n(&button).is_some();
+            if !known {
+                return Err(format!(
+                    "anvil.mouse_3d_button(\"{button}\"): no 3D mouse has a button called that \
+                     (buttons: {}, or \"Button 1\" to \"Button 255\")",
+                    labels.join(", ")
+                ));
+            }
+            let action = match entry.get::<Value>("action").map_err(lua_err)? {
+                Value::String(s) => {
+                    let name = s.to_string_lossy();
+                    self.check_command(&format!("anvil.mouse_3d_button(\"{button}\", \"{name}\")"), &name)?;
+                    Some(Action::Builtin(name))
+                }
+                Value::Boolean(false) => None,
+                _ => Some(Action::Lua(i + 1)),
+            };
+            let description: String = entry.get("description").map_err(lua_err)?;
+            buttons.push(ButtonBinding { button: button.trim().to_string(), action, description });
+        }
+        Ok(Config { options, theme, bindings, commands, buttons })
+    }
+
+    /// An error unless `name` is a built-in or user command.
+    fn check_command(&self, call: &str, name: &str) -> Result<(), String> {
+        if crate::app::BUILTIN_COMMANDS.iter().any(|(n, _)| n.eq_ignore_ascii_case(name))
+            || self.has_user_command(name)?
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "{call}: no command is called \"{name}\" (see the command palette, Ctrl+Shift+P, for the names)"
+        ))
     }
 
     fn has_user_command(&self, name: &str) -> Result<bool, String> {
@@ -383,6 +448,14 @@ impl Engine {
     /// Runs the Lua function of a key binding.
     pub fn run_binding(&self, index: usize, host: &mut dyn Host) -> Result<(), String> {
         let entry: Table = self.anvil()?.get::<Table>("_keys").and_then(|t| t.get(index)).map_err(lua_err)?;
+        let f: Function = entry.get("action").map_err(lua_err)?;
+        self.with_host(host, |_| f.call::<()>(()))
+    }
+
+    /// Runs the Lua function of a 3D mouse button binding.
+    pub fn run_button(&self, index: usize, host: &mut dyn Host) -> Result<(), String> {
+        let entry: Table =
+            self.anvil()?.get::<Table>("_buttons").and_then(|t| t.get(index)).map_err(lua_err)?;
         let f: Function = entry.get("action").map_err(lua_err)?;
         self.with_host(host, |_| f.call::<()>(()))
     }
@@ -620,6 +693,27 @@ fn read_options(opt: &Table) -> Result<Options, String> {
                 o.snap_px =
                     Some(number(&value).filter(|s| (2.0..=40.0).contains(s)).ok_or_else(|| bad(help))?)
             }
+            "mouse_3d" => match value {
+                Value::Boolean(b) => o.mouse_3d = Some(b),
+                _ => return Err(bad(help)),
+            },
+            "mouse_3d_speed" => {
+                o.mouse_3d_speed =
+                    Some(number(&value).filter(|s| (0.1..=10.0).contains(s)).ok_or_else(|| bad(help))?)
+            }
+            "mouse_3d_invert" => {
+                let Value::Table(t) = value else { return Err(bad(help)) };
+                let mut inv = [false; 6];
+                for v in t.sequence_values::<Value>() {
+                    let name = v.ok().as_ref().and_then(string).ok_or_else(|| bad(help))?;
+                    let i = MOUSE_3D_AXES
+                        .iter()
+                        .position(|a| a.eq_ignore_ascii_case(name.trim()))
+                        .ok_or_else(|| bad(help))?;
+                    inv[i] = true;
+                }
+                o.mouse_3d_invert = Some(inv);
+            }
             _ => unreachable!("every name in OPTIONS is handled"),
         }
     }
@@ -824,6 +918,43 @@ mod tests {
         assert_eq!(c.bindings[1].sequence.len(), 2);
         assert_eq!(c.bindings[2].action, Action::Lua(3));
         assert_eq!(c.bindings[2].description, "zoom");
+    }
+
+    #[test]
+    fn reads_3d_mouse_options_and_buttons() {
+        let e = Engine::load(
+            r##"
+            anvil.opt.mouse_3d = false
+            anvil.opt.mouse_3d_speed = 2.5
+            anvil.opt.mouse_3d_invert = { "ty", "RZ" }
+            anvil.mouse_3d_button("fit", "Isometric")
+            anvil.mouse_3d_button("Button 12", function() end, "mine")
+            anvil.mouse_3d_button("Menu", false)
+            "##,
+            "init.lua",
+            None,
+        )
+        .unwrap();
+        let c = &e.config;
+        assert_eq!(c.options.mouse_3d, Some(false));
+        assert_eq!(c.options.mouse_3d_speed, Some(2.5));
+        assert_eq!(c.options.mouse_3d_invert, Some([false, true, false, false, false, true]));
+        assert_eq!(c.buttons.len(), 3);
+        assert_eq!(c.buttons[0].button, "fit");
+        assert_eq!(c.buttons[0].action, Some(Action::Builtin("Isometric".into())));
+        assert_eq!(c.buttons[1].action, Some(Action::Lua(2)));
+        assert_eq!(c.buttons[1].description, "mine");
+        assert_eq!(c.buttons[2].action, None);
+
+        let err = |src: &str| Engine::load(src, "init.lua", None).err().unwrap_or_default();
+        assert!(err("anvil.opt.mouse_3d_speed = 50").contains("0.1 to 10"));
+        assert!(err("anvil.opt.mouse_3d_invert = { \"tw\" }").contains("\"tx\""));
+        assert!(err("anvil.opt.mouse_3d_invert = \"tx\"").contains("a list"));
+        assert!(
+            err("anvil.mouse_3d_button(\"Fiit\", \"Top\")").contains("no 3D mouse has a button called that")
+        );
+        assert!(err("anvil.mouse_3d_button(\"Fit\", \"Topp\")").contains("no command is called \"Topp\""));
+        assert!(err("anvil.mouse_3d_button(\"Fit\", 3)").contains("the second argument"));
     }
 
     #[test]
