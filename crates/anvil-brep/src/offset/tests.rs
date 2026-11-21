@@ -148,3 +148,21 @@ fn revolved_cup_with_a_rounded_bottom() {
     assert!(s[0].faces.iter().filter(|f| matches!(f.surface, Surface::Torus { .. })).count() == 2);
     assert!(close(volume(&s), want, 5e-5), "{} vs {want}", volume(&s));
 }
+
+#[test]
+fn offsets_that_run_faces_into_each_other_are_refused() {
+    // Two holes of radius 3, 10 apart, widened by 3 each: their walls would cross.
+    let plate = prism(&[polygon(&[(0.0, 0.0), (40.0, 0.0), (40.0, 30.0), (0.0, 30.0)])], 0.0, 8.0);
+    let hole = |x: f64| prism(&[Loop2::new(vec![Segment::circle(DVec2::new(x, 15.0), 3.0)])], -1.0, 9.0);
+    let p = boolean(&plate, &hole(15.0), BoolOp::Subtract).expect("hole").remove(0);
+    let p = boolean(&p, &hole(25.0), BoolOp::Subtract).expect("hole").remove(0);
+    let walls = |d: f64| -> Vec<f64> {
+        p.faces.iter().map(|f| if matches!(f.surface, Surface::Cylinder { .. }) { d } else { 0.0 }).collect()
+    };
+    assert!(matches!(offset_faces(&p, &walls(-3.0)), Err(KernelError::Unsupported(_))));
+    // Widened by 1 each they stay apart, and each wall's radius is 4.
+    let s = offset_faces(&p, &walls(-1.0)).expect("offset");
+    let want = (1200.0 - 2.0 * PI * 16.0) * 8.0;
+    let v = volume(&[s]);
+    assert!(close(v, want, 1e-5), "{v} vs {want}");
+}
