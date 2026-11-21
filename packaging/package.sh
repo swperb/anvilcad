@@ -139,9 +139,24 @@ linux)
     2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d "$tools/runtime-x86_64"
   chmod +x "$tools/appimagetool"
 
+  # Compress with gzip (zlib), not appimagetool's zstd default. AppImageLauncher 2.x, which
+  # Linux Mint and many Ubuntu users have installed, hooks every AppImage launch and reads
+  # only xz and zlib images; a zstd image fails before our runtime runs, even with
+  # --appimage-extract-and-run (issue #107). gzip opens everywhere and starts faster than xz.
   # Extract-and-run needs no FUSE, so this also works in containers.
-  ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$tools/appimagetool" --no-appstream \
+  ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$tools/appimagetool" --no-appstream --comp gzip \
     --runtime-file "$tools/runtime-x86_64" "$appdir" "$dist/AnvilCAD-$version-linux-x86_64.AppImage"
+
+  # The squashfs image starts right after the runtime. Its superblock holds the magic "hsqs"
+  # at byte 0 and the compression id (little-endian u16, 1 = gzip) at byte 20.
+  appimage="$dist/AnvilCAD-$version-linux-x86_64.AppImage"
+  sqfs=$(stat -c %s "$tools/runtime-x86_64")
+  magic=$(dd if="$appimage" bs=1 skip="$sqfs" count=4 status=none)
+  comp=$(od -An -tu2 -j $((sqfs + 20)) -N2 "$appimage" | tr -d ' ')
+  if [ "$magic" != "hsqs" ] || [ "$comp" != "1" ]; then
+    echo "error: $appimage is not a gzip squashfs image (magic '$magic', compression id $comp)" >&2
+    exit 1
+  fi
   ;;
 
 windows)
