@@ -15,6 +15,7 @@ pub mod equations;
 pub mod exact;
 mod extrude;
 pub mod hole;
+pub mod kernel;
 pub mod loft;
 pub mod material;
 pub mod mates;

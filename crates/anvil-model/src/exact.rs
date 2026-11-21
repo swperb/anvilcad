@@ -1,4 +1,5 @@
-//! Bridge to the exact kernel ([`anvil_brep`]).
+//! Bridge to the exact kernel ([`anvil_brep`]), and its implementation of
+//! [`ExactKernel`] ([`Brep`]).
 //!
 //! While every feature so far is one the exact kernel can build, the rebuild keeps
 //! exact bodies alongside the faceted body and regenerates the faceted body from them
@@ -6,6 +7,7 @@
 //! side faces `2 + sketch entity`, and blend faces `2 + 8k + 2` for the k-th edge.
 
 use crate::document::BodyOp;
+use crate::kernel::{self, ExactKernel};
 use anvil_brep as brep;
 use anvil_brep::boolean::{self, BoolOp};
 use anvil_brep::topo::{Face, FaceTag as BrepTag};
@@ -227,20 +229,36 @@ fn find_edges(bodies: &[brep::Solid], e: &EdgeRef) -> Vec<(usize, brep::EdgeId)>
     out
 }
 
-/// Fillets or chamfers the named edges. Every run of an edge is blended, and with
-/// `propagate` every crease running smoothly on from them too (tangent propagation).
-/// A blend as a feature gives it. An angle-distance chamfer's distance runs along one of
-/// each edge's two named faces: the first, or the second when flipped.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Treatment {
-    Plain(brep::blend::Blend),
-    AngleChamfer { distance: f64, angle: f64, flip: bool },
+/// The exact kernel's blend for a blend feature's, for edges other than an
+/// angle-distance chamfer's (whose face to measure along depends on the edge).
+fn plain_blend(b: kernel::Blend) -> Option<brep::blend::Blend> {
+    use brep::blend::{Blend, Profile};
+    use kernel::Round;
+    Some(match b {
+        kernel::Blend::Fillet { radius, round: Round::Circular } => Blend::Fillet(radius),
+        kernel::Blend::Fillet { radius, round: Round::ConicRho(rho) } => {
+            Blend::Profiled { radius, profile: Profile::ConicRho(rho) }
+        }
+        kernel::Blend::Fillet { radius, round: Round::ConicRadius(r) } => {
+            Blend::Profiled { radius, profile: Profile::ConicRadius(r) }
+        }
+        kernel::Blend::Fillet { radius, round: Round::CurvatureContinuous } => {
+            Blend::Profiled { radius, profile: Profile::CurvatureContinuous }
+        }
+        kernel::Blend::Chamfer(d) => Blend::Chamfer(d),
+        kernel::Blend::ChamferOffset(d) => Blend::ChamferOffset(d),
+        kernel::Blend::ChamferAngle { .. } => return None,
+    })
 }
 
+/// Fillets or chamfers the named edges. Every run of an edge is blended, and with
+/// `propagate` every crease running smoothly on from them too (tangent propagation).
+/// An angle-distance chamfer's distance runs along one of each edge's two named faces:
+/// the first, or the second when flipped.
 pub fn blend(
     bodies: &[brep::Solid],
     edges: &[EdgeRef],
-    treatment: Treatment,
+    treatment: kernel::Blend,
     propagate: bool,
     feature: u32,
 ) -> Result<Vec<brep::Solid>, String> {
@@ -268,9 +286,9 @@ pub fn blend(
         let Some(&(b, first, k)) = found.first() else {
             return Ok(bodies);
         };
-        let kind = match treatment {
-            Treatment::Plain(kind) => kind,
-            Treatment::AngleChamfer { distance, angle, flip } => {
+        let kind = match (plain_blend(treatment), treatment) {
+            (Some(kind), _) => kind,
+            (None, kernel::Blend::ChamferAngle { distance, angle, flip }) => {
                 let name = if flip { edges[k].b } else { edges[k].a };
                 let along = bodies[b]
                     .faces
@@ -279,6 +297,7 @@ pub fn blend(
                     .ok_or("the face a chamfer's distance runs along no longer exists")?;
                 brep::blend::Blend::ChamferAngle { distance, angle, along }
             }
+            (None, _) => return Err("this blend has no exact form".into()),
         };
         let mut candidates: Vec<brep::EdgeId> = found.iter().filter(|f| f.0 == b).map(|f| f.1).collect();
         if propagate {
@@ -317,4 +336,97 @@ pub fn faceted(bodies: &[brep::Solid]) -> Result<Solid, String> {
         }
     }
     Ok(Solid::new(polys))
+}
+
+/// [`anvil_brep`] as the rebuild's exact kernel.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Brep;
+
+impl ExactKernel for Brep {
+    type Body = brep::Solid;
+
+    fn extrude(
+        &self,
+        profiles: &[Profile],
+        f: &Frame,
+        z0: f64,
+        z1: f64,
+        feature: u32,
+    ) -> Result<Vec<brep::Solid>, String> {
+        extrude(profiles, f, z0, z1, feature)
+    }
+
+    fn extrude_drafted(
+        &self,
+        profiles: &[Profile],
+        f: &Frame,
+        z0: f64,
+        z1: f64,
+        taper: f64,
+        feature: u32,
+    ) -> Result<Vec<brep::Solid>, String> {
+        extrude_drafted(profiles, f, z0, z1, taper, feature)
+    }
+
+    fn revolve(
+        &self,
+        profiles: &[Profile],
+        f: &Frame,
+        axis_point: anvil_kernel::Vec2,
+        axis_dir: anvil_kernel::Vec2,
+        angle: f64,
+        feature: u32,
+    ) -> Result<Vec<brep::Solid>, String> {
+        revolve(profiles, f, axis_point, axis_dir, angle, feature)
+    }
+
+    fn combine(
+        &self,
+        bodies: &[brep::Solid],
+        tool: &brep::Solid,
+        op: BodyOp,
+    ) -> Result<Vec<brep::Solid>, String> {
+        combine(bodies, tool, op)
+    }
+
+    fn intersect(&self, a: &brep::Solid, b: &brep::Solid) -> Result<Vec<brep::Solid>, String> {
+        boolean::boolean(a, b, BoolOp::Intersect).map_err(|e| e.to_string())
+    }
+
+    fn blend(
+        &self,
+        bodies: &[brep::Solid],
+        edges: &[EdgeRef],
+        b: kernel::Blend,
+        propagate: bool,
+        feature: u32,
+    ) -> Result<Vec<brep::Solid>, String> {
+        blend(bodies, edges, b, propagate, feature)
+    }
+
+    fn shell(
+        &self,
+        bodies: &[brep::Solid],
+        remove: &[FaceId],
+        thickness: f64,
+        feature: u32,
+    ) -> Result<Vec<brep::Solid>, String> {
+        shell(bodies, remove, thickness, feature)
+    }
+
+    fn faceted(&self, bodies: &[brep::Solid]) -> Result<Solid, String> {
+        faceted(bodies)
+    }
+
+    fn face_names(&self, body: &brep::Solid) -> Vec<FaceId> {
+        body.faces.iter().map(face_id).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn brep_passes_the_kernel_conformance_tests() {
+        crate::kernel::conformance::run(&super::Brep);
+    }
 }

@@ -10,10 +10,8 @@
 //! plan then builds the faceted tool and, when the part is exact, the exact one.
 
 use crate::document::*;
-use crate::exact;
-use crate::rebuild::BuildState;
-use anvil_brep as brep;
-use anvil_brep::boolean::{boolean, BoolOp};
+use crate::kernel::ExactKernel;
+use crate::rebuild::{BuildState, ExactBody, EXACT};
 use anvil_kernel::build::extrude_drafted;
 use anvil_kernel::{v2, Frame, Loop2, Profile, Solid, Vec3};
 
@@ -451,15 +449,16 @@ impl Plan {
     }
 
     /// The extruded tool bodies on the exact kernel.
-    pub(crate) fn exact(&self, id: u32) -> Result<Vec<brep::Solid>, String> {
-        let union_all = |a: Vec<brep::Solid>, b: Vec<brep::Solid>| -> Result<Vec<brep::Solid>, String> {
+    pub(crate) fn exact(&self, id: u32) -> Result<Vec<ExactBody>, String> {
+        let k = EXACT;
+        let union_all = |a: Vec<ExactBody>, b: Vec<ExactBody>| -> Result<Vec<ExactBody>, String> {
             let mut out = a;
             for t in b {
-                out = exact::combine(&out, &t, BodyOp::Boss)?;
+                out = k.combine(&out, &t, BodyOp::Boss)?;
             }
             Ok(out)
         };
-        let mut tools: Vec<brep::Solid> = Vec::new();
+        let mut tools: Vec<ExactBody> = Vec::new();
         for p in &self.pieces {
             let mut s = match &self.capped {
                 Some((outer, hollow, cap)) => {
@@ -467,23 +466,23 @@ impl Plan {
                     if hi - lo <= 2.0 * cap {
                         return Err("the caps are thicker than the extrusion is long".into());
                     }
-                    let full = exact::extrude(outer, &self.frame, p.z0, p.z1, id)?;
-                    let inside = exact::extrude(hollow, &self.frame, lo + cap, hi - cap, id)?;
+                    let full = k.extrude(outer, &self.frame, p.z0, p.z1, id)?;
+                    let inside = k.extrude(hollow, &self.frame, lo + cap, hi - cap, id)?;
                     let mut out = full;
                     for h in &inside {
-                        out = exact::combine(&out, h, BodyOp::Cut)?;
+                        out = k.combine(&out, h, BodyOp::Cut)?;
                     }
                     out
                 }
-                None => exact::extrude_drafted(&self.profiles, &self.frame, p.z0, p.z1, p.taper, id)?,
+                None => k.extrude_drafted(&self.profiles, &self.frame, p.z0, p.z1, p.taper, id)?,
             };
             if let Some(t) = &p.trim {
                 let (f, prof, z0, z1) = trim_box(t, self.frame.origin, self.reach);
-                let half = exact::extrude(&[prof], &f, z0, z1, id)?;
+                let half = k.extrude(&[prof], &f, z0, z1, id)?;
                 let mut kept = Vec::new();
                 for body in &s {
                     for h in &half {
-                        kept.extend(boolean(body, h, BoolOp::Intersect).map_err(|e| e.to_string())?);
+                        kept.extend(k.intersect(body, h)?);
                     }
                 }
                 s = kept;
@@ -492,10 +491,10 @@ impl Plan {
         }
         if self.flip {
             let p = self.pieces[0];
-            let slab = exact::extrude(&[slab_profile(self.reach)], &self.frame, p.z0, p.z1, id)?;
+            let slab = k.extrude(&[slab_profile(self.reach)], &self.frame, p.z0, p.z1, id)?;
             let mut out = slab;
             for t in &tools {
-                out = exact::combine(&out, t, BodyOp::Cut)?;
+                out = k.combine(&out, t, BodyOp::Cut)?;
             }
             tools = out;
         }

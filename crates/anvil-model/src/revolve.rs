@@ -7,9 +7,7 @@
 //! angle.
 
 use crate::document::*;
-use crate::exact;
 use crate::rebuild::BuildState;
-use anvil_brep as brep;
 use anvil_kernel::build::revolve;
 use anvil_kernel::{Frame, Profile, Solid, Vec2, Vec3};
 use anvil_sketch::Geom;
@@ -143,8 +141,16 @@ impl RevolvePlan {
         .map_err(|e| e.to_string())
     }
 
-    pub(crate) fn exact(&self, id: u32) -> Result<Vec<brep::Solid>, String> {
-        exact::revolve(&self.profiles, &self.start_frame(), self.axis_point, self.axis_dir, self.sweep, id)
+    pub(crate) fn exact(&self, id: u32) -> Result<Vec<crate::rebuild::ExactBody>, String> {
+        use crate::kernel::ExactKernel;
+        crate::rebuild::EXACT.revolve(
+            &self.profiles,
+            &self.start_frame(),
+            self.axis_point,
+            self.axis_dir,
+            self.sweep,
+            id,
+        )
     }
 }
 

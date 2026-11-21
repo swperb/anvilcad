@@ -11,13 +11,19 @@
 //! is never built worse than the faceted kernel alone would build it.
 
 use crate::document::*;
-use crate::exact;
+use crate::kernel::{self, ExactKernel};
 use anvil_kernel::blend::{blend_edges, EdgeTreatment};
 use anvil_kernel::build::revolve;
 use anvil_kernel::shell::shell;
 use anvil_kernel::{FaceId, FaceTag, Frame, MassProperties, Polygon, Solid, SurfaceKind, Vec3};
 use anvil_sketch::{Geom, SolveResult};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+/// The exact kernel the rebuild builds on (see [`crate::kernel`]).
+pub(crate) type Exact = crate::exact::Brep;
+pub(crate) const EXACT: Exact = crate::exact::Brep;
+/// One of the exact kernel's bodies.
+pub type ExactBody = <Exact as ExactKernel>::Body;
 
 #[derive(Default, Clone)]
 pub struct BuildState {
@@ -32,13 +38,13 @@ pub struct BuildState {
     /// The tool body each solid feature contributed, used by patterns.
     pub(crate) tools: HashMap<u32, (Solid, BodyOp)>,
     /// Exact bodies, while every feature so far was built exactly.
-    pub exact: Option<Vec<anvil_brep::Solid>>,
+    pub exact: Option<Vec<ExactBody>>,
     /// Features that were built on the exact kernel.
     pub exact_features: BTreeSet<u32>,
     /// The first feature that moved the part to the faceted kernel, and why.
     pub faceted_from: Option<(u32, String)>,
     /// The exact tool bodies each solid feature contributed, used by patterns.
-    pub(crate) exact_tools: HashMap<u32, (Vec<anvil_brep::Solid>, BodyOp)>,
+    pub(crate) exact_tools: HashMap<u32, (Vec<ExactBody>, BodyOp)>,
     /// Reference axes (a point and a unit direction), keyed by feature id.
     pub axes: HashMap<u32, (Vec3, Vec3)>,
     /// Reference points, keyed by feature id.
@@ -190,13 +196,13 @@ impl BuildState {
     pub(crate) fn exact_step(
         &mut self,
         id: u32,
-        build: impl FnOnce(&[anvil_brep::Solid]) -> Result<Vec<anvil_brep::Solid>, String>,
+        build: impl FnOnce(&[ExactBody]) -> Result<Vec<ExactBody>, String>,
     ) -> bool {
         let Some(bodies) = self.exact.as_ref() else {
             return false;
         };
         let result = build(bodies).and_then(|new| {
-            let body = exact::faceted(&new)?;
+            let body = EXACT.faceted(&new)?;
             Ok((new, body))
         });
         match result {
@@ -329,7 +335,7 @@ impl Document {
                         if separate {
                             out.push(t.clone());
                         } else {
-                            out = exact::combine(&out, t, ef.op)?;
+                            out = EXACT.combine(&out, t, ef.op)?;
                         }
                     }
                     exact_tools = Some(tools);
@@ -363,7 +369,7 @@ impl Document {
                     let tools = plan.exact(id)?;
                     let mut out = bodies.to_vec();
                     for t in &tools {
-                        out = exact::combine(&out, t, sw.op)?;
+                        out = EXACT.combine(&out, t, sw.op)?;
                     }
                     exact_tools = Some(tools);
                     Ok(out)
@@ -388,7 +394,7 @@ impl Document {
                     let tools = plan.exact(id)?;
                     let mut out = bodies.to_vec();
                     for t in &tools {
-                        out = exact::combine(&out, t, rf.op)?;
+                        out = EXACT.combine(&out, t, rf.op)?;
                     }
                     exact_tools = Some(tools);
                     Ok(out)
@@ -432,23 +438,16 @@ impl Document {
                 };
             }
             FeatureKind::Fillet(f) => {
-                use anvil_brep::blend::{Blend, Profile};
+                use kernel::Round;
                 let radius = num(&f.radius, "radius")?;
-                let fillet = match &f.profile {
-                    FilletProfile::Circular => Blend::Fillet(radius),
-                    FilletProfile::ConicRho { rho } => {
-                        Blend::Profiled { radius, profile: Profile::ConicRho(num(rho, "rho")?) }
-                    }
-                    FilletProfile::ConicRadius { radius: r } => {
-                        Blend::Profiled { radius, profile: Profile::ConicRadius(num(r, "conic radius")?) }
-                    }
-                    FilletProfile::CurvatureContinuous => {
-                        Blend::Profiled { radius, profile: Profile::CurvatureContinuous }
-                    }
+                let round = match &f.profile {
+                    FilletProfile::Circular => Round::Circular,
+                    FilletProfile::ConicRho { rho } => Round::ConicRho(num(rho, "rho")?),
+                    FilletProfile::ConicRadius { radius: r } => Round::ConicRadius(num(r, "conic radius")?),
+                    FilletProfile::CurvatureContinuous => Round::CurvatureContinuous,
                 };
-                if st.exact_step(id, |b| {
-                    exact::blend(b, &f.edges, exact::Treatment::Plain(fillet), f.tangent_propagation, id)
-                }) {
+                let fillet = kernel::Blend::Fillet { radius, round };
+                if st.exact_step(id, |b| EXACT.blend(b, &f.edges, fillet, f.tangent_propagation, id)) {
                     return Ok(());
                 }
                 if f.profile != FilletProfile::Circular {
@@ -458,18 +457,18 @@ impl Document {
                     .map_err(|e| e.to_string())?;
             }
             FeatureKind::Chamfer(c) => {
-                use anvil_brep::blend::Blend;
+                use kernel::Blend;
                 let distance = num(&c.distance, "distance")?;
                 let treatment = match &c.kind {
-                    ChamferKind::EqualDistance => exact::Treatment::Plain(Blend::Chamfer(distance)),
-                    ChamferKind::OffsetFace => exact::Treatment::Plain(Blend::ChamferOffset(distance)),
-                    ChamferKind::AngleDistance { angle, flip } => exact::Treatment::AngleChamfer {
+                    ChamferKind::EqualDistance => Blend::Chamfer(distance),
+                    ChamferKind::OffsetFace => Blend::ChamferOffset(distance),
+                    ChamferKind::AngleDistance { angle, flip } => Blend::ChamferAngle {
                         distance,
                         angle: num(angle, "angle")?.to_radians(),
                         flip: *flip,
                     },
                 };
-                if st.exact_step(id, |b| exact::blend(b, &c.edges, treatment, c.tangent_propagation, id)) {
+                if st.exact_step(id, |b| EXACT.blend(b, &c.edges, treatment, c.tangent_propagation, id)) {
                     return Ok(());
                 }
                 if c.kind != ChamferKind::EqualDistance {
@@ -480,7 +479,7 @@ impl Document {
             }
             FeatureKind::Shell(s) => {
                 let thickness = num(&s.thickness, "thickness")?;
-                if !st.exact_step(id, |bodies| exact::shell(bodies, &s.remove, thickness, id)) {
+                if !st.exact_step(id, |bodies| EXACT.shell(bodies, &s.remove, thickness, id)) {
                     st.body = shell(&st.body, &s.remove, thickness, id).map_err(|e| e.to_string())?;
                 }
             }
@@ -524,8 +523,8 @@ impl Document {
         let done = st.exact_step(id, |bodies| {
             let mut out = bodies.to_vec();
             for &c in &centers {
-                for t in exact::revolve(&profiles, &place(c), axis.0, axis.1, full, id)? {
-                    out = exact::combine(&out, &t, BodyOp::Cut)?;
+                for t in EXACT.revolve(&profiles, &place(c), axis.0, axis.1, full, id)? {
+                    out = EXACT.combine(&out, &t, BodyOp::Cut)?;
                     exact_tools.push(t);
                 }
             }
