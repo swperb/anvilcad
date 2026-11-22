@@ -13,7 +13,9 @@
 //! - **Face names.** Every face of a body it returns carries the modeller's name for it,
 //!   a [`FaceId`]: the feature that made it and a stable index. An extrusion's start cap
 //!   is index 0, its end cap 1, and the face swept by sketch entity `k` is `2 + k`; the
-//!   faces a blend makes along its `k`-th edge are `2 + 8k`, `4 + 8k` and `6 + 8k`; a
+//!   faces a blend makes along its `k`-th edge are `2 + 8k`, `4 + 8k` and `6 + 8k`, and
+//!   a fillet's ball patch closing a corner where every edge is rounded is `8 + 8k` or
+//!   `9 + 8k` after the first selected edge at it (see `docs/re/fillet-corners.md`); a
 //!   shell's cavity faces are 2 plus the rank of the face they follow among all of the
 //!   part's names. Faces that are kept keep their names. [`ExactKernel::face_names`]
 //!   lists them, and selections, edge references and patterns depend on them.
@@ -248,6 +250,31 @@ pub(crate) mod conformance {
             k.blend(&c, &e, Blend::Fillet { radius: 2.0, round: Round::Circular }, false, 5).expect("fillet");
         let want = 1000.0 - (4.0 - PI) * 10.0;
         assert!(close(volume(k, &f), want, 1e-3), "{} vs {want}", volume(k, &f));
+        // Every edge of the cube rounded to 1: the rounds meet at each corner in an eighth
+        // of the ball, 8^3 + 6 8^2 + 24 pi + 4 pi / 3 (rounded one by one and left at that,
+        // the corners would bulge to 977.68).
+        let side = |i: u32| FaceId { feature: 1, index: 2 + i };
+        let caps =
+            [FaceId { feature: 1, index: FaceId::START_CAP }, FaceId { feature: 1, index: FaceId::END_CAP }];
+        let all: Vec<EdgeRef> = (0..4)
+            .flat_map(|i| {
+                [
+                    EdgeRef::new(side(i), side((i + 1) % 4)),
+                    EdgeRef::new(side(i), caps[0]),
+                    EdgeRef::new(side(i), caps[1]),
+                ]
+            })
+            .collect();
+        let round = Blend::Fillet { radius: 1.0, round: Round::Circular };
+        let r = k.blend(&c, &all, round, false, 5).expect("every edge");
+        let want = 896.0 + 24.0 * PI + 4.0 * PI / 3.0;
+        assert!(close(volume(k, &r), want, 5e-4), "{} vs {want}", volume(k, &r));
+        let patches = r
+            .iter()
+            .flat_map(|b| k.face_names(b))
+            .filter(|f| f.feature == 5 && f.index >= 8 && f.index % 8 <= 1)
+            .count();
+        assert_eq!(patches, 8, "a patch at each corner, named 8 + 8k or 9 + 8k");
         // An edge that is not there.
         let gone = EdgeRef::new(FaceId { feature: 9, index: 0 }, FaceId { feature: 9, index: 1 });
         assert!(k.blend(&c, &[gone], Blend::Chamfer(1.0), false, 5).is_err());

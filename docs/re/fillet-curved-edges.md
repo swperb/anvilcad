@@ -173,5 +173,7 @@ Silent or ambiguous:
   face they share at one point), the rounds meet there. Without tangent propagation a
   round whose edge runs smoothly on into the earlier round's edge stops at that end; with
   it, the round carries on round the earlier one.
-- Runs mixing convex and concave edges, hold lines, overflow choices and round corners are
-  not offered yet; those fall back to the faceted kernel or are refused.
+- Runs mixing convex and concave edges, hold lines, overflow choices and the Round corners
+  option are not offered yet; those fall back to the faceted kernel or are refused. Where
+  every edge at a vertex is rounded, the ball closes the corner: see
+  [fillet-corners.md](fillet-corners.md).
