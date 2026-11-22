@@ -614,3 +614,45 @@ fn a_band_round_a_ball_imports_exactly() {
     let got = exact_volume(s);
     assert!((got - want).abs() / want < 2e-3, "{got} vs {want}");
 }
+
+#[test]
+fn loop_through_a_vertex_twice_round_trips_as_one_bound() {
+    // #120: a ball of radius 5 cut by the plane x + z = 5, keeping its centre. The cut
+    // circle touches the ball's equator at (5, 0, 0), so the upper sphere face's loop runs
+    // round the equator and then round the cut circle, through that vertex twice. It is
+    // one bound: written as two (the equator outer, the cut circle inner), the face would
+    // have a hole it does not have, and the shell an impossible Euler characteristic
+    // (V - E + F - (L - F) = 1 - 2 + 3 - 1 = 1), which the import rejects.
+    let plane = Frame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Z, z: DVec3::NEG_Y };
+    let half = Loop2::new(vec![
+        Segment::Arc { center: DVec2::ZERO, radius: 5.0, start: -0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(0.0, 5.0), b: DVec2::new(0.0, -5.0) },
+    ]);
+    let r = build_regions(&[half]).expect("region");
+    let ball = anvil_brep::revolve::revolve(&plane, &r[0], DVec2::ZERO, DVec2::Y, 2.0 * PI).expect("ball");
+    let n = DVec3::new(1.0, 0.0, 1.0).normalize();
+    let f = Frame::new(n * 5.0 / 2f64.sqrt(), n, DVec3::Y).expect("frame");
+    let slab = prism(&rect(-20.0, -20.0, 20.0, 20.0), &f, 0.0, 20.0);
+    let part = boolean(&ball, &slab, BoolOp::Subtract).expect("cut").remove(0);
+    assert_eq!(part.vertices.len(), 1, "both circles start and end at (5, 0, 0)");
+    assert!(part.faces.iter().any(|f| f.outer.coedges.len() == 2 && f.inners.is_empty()));
+
+    let text = export::write(std::slice::from_ref(&part), "ball");
+    assert_eq!(text.matches("FACE_OUTER_BOUND(").count(), 3);
+    assert_eq!(text.matches("FACE_BOUND(").count(), 0);
+    let imp = import(&text).expect("import");
+    let e =
+        imp.bodies[0].exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", imp.bodies[0].not_exact));
+    check::validate(e).expect("valid");
+    // The ball less the cap of height 5 - 5 / sqrt 2 beyond the plane: 493.2002.
+    let h = 5.0 - 5.0 / 2f64.sqrt();
+    let want = 4.0 / 3.0 * PI * 125.0 - PI * h * h * (15.0 - h) / 3.0;
+    let fine = |s: &anvil_brep::Solid| {
+        let m = tess::tessellate(s, &tess::TessParams { chord: 1e-4, max_angle: 0.01 }).expect("tess");
+        mass::properties(&m).volume
+    };
+    let (v, v0) = (fine(e), fine(&part));
+    assert!((v - v0).abs() < 1e-4, "{v} vs {v0}");
+    assert!((v - want).abs() / want < 1e-4, "{v} vs {want}");
+    assert!(watertight(&imp.bodies[0].mesh));
+}
