@@ -1,0 +1,512 @@
+{
+  "$defs": {
+    "BoundingBox": {
+      "properties": {
+        "max": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "min": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "size": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "min",
+        "max",
+        "size"
+      ],
+      "type": "object"
+    },
+    "DfmFlag": {
+      "description": "A design-for-manufacturing finding. Consumers show it to the estimator and never\nchange a price from it on their own.",
+      "properties": {
+        "count": {
+          "description": "How many places on the part this applies to.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "rule": {
+          "description": "Short, stable rule name, e.g. \"Thin wall\".",
+          "type": "string"
+        },
+        "severity": {
+          "$ref": "#/$defs/FlagSeverity"
+        }
+      },
+      "required": [
+        "severity",
+        "rule",
+        "message",
+        "count"
+      ],
+      "type": "object"
+    },
+    "Engine": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Feature": {
+      "description": "A group of identical recognised features.",
+      "oneOf": [
+        {
+          "description": "Round holes along the tool axis (+Z), grouped by diameter, depth and through.",
+          "properties": {
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "depth_mm": {
+              "format": "double",
+              "type": "number"
+            },
+            "diameter_mm": {
+              "format": "double",
+              "type": "number"
+            },
+            "through": {
+              "type": "boolean"
+            },
+            "type": {
+              "const": "hole",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "count",
+            "diameter_mm",
+            "depth_mm",
+            "through"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A closed pocket or an open floor (step).",
+          "properties": {
+            "area_mm2": {
+              "description": "Area the tool clears, mm^2.",
+              "format": "double",
+              "type": "number"
+            },
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "depth_mm": {
+              "format": "double",
+              "type": "number"
+            },
+            "open": {
+              "description": "True for an open floor reachable from the side.",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "pocket",
+              "type": "string"
+            },
+            "vertical_walls": {
+              "description": "False when the walls are not vertical, so a 2.5D path cannot follow them.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "count",
+            "depth_mm",
+            "area_mm2",
+            "open",
+            "vertical_walls"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Fingerprint": {
+      "properties": {
+        "algorithm": {
+          "description": "Always \"sha256\".",
+          "type": "string"
+        },
+        "value": {
+          "description": "Lower-case hex digest of the file's bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "type": "object"
+    },
+    "FlagSeverity": {
+      "oneOf": [
+        {
+          "const": "error",
+          "description": "Cannot be made as drawn, or will likely fail.",
+          "type": "string"
+        },
+        {
+          "const": "warning",
+          "description": "Can be made, at extra cost or risk.",
+          "type": "string"
+        },
+        {
+          "const": "note",
+          "description": "Worth knowing.",
+          "type": "string"
+        }
+      ]
+    },
+    "MachineTime": {
+      "properties": {
+        "assumptions": {
+          "$ref": "#/$defs/TimeAssumptions"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/OperationTime"
+          },
+          "type": "array"
+        },
+        "per_part_min": {
+          "description": "Cycle time for one part, minutes.",
+          "format": "double",
+          "type": "number"
+        },
+        "setups": {
+          "description": "Setups (part orientations) planned; v1 plans one, from +Z.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/TimeStatus"
+        },
+        "total_min": {
+          "description": "Cycle time for the requested quantity, minutes (no setup or load time).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "status",
+        "setups",
+        "operations",
+        "per_part_min",
+        "total_min",
+        "assumptions"
+      ],
+      "type": "object"
+    },
+    "MaterialEcho": {
+      "properties": {
+        "matched": {
+          "description": "The library material used, or null when none matched.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested": {
+          "description": "What was asked for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requested"
+      ],
+      "type": "object"
+    },
+    "OperationTime": {
+      "properties": {
+        "count": {
+          "description": "Operations of this type in the plan.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "minutes": {
+          "description": "Minutes per part.",
+          "format": "double",
+          "type": "number"
+        },
+        "type": {
+          "$ref": "#/$defs/OperationType"
+        }
+      },
+      "required": [
+        "type",
+        "count",
+        "minutes"
+      ],
+      "type": "object"
+    },
+    "OperationType": {
+      "enum": [
+        "facing",
+        "pocket_clearing",
+        "wall_finishing",
+        "drilling",
+        "tool_changes"
+      ],
+      "type": "string"
+    },
+    "PartInfo": {
+      "properties": {
+        "bodies": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exact_bodies": {
+          "description": "Bodies imported as exact B-rep (the others were read as meshes).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "file_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fingerprint": {
+          "$ref": "#/$defs/Fingerprint",
+          "description": "Identifies the exact file, so a result can be matched to a quote line."
+        },
+        "source_length_unit": {
+          "description": "The unit the STEP file was written in; values here are converted to mm.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fingerprint",
+        "source_length_unit",
+        "bodies",
+        "exact_bodies"
+      ],
+      "type": "object"
+    },
+    "RequestEcho": {
+      "properties": {
+        "material": {
+          "$ref": "#/$defs/MaterialEcho"
+        },
+        "quantity": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "material",
+        "quantity"
+      ],
+      "type": "object"
+    },
+    "StockInfo": {
+      "properties": {
+        "kind": {
+          "description": "Always \"block\" in v1.",
+          "type": "string"
+        },
+        "margin_top_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "margin_xy_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "size": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "size",
+        "margin_xy_mm",
+        "margin_top_mm"
+      ],
+      "type": "object"
+    },
+    "TimeAssumptions": {
+      "properties": {
+        "excludes": {
+          "description": "What the estimate leaves out.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_rpm": {
+          "format": "double",
+          "type": "number"
+        },
+        "rapid_mm_per_min": {
+          "format": "double",
+          "type": "number"
+        },
+        "tool_change_min": {
+          "format": "double",
+          "type": "number"
+        },
+        "tool_library": {
+          "description": "Always \"stock\" in v1: a generic flat end mill set plus a drill for every hole.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rapid_mm_per_min",
+        "tool_change_min",
+        "max_rpm",
+        "tool_library",
+        "excludes"
+      ],
+      "type": "object"
+    },
+    "TimeStatus": {
+      "oneOf": [
+        {
+          "const": "unvalidated",
+          "description": "Not yet benchmarked: show as a suggestion, do not quote from it automatically.",
+          "type": "string"
+        },
+        {
+          "const": "validated",
+          "description": "Benchmarked within the agreed accuracy bar.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "https://anvilcad.dev/schema/part-check.v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The versioned Part Check result.",
+  "properties": {
+    "bounding_box": {
+      "$ref": "#/$defs/BoundingBox",
+      "description": "Lengths are millimetres throughout."
+    },
+    "dfm_flags": {
+      "items": {
+        "$ref": "#/$defs/DfmFlag"
+      },
+      "type": "array"
+    },
+    "engine": {
+      "$ref": "#/$defs/Engine"
+    },
+    "features": {
+      "items": {
+        "$ref": "#/$defs/Feature"
+      },
+      "type": "array"
+    },
+    "machine_time": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MachineTime"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Absent when no estimate could be made (unknown material, or no operations\ncould be planned); `warnings` says why."
+    },
+    "mass_g": {
+      "description": "Present when the material was found in the library.",
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "part": {
+      "$ref": "#/$defs/PartInfo"
+    },
+    "request": {
+      "$ref": "#/$defs/RequestEcho"
+    },
+    "schema": {
+      "description": "Always \"anvilcad.part-check\".",
+      "type": "string"
+    },
+    "schema_version": {
+      "description": "Semantic version of this document's shape, e.g. \"1.0.0\".",
+      "type": "string"
+    },
+    "stock": {
+      "$ref": "#/$defs/StockInfo"
+    },
+    "volume_mm3": {
+      "format": "double",
+      "type": "number"
+    },
+    "warnings": {
+      "description": "Things the estimator should know that are not DFM findings.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "schema_version",
+    "engine",
+    "part",
+    "request",
+    "bounding_box",
+    "stock",
+    "volume_mm3",
+    "features",
+    "dfm_flags",
+    "warnings"
+  ],
+  "title": "AnvilCAD Part Check result",
+  "type": "object"
+}
