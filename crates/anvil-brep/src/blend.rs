@@ -34,6 +34,10 @@ pub enum Blend {
     /// Bevel set back `distance` along face `along` (an index into the solid's faces)
     /// and leaving that face at `angle` radians.
     ChamferAngle { distance: f64, angle: f64, along: usize },
+    /// Bevel set back `distance` along face `along` and `other` along the edge's other
+    /// face, each measured as a straight line from the edge in the plane square to it (on
+    /// a curved face, the chord, as an equal-distance chamfer's is).
+    ChamferDistances { distance: f64, other: f64, along: usize },
     /// Offset face bevel: the two faces offset `distance` into the part (out of it at a
     /// concave edge) meet where the bevel's ends are dropped back square to each face, as
     /// a fillet of that radius would touch them.
@@ -83,7 +87,7 @@ impl Blend {
     fn size(&self) -> f64 {
         match *self {
             Blend::Fillet(r) | Blend::Chamfer(r) | Blend::ChamferOffset(r) => r,
-            Blend::ChamferAngle { distance, .. } => distance,
+            Blend::ChamferAngle { distance, .. } | Blend::ChamferDistances { distance, .. } => distance,
             Blend::Profiled { radius, .. } => radius,
         }
     }
@@ -100,6 +104,18 @@ impl Blend {
                 (r / (phi / 2.0).tan(), r / (phi / 2.0).tan())
             }
             Blend::Chamfer(c) => (c, c),
+            Blend::ChamferDistances { distance, other, along } => {
+                if !(other.is_finite() && other > 0.0) {
+                    return invalid("the chamfer's second distance must be a positive number");
+                }
+                if along == fa {
+                    (distance, other)
+                } else if along == fb {
+                    (other, distance)
+                } else {
+                    return invalid("the face the chamfer's distance is measured along is not at this edge");
+                }
+            }
             Blend::ChamferAngle { distance, angle, along } => {
                 if !(angle > 0.0 && angle + phi < PI) {
                     return invalid(

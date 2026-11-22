@@ -908,3 +908,125 @@ fn angle_chamfer_on_a_capped_frustum_rim() {
         assert!((v - want).abs() / want < 5e-4, "{d} at {deg}: {v} vs {want}");
     }
 }
+
+/// The edges of `s` on the circle of `radius` about the z axis at height `z`.
+fn rim(s: &Solid, radius: f64, z: f64) -> Vec<(EdgeId, u32)> {
+    (0..s.edges.len() as u32)
+        .map(EdgeId)
+        .filter(|id| {
+            s.edge(*id).is_some_and(|e| {
+                let p = e.curve.eval(0.5 * (e.t0 + e.t1));
+                (p.z - z).abs() < 1e-9 && (p.truncate().length() - radius).abs() < 1e-9
+            })
+        })
+        .map(|id| (id, 0))
+        .collect()
+}
+
+fn face_at(s: &Solid, p: DVec3) -> usize {
+    (0..s.faces.len()).find(|&f| crate::boolean::face_contains(s, f, p)).expect("a face there")
+}
+
+fn arc(c: (f64, f64), r: f64, from: f64, to: f64) -> Segment {
+    Segment::Arc { center: DVec2::new(c.0, c.1), radius: r, start: from, sweep: to - from }
+}
+
+/// Chamfers the rim of `s` (circle of `radius` at height `z`) `distance` along the face
+/// through `along` and `other` along the other face, and checks the volume against
+/// brep-bench's closed form.
+fn two_distances(s: &Solid, radius: f64, z: f64, along: DVec3, distance: f64, other: f64, want: f64) {
+    let edges = rim(s, radius, z);
+    assert!(!edges.is_empty(), "no rim");
+    let b = Blend::ChamferDistances { distance, other, along: face_at(s, along) };
+    let out = crate::blend::blend_chain(s, &edges, b, 1).expect("chamfer");
+    let v = volume(&out);
+    assert!((v - want).abs() / want < 5e-5, "{v} vs {want}");
+}
+
+#[test]
+fn two_distance_chamfers_next_to_balls() {
+    let asin = f64::asin;
+    // brep-bench's chamfer/*-two-distances: each distance a straight line from the edge in
+    // the plane square to it, the first along the named face.
+    // A hemisphere of 5, 2 on the flat face and 1 on the ball.
+    let hemi = turned(Loop2::new(vec![
+        seg_line((0.0, 0.0), (5.0, 0.0)),
+        arc((0.0, 0.0), 5.0, 0.0, 0.5 * PI),
+        seg_line((0.0, 5.0), (0.0, 0.0)),
+    ]));
+    two_distances(&hemi, 5.0, 0.0, DVec3::new(2.5, 0.0, 0.0), 2.0, 1.0, 234.396_144_679_021_4);
+    // The ball of 5 below z = 3, 2 on the flat face and 1 on the ball.
+    let a3 = asin(3.0 / 5.0);
+    let segment = turned(Loop2::new(vec![
+        arc((0.0, 0.0), 5.0, -0.5 * PI, a3),
+        seg_line((4.0, 3.0), (0.0, 3.0)),
+        seg_line((0.0, 3.0), (0.0, -5.0)),
+    ]));
+    two_distances(&segment, 4.0, 3.0, DVec3::new(2.0, 0.0, 3.0), 2.0, 1.0, 449.841_641_717_969_7);
+    // The sector of the ball of 5 inside the cone cos a = 3/5, 2 down the cone, 1 on the ball.
+    let sector = turned(Loop2::new(vec![
+        seg_line((0.0, 0.0), (4.0, 3.0)),
+        arc((0.0, 0.0), 5.0, a3, 0.5 * PI),
+        seg_line((0.0, 5.0), (0.0, 0.0)),
+    ]));
+    two_distances(&sector, 4.0, 3.0, DVec3::new(2.0, 0.0, 1.5), 2.0, 1.0, 84.072_647_240_914_8);
+    // The lens of the balls of 5 about (0, 0, +-3), 2 on the upper face, 1 on the lower.
+    let a = asin(3.0 / 5.0);
+    let lens = turned(Loop2::new(vec![
+        arc((0.0, -3.0), 5.0, a, 0.5 * PI),
+        seg_line((0.0, 2.0), (0.0, -2.0)),
+        arc((0.0, 3.0), 5.0, -0.5 * PI, -a),
+    ]));
+    let up = DVec3::new(2.0, 0.0, (25.0f64 - 4.0).sqrt() - 3.0);
+    two_distances(&lens, 4.0, 0.0, up, 2.0, 1.0, 85.163_595_116_861_79);
+    // The ball of 5 bored through by 2, its upper rim, 2 down the bore and 1 on the ball.
+    // Built as the ball less a rod: revolving the band between the bore and the ball gives
+    // a solid that measures 3e-4 small, whatever the tessellation (a separate issue).
+    let h = 21f64.sqrt();
+    let ball = turned(Loop2::new(vec![
+        arc((0.0, 0.0), 5.0, -0.5 * PI, 0.5 * PI),
+        seg_line((0.0, 5.0), (0.0, -5.0)),
+    ]));
+    let rod = prism(&[Loop2::new(vec![Segment::circle(DVec2::ZERO, 2.0)])], &Frame::world(), -6.0, 6.0);
+    let bored = boolean_with_contacts(&ball, &rod, BoolOp::Subtract, &[]).expect("bore").remove(0);
+    two_distances(&bored, 2.0, h, DVec3::new(2.0, 0.0, 0.0), 2.0, 1.0, 390.298_894_344_344_7);
+    // A post of 3 from z = 0 to 10 joined to a ball of 5 about (0, 0, 10): the concave
+    // edge at z = 6, 2 down the post and 1 on the ball, adding material.
+    let rod = prism(&[Loop2::new(vec![Segment::circle(DVec2::ZERO, 3.0)])], &Frame::world(), 0.0, 10.0);
+    let head = turned(Loop2::new(vec![
+        arc((0.0, 10.0), 5.0, -0.5 * PI, 0.5 * PI),
+        seg_line((0.0, 15.0), (0.0, 5.0)),
+    ]));
+    let post = boolean_with_contacts(&rod, &head, BoolOp::Union, &[]).expect("post").remove(0);
+    two_distances(&post, 3.0, 6.0, DVec3::new(3.0, 0.0, 3.0), 2.0, 1.0, 693.237_118_930_332_1);
+}
+
+#[test]
+fn two_distance_chamfer_on_flat_faces() {
+    // A cube's top front edge, 2 down the front and 1 back along the top: a prism of the
+    // right triangle with legs 2 and 1, exactly 1000 - 10.
+    let cube = prism(&[square(10.0)], &Frame::world(), 0.0, 10.0);
+    let edge = edge_near(&cube, DVec3::new(5.0, 0.0, 10.0), 1e-6).expect("edge");
+    let front = face_at(&cube, DVec3::new(5.0, 0.0, 5.0));
+    let top = face_at(&cube, DVec3::new(5.0, 5.0, 10.0));
+    let b = Blend::ChamferDistances { distance: 2.0, other: 1.0, along: front };
+    let out = crate::blend::blend_edge(&cube, edge, b, 1, 0).expect("chamfer");
+    assert!((rough_volume(&out) - 990.0).abs() < 1e-9);
+    // The bevel's ends: 2 down the front, 1 back along the top.
+    let has = |p: DVec3| out[0].vertices.iter().any(|v| (v.point - p).length() < 1e-9);
+    assert!(has(DVec3::new(0.0, 0.0, 8.0)) && has(DVec3::new(0.0, 1.0, 10.0)));
+    // Measured along the top instead, the bevel turns round.
+    let b = Blend::ChamferDistances { distance: 2.0, other: 1.0, along: top };
+    let out = crate::blend::blend_edge(&cube, edge, b, 1, 0).expect("chamfer");
+    let has = |p: DVec3| out[0].vertices.iter().any(|v| (v.point - p).length() < 1e-9);
+    assert!(has(DVec3::new(0.0, 0.0, 9.0)) && has(DVec3::new(0.0, 2.0, 10.0)));
+    // A second distance that is not a positive number, and a face not at the edge.
+    let bottom = face_at(&cube, DVec3::new(5.0, 5.0, 0.0));
+    for b in [
+        Blend::ChamferDistances { distance: 2.0, other: 0.0, along: front },
+        Blend::ChamferDistances { distance: 2.0, other: f64::NAN, along: front },
+        Blend::ChamferDistances { distance: 2.0, other: 1.0, along: bottom },
+    ] {
+        assert!(crate::blend::blend_edge(&cube, edge, b, 1, 0).is_err(), "{b:?}");
+    }
+}
