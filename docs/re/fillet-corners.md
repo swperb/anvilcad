@@ -97,33 +97,48 @@ Inputs: a fillet feature (constant radius `r`, circular profile) and its edges.
   eighth of the ball, at an octahedron's corner a square patch between four rounds, and at
   an inside corner the empty eighth of the ball is filled.
 - **What it needs.** Flat faces and straight edges at the corner, all of its edges convex
-  or all concave, and a point at `r` from every face's plane. On a rectangular pyramid's
-  apex there is no such point. The rounds would have to split the apex into a short
-  ridge, which the exact kernel does not make yet, so the fillet is refused there rather
-  than built with the wrong corner, and the part goes to the faceted kernel.
+  or all concave.
+- **A split corner.** Where no point is at `r` from every face's plane (the apex of a
+  pyramid on a rectangle), no ball touches all the faces. Moved in by `r`, the faces meet
+  instead along a short ridge, from a point where three of them meet to another. The
+  corner is that ridge grown by `r`: a round of radius `r` about the ridge, between the
+  two faces it lies on, and a patch of the ball at each end, where the third face joins.
+  The hips' rounds run into the patches. On brep-bench's pyramid (rectangle 20 × 12, apex
+  12 high, `r` = 3/2) the ridge runs along `y = 0` at `z = 12 - 3√5/2`, from
+  `x = -x'` to `x'`, `x' = (5√5 - √61)/4`. Faces moved in by `r` that meet in anything
+  more involved than one point or one ridge are refused rather than built wrong, and the
+  part goes to the faceted kernel.
 - **It must fit.** Along an edge with a closed corner at each end, the two patches take
   `(c - v) . e` each from the edge's length (`c` the ball's centre, `v` the vertex, `e`
   the edge's direction away from it). Where they would overlap, the fillet is refused and
   says so.
-- **Face names.** Each patch is a face of the fillet feature. The corner is named after
-  the first selected edge at it, `k`: face `8 + 8k` at that edge's start vertex and
-  `9 + 8k` at its end, indices the edge's own round and side faces (`2 + 8k` to `6 + 8k`)
-  leave free. An edge reference that stands for several edges can name more corners than
-  that; those take the first free index from `8 + 8n` for `n` selected edges.
+- **Face names.** Each patch and ridge round is a face of the fillet feature. The corner
+  is named after the first selected edge at it, `k`: its first patch is face `8 + 8k` at
+  that edge's start vertex and `9 + 8k` at its end, indices the edge's own round and side
+  faces (`2 + 8k` to `6 + 8k`) leave free. A split corner's second patch and its ridge
+  round, and corners an edge reference that stands for several edges names twice, take
+  the first free indices from `8 + 8n` for `n` selected edges.
 
 How it is built: the edges are rounded as before, one run after another, and then one more
-exact boolean per corner. The tool is the cone at the ball's centre spanned by the faces'
-normals (pointing out of the side being rounded), cut off just past the vertex, less the
-ball. It is cut from the part at a convex corner and added at a concave one. Inside that
-cone the rounded part is the ball and nothing else, so the boolean changes nothing but the
-corner. The vertex is the furthest point of the corner from the centre along the cone's
-axis (a small linear programme, worked in `crates/anvil-brep/src/corner.rs`), so the cap
-just past it reaches nothing beyond the corner.
+exact boolean for each piece of each corner. A patch's tool is the cone at the ball's
+centre spanned by its faces' normals (pointing out of the side being rounded), cut off
+just past the corner, less the ball. A ridge's tool is the wedge along the ridge between
+its two faces' normals, cut off likewise, less the cylinder about it. Each is cut from the
+part at a convex corner and added at a concave one. Inside a tool's region the rounded part
+is that piece's round and nothing else, so the boolean changes nothing but the corner. The
+cap is placed by working out the furthest point of the corner in the region (the vertices
+of a small polytope, in `crates/anvil-brep/src/corner.rs`), so it reaches nothing beyond
+the corner. Where the boolean leaves a patch in pieces along a curve with the patch on both
+sides, the pieces are joined back into one face.
+
+Where rounding an edge cuts a neighbouring edge in two inside a corner (a hip's round
+crossing the next hip near a pyramid's apex), the piece inside the corner is not rounded
+on its own: closing the corner takes it away.
 
 ## Not done
 
-- A corner where no one ball touches every face (a pyramid's apex on a rectangle) is
-  refused: the split corner is not built.
+- Corners whose faces, moved in by the radius, meet in more than one ridge (five or more
+  faces at a vertex in general) are refused.
 - Corners with convex and concave edges, corners next to curved faces or curved edges,
   fillets of different radii meeting, conic and curvature-continuous profiles, chamfers'
   corners, the Round corners option, setbacks and the FilletXpert's alternative corners

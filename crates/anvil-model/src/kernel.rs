@@ -15,7 +15,8 @@
 //!   is index 0, its end cap 1, and the face swept by sketch entity `k` is `2 + k`; the
 //!   faces a blend makes along its `k`-th edge are `2 + 8k`, `4 + 8k` and `6 + 8k`, and
 //!   a fillet's ball patch closing a corner where every edge is rounded is `8 + 8k` or
-//!   `9 + 8k` after the first selected edge at it (see `docs/re/fillet-corners.md`); a
+//!   `9 + 8k` after the first selected edge at it, a split corner's other faces taking
+//!   the first free indices from `8 + 8n` for `n` edges (see `docs/re/fillet-corners.md`); a
 //!   shell's cavity faces are 2 plus the rank of the face they follow among all of the
 //!   part's names. Faces that are kept keep their names. [`ExactKernel::face_names`]
 //!   lists them, and selections, edge references and patterns depend on them.

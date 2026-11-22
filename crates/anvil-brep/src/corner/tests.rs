@@ -14,7 +14,7 @@ fn measure(s: &Solid) -> (f64, f64) {
 
 fn close_all(mut s: Solid, corners: &[Corner]) -> Solid {
     for (i, c) in corners.iter().enumerate() {
-        let mut out = close_corner(&s, c, 1, 100 + i as u32).expect("close");
+        let mut out = close_corner(&s, c, 1, &[100 + 10 * i as u32]).expect("close");
         assert_eq!(out.len(), 1);
         s = out.remove(0);
     }
@@ -75,7 +75,7 @@ fn box_corners_are_eighths_of_the_ball() {
     let cube = prism(&[(0., 0.), (10., 0.), (10., 10.), (0., 10.)], 0.0, 10.0);
     let (s, corners) = round_one_by_one(&cube, &cube_edge_midpoints(10.0), 1.0);
     assert_eq!(corners.len(), 8);
-    assert!(corners.iter().all(|c| c.convex && c.normals.len() == 3));
+    assert!(corners.iter().all(|c| c.convex && c.patches.len() == 1 && c.patches[0].normals.len() == 3));
     let (v0, _) = measure(&s);
     assert!(v0 > 977.6, "{v0}");
     let s = close_all(s, &corners);
@@ -99,7 +99,7 @@ fn concave_corner_is_filled_to_the_ball() {
     let (s, corners) = round_one_by_one(&part, &pts, 3.0);
     assert_eq!(corners.len(), 1, "only the inside corner has all its edges rounded");
     assert!(!corners[0].convex);
-    assert!((corners[0].centre - DVec3::splat(13.0)).length() < 1e-9);
+    assert!((corners[0].patches[0].centre - DVec3::splat(13.0)).length() < 1e-9);
     let (v, a) = measure(&close_all(s, &corners));
     let (want_v, want_a) = (7216.0 - 51.75 * PI, 2274.0 + 29.25 * PI);
     assert!(near(v, want_v, 5e-6), "{v} vs {want_v}");
@@ -136,7 +136,7 @@ fn octahedron_corners_are_square_patches() {
     assert_eq!(pts.len(), 12);
     let (s, corners) = round_one_by_one(&o, &pts, 2.0);
     assert_eq!(corners.len(), 6);
-    assert!(corners.iter().all(|c| c.normals.len() == 4));
+    assert!(corners.iter().all(|c| c.patches.len() == 1 && c.patches[0].normals.len() == 4));
     let (v, a) = measure(&close_all(s, &corners));
     let sp = 10.0 - 2.0 * 3f64.sqrt();
     let turn = (1.0f64 / 3.0).acos();
@@ -149,12 +149,7 @@ fn octahedron_corners_are_square_patches() {
     assert!(near(a, want_a, 1e-5), "{a} vs {want_a}");
 }
 
-#[test]
-fn a_corner_no_ball_closes_is_refused() {
-    // brep-bench's fillet/rectangular-pyramid-all-edges: on a rectangle, the four faces at
-    // the apex have no common ball, and rounding them splits the apex into a short ridge.
-    // The kernel does not make that yet, so it refuses rather than leave the apex wrong.
-    let frame = Frame::world();
+fn rect_pyramid() -> Solid {
     let p = [(-10.0, -6.0), (10.0, -6.0), (10.0, 6.0), (-10.0, 6.0)];
     let outline = Loop2::new(
         (0..4)
@@ -164,24 +159,57 @@ fn a_corner_no_ball_closes_is_refused() {
             })
             .collect(),
     );
-    let pyramid = loft_ruled(
-        &Section::Loop { frame, outline },
+    loft_ruled(
+        &Section::Loop { frame: Frame::world(), outline },
         &Section::Point(DVec3::new(0.0, 0.0, 12.0)),
         [None, None],
     )
-    .expect("pyramid");
-    let ids: Vec<EdgeId> = (0..pyramid.edges.len() as u32).map(EdgeId).collect();
-    let err = ball_corners(&pyramid, &ids, 1.5).expect_err("the apex");
-    assert!(matches!(err, KernelError::Unsupported(_)), "{err:?}");
-    // With the apex left sharp (its hips not rounded) there is no corner to close: each
-    // base corner has a hip among its edges.
-    let base_only: Vec<EdgeId> = ids
+    .expect("pyramid")
+}
+
+#[test]
+fn split_apex_is_a_ridge_between_two_patches() {
+    // brep-bench's fillet/rectangular-pyramid-all-edges: a pyramid on the rectangle
+    // 20 x 12 with its apex at height 12, all eight edges rounded to 3/2. No ball touches
+    // the four faces at the apex: moved in by 3/2, the two long sides meet along the line
+    // y = 0, z = 12 - 3 sqrt5 / 2, and the short ends cut it off at x = +-x',
+    // x' = (5 sqrt5 - sqrt61) / 4. The apex is a round about that segment with a patch of
+    // the ball at each end. The pyramid shrunk by 3/2 grown by 3/2 (Steiner, see the case)
+    // has volume 848.690972 and area 527.660727. Rounded one edge after another and left
+    // at that, it measured 863.37.
+    let pyramid = rect_pyramid();
+    let pts: Vec<DVec3> = pyramid.edges.iter().map(|e| e.curve.eval(0.5 * (e.t0 + e.t1))).collect();
+    assert_eq!(pts.len(), 8);
+    let (s, corners) = round_one_by_one(&pyramid, &pts, 1.5);
+    assert_eq!(corners.len(), 5);
+    let apex = corners.iter().find(|c| c.ridges.len() == 1).expect("the apex splits");
+    assert_eq!(apex.patches.len(), 2);
+    let xp = (5.0 * 5f64.sqrt() - 61f64.sqrt()) / 4.0;
+    let zr = 12.0 - 1.5 * 5f64.sqrt();
+    let ridge = &apex.ridges[0];
+    for (end, want) in [(ridge.from, xp), (ridge.to, xp)] {
+        assert!(
+            (end.x.abs() - want).abs() < 1e-9 && end.y.abs() < 1e-9 && (end.z - zr).abs() < 1e-9,
+            "{end}"
+        );
+    }
+    assert!((ridge.from.x + ridge.to.x).abs() < 1e-9, "the ends are either side of the axis");
+    assert_eq!(corners.iter().filter(|c| c.ridges.is_empty() && c.patches.len() == 1).count(), 4);
+    let (v0, _) = measure(&s);
+    assert!(v0 > 863.3, "{v0}");
+    let s = close_all(s, &corners);
+    let (v, a) = measure(&s);
+    assert!(near(v, 848.690_972_160_223_9, 1e-5), "{v}");
+    assert!(near(a, 527.660_726_666_457_4, 1e-5), "{a}");
+    // A patch at each base corner and at each end of the ridge, each one face, and the
+    // ridge's round between the apex's two patches.
+    assert_eq!(s.faces.iter().filter(|f| matches!(f.surface, Surface::Sphere { .. })).count(), 6);
+    let ridge_faces = s
+        .faces
         .iter()
-        .copied()
-        .filter(|id| pyramid.edge(*id).is_some_and(|e| e.curve.eval(0.5 * (e.t0 + e.t1)).z.abs() < 1e-9))
-        .collect();
-    assert_eq!(base_only.len(), 4);
-    assert!(ball_corners(&pyramid, &base_only, 1.5).expect("base").is_empty());
+        .filter(|f| matches!(f.surface, Surface::Cylinder { frame, .. } if frame.z.cross(DVec3::X).length() < 1e-9 && frame.origin.y.abs() < 1e-9 && (frame.origin.z - zr).abs() < 1e-9))
+        .count();
+    assert_eq!(ridge_faces, 1);
 }
 
 #[test]

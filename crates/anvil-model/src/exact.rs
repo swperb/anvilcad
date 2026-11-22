@@ -287,13 +287,18 @@ pub fn blend(
     // run smoothly one into the next (a slot's outline) are blended together, in one
     // step, so their rounds join up.
     for _ in 0..runs {
+        // A piece of an edge cut off inside a corner (by a neighbouring round) is left for
+        // the corner's patch to take away.
+        let in_corner =
+            |b: usize, id: brep::EdgeId| corners.iter().any(|(c, _)| c.holds_edge(&bodies[b], id));
         let found: Vec<(usize, brep::EdgeId, usize)> = edges
             .iter()
             .enumerate()
             .flat_map(|(k, e)| find_edges(&bodies, e).into_iter().map(move |(b, id)| (b, id, k)))
+            .filter(|(b, id, _)| !in_corner(*b, *id))
             .collect();
         let Some(&(b, first, k)) = found.first() else {
-            return Ok(bodies);
+            break;
         };
         let kind = match (plain_blend(treatment), treatment) {
             (Some(kind), _) => kind,
@@ -325,38 +330,40 @@ pub fn blend(
             brep::blend::blend_chain(&bodies[b], &tagged, kind, feature).map_err(|err| err.to_string())?;
         bodies.splice(b..=b, result);
     }
-    if edges.iter().any(|e| !find_edges(&bodies, e).is_empty()) {
-        return Err("the edges to blend did not all blend".into());
-    }
-    for (corner, tag) in &corners {
-        // The body holding the corner: around the ball's centre at a convex corner (the
-        // ball lies in the part), at the vertex at a concave one (the rounds filled it).
-        let probe = if corner.convex { corner.centre } else { corner.vertex };
+    for (corner, tags) in &corners {
+        // The body holding the corner: around a ball's centre at a convex corner (the ball
+        // lies in the part), at the vertex at a concave one (the rounds filled it).
+        let Some(first) = corner.patches.first() else { continue };
+        let probe = if corner.convex { first.centre } else { corner.vertex };
         let Some(b) = bodies.iter().position(|s| brep::boolean::contains_point(s, probe).unwrap_or(false))
         else {
             return Err("a rounded corner is no longer in any body".into());
         };
         let result =
-            brep::corner::close_corner(&bodies[b], corner, feature, *tag).map_err(|e| e.to_string())?;
+            brep::corner::close_corner(&bodies[b], corner, feature, tags).map_err(|e| e.to_string())?;
         bodies.splice(b..=b, result);
+    }
+    if edges.iter().any(|e| !find_edges(&bodies, e).is_empty()) {
+        return Err("the edges to blend did not all blend".into());
     }
     Ok(bodies)
 }
 
 /// The corners that rounding `edges` with radius `r` closes with a ball (see
-/// [`brep::corner`]), each with the tag its patch's face is named by. A corner is named
-/// after the first selected edge at it, `k`: the patch at that edge's start vertex is face
+/// [`brep::corner`]), each with the tags its faces are named by. A corner is named after
+/// the first selected edge at it, `k`: its first patch at that edge's start vertex is face
 /// `8 + 8k` and at its end vertex `9 + 8k` (indices the edge's own blend faces, `2 + 8k`
-/// to `6 + 8k`, leave free). Should another corner already have the name (an edge that
-/// stands for several, each with corners), the corner takes the first free index past
-/// every edge's names, from `8 + 8n` for `n` edges.
+/// to `6 + 8k`, leave free). A split corner's other faces (its second patch, then its
+/// ridge round), and a corner whose name another corner already has (an edge that stands
+/// for several, each with corners), take the first free indices past every edge's names,
+/// from `8 + 8n` for `n` edges.
 fn ball_corners(
     bodies: &[brep::Solid],
     edges: &[EdgeRef],
     r: f64,
     propagate: bool,
-) -> Result<Vec<(brep::corner::Corner, u32)>, String> {
-    let mut out: Vec<(brep::corner::Corner, u32)> = Vec::new();
+) -> Result<Vec<(brep::corner::Corner, Vec<u32>)>, String> {
+    let mut out: Vec<(brep::corner::Corner, Vec<u32>)> = Vec::new();
     for (b, solid) in bodies.iter().enumerate() {
         let found: Vec<(brep::EdgeId, usize)> = edges
             .iter()
@@ -374,7 +381,7 @@ fn ball_corners(
             let named = corner
                 .edges
                 .iter()
-                .filter_map(|(id, _)| found.iter().find(|f| f.0 == *id).map(|f| (f.1, *id)))
+                .filter_map(|(id, _, _)| found.iter().find(|f| f.0 == *id).map(|f| (f.1, *id)))
                 .min_by_key(|f| f.0);
             let (k, at_start) = match named {
                 Some((k, id)) => {
@@ -383,16 +390,21 @@ fn ball_corners(
                 }
                 None => (0, true),
             };
-            let taken = |t: u32| out.iter().any(|(_, u)| *u == t);
-            let mut tag = 8 * k as u32 + if at_start { 6 } else { 7 };
-            if taken(tag) {
-                // Past every edge's names.
-                tag = 8 * edges.len() as u32 + 6;
-                while taken(tag) {
-                    tag += 1;
-                }
+            let mut tags: Vec<u32> = Vec::new();
+            let taken = |t: u32, tags: &[u32]| tags.contains(&t) || out.iter().any(|(_, u)| u.contains(&t));
+            let own = 8 * k as u32 + if at_start { 6 } else { 7 };
+            if !taken(own, &tags) {
+                tags.push(own);
             }
-            out.push((corner, tag));
+            // Past every edge's names.
+            let mut next = 8 * edges.len() as u32 + 6;
+            while tags.len() < corner.face_count() {
+                while taken(next, &tags) {
+                    next += 1;
+                }
+                tags.push(next);
+            }
+            out.push((corner, tags));
         }
     }
     Ok(out)
@@ -501,8 +513,107 @@ impl ExactKernel for Brep {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn brep_passes_the_kernel_conformance_tests() {
         crate::kernel::conformance::run(&super::Brep);
+    }
+
+    /// A 20 mm cube with a slot through it, every crease rounded by one fillet. Each of the
+    /// slot's rims is a smooth run rounded in one step, so the edges run out before the
+    /// steps do; the cube's eight corners must still be closed.
+    #[test]
+    fn corners_are_closed_when_runs_round_several_edges_at_once() {
+        use brep::boolean::{boolean, BoolOp};
+        use brep::profile::{build_regions, Loop2, Segment};
+        use std::f64::consts::PI;
+        let rect = Loop2::new(
+            [(0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)]
+                .windows(2)
+                .map(|w| (w[0], w[1]))
+                .chain([((0.0, 20.0), (0.0, 0.0))])
+                .map(|(a, b)| Segment::Line { a: DVec2::new(a.0, a.1), b: DVec2::new(b.0, b.1) })
+                .collect(),
+        );
+        let mut cube =
+            brep::extrude::extrude(&brep::Frame::world(), &build_regions(&[rect]).expect("r")[0], 0.0, 20.0)
+                .expect("cube");
+        cube.set_owner(1);
+        let slot = Loop2::new(vec![
+            Segment::Line { a: DVec2::new(7.0, 7.0), b: DVec2::new(13.0, 7.0) },
+            Segment::Arc { center: DVec2::new(13.0, 10.0), radius: 3.0, start: -0.5 * PI, sweep: PI },
+            Segment::Line { a: DVec2::new(13.0, 13.0), b: DVec2::new(7.0, 13.0) },
+            Segment::Arc { center: DVec2::new(7.0, 10.0), radius: 3.0, start: 0.5 * PI, sweep: PI },
+        ]);
+        let mut tool =
+            brep::extrude::extrude(&brep::Frame::world(), &build_regions(&[slot]).expect("r")[0], -1.0, 21.0)
+                .expect("slot");
+        tool.set_owner(2);
+        let part = boolean(&cube, &tool, BoolOp::Subtract).expect("cut").remove(0);
+        let edges: Vec<EdgeRef> = (0..part.edges.len() as u32)
+            .map(brep::EdgeId)
+            .filter(|id| brep::blend::crease(&part, *id).is_some())
+            .map(|id| {
+                let f = part.edge_faces(id);
+                EdgeRef::new(face_id(&part.faces[f[0].index()]), face_id(&part.faces[f[1].index()]))
+            })
+            .collect();
+        assert_eq!(edges.len(), 20, "12 of the cube and 4 round each rim of the slot");
+        let round = kernel::Blend::Fillet { radius: 1.0, round: kernel::Round::Circular };
+        let out = blend(&[part], &edges, round, false, 5).expect("rounded");
+        let patches = out
+            .iter()
+            .flat_map(|b| &b.faces)
+            .filter(|f| matches!(f.surface, brep::Surface::Sphere { .. }))
+            .count();
+        assert_eq!(patches, 8);
+    }
+
+    /// A pyramid on the rectangle 20 x 12, apex 12 high, all eight edges rounded to 3/2 by
+    /// one fillet: the apex splits into a ridge round with a patch at each end (#114). The
+    /// volume is brep-bench's closed form, 848.690972; every new face has its own name.
+    #[test]
+    fn split_apex_through_the_fillet_feature() {
+        use brep::loft::{loft_ruled, Section};
+        use brep::profile::{Loop2, Segment};
+        let p = [(-10.0, -6.0), (10.0, -6.0), (10.0, 6.0), (-10.0, 6.0)];
+        let outline = Loop2::new(
+            (0..4)
+                .map(|i| Segment::Line {
+                    a: DVec2::new(p[i].0, p[i].1),
+                    b: DVec2::new(p[(i + 1) % 4].0, p[(i + 1) % 4].1),
+                })
+                .collect(),
+        );
+        let mut pyramid = loft_ruled(
+            &Section::Loop { frame: brep::Frame::world(), outline },
+            &Section::Point(DVec3::new(0.0, 0.0, 12.0)),
+            [None, None],
+        )
+        .expect("pyramid");
+        pyramid.set_owner(1);
+        let edges: Vec<EdgeRef> = (0..pyramid.edges.len() as u32)
+            .map(|i| {
+                let f = pyramid.edge_faces(brep::EdgeId(i));
+                EdgeRef::new(face_id(&pyramid.faces[f[0].index()]), face_id(&pyramid.faces[f[1].index()]))
+            })
+            .collect();
+        assert_eq!(edges.len(), 8);
+        let round = kernel::Blend::Fillet { radius: 1.5, round: kernel::Round::Circular };
+        let out = blend(&[pyramid], &edges, round, false, 5).expect("rounded");
+        assert_eq!(out.len(), 1);
+        let fine = brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        let v = brep::mass::properties(&brep::tess::tessellate(&out[0], &fine).expect("tess")).volume;
+        assert!((v - 848.690_972_160_223_9).abs() / 848.69 < 1e-5, "{v}");
+        // Eight rounds' faces, four base patches, and the apex's two patches and ridge.
+        let mut names: Vec<FaceId> = out[0].faces.iter().filter(|f| f.owner == 5).map(face_id).collect();
+        let n = names.len();
+        names.sort_by_key(|f| f.index);
+        names.dedup();
+        assert_eq!(names.len(), n, "every face of the fillet has its own name");
+        let patches =
+            out[0].faces.iter().filter(|f| matches!(f.surface, brep::Surface::Sphere { .. })).count();
+        assert_eq!(patches, 6);
     }
 }
