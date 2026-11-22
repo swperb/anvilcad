@@ -343,17 +343,12 @@ fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Re
         }
         _ => Segment::Line { a, b },
     };
-    let regions = build_regions(&[pushed_section(
-        round,
-        a,
-        b,
-        DVec2::ZERO,
-        to2(na),
-        to2(nb),
-        setback,
-        convex,
-        tag_base,
-    )])?;
+    let along_edge = [p0, mid, p1];
+    let push = fit_push(solid, a, b, DVec2::ZERO, to2(na), to2(nb), setback, convex, |q| {
+        along_edge.map(|p| p + frame.x * q.x + frame.y * q.y)
+    })?;
+    let regions =
+        build_regions(&[pushed_section(round, a, b, DVec2::ZERO, to2(na), to2(nb), push, tag_base)])?;
 
     // Extend past an end only where the far side is open (convex) or solid
     // (concave), so the extension changes nothing but avoids slivers.
@@ -419,6 +414,7 @@ fn coaxial_line_surface(s: &Surface, o: DVec3, a: DVec3) -> bool {
 /// the tool cuts, into it at a concave one, where the tool adds. Lying on the faces
 /// instead, the tool's sides would coincide with them, and where tools meet a curved
 /// round could touch a flat side at a point; pushed off, every side crosses the faces.
+/// `push` is how far, out of the part where positive (see [`fit_push`]).
 #[allow(clippy::too_many_arguments)]
 fn pushed_section(
     round: Segment,
@@ -427,12 +423,10 @@ fn pushed_section(
     c: DVec2,
     na: DVec2,
     nb: DVec2,
-    setback: f64,
-    convex: bool,
+    push: f64,
     tag_base: u32,
 ) -> Loop2 {
-    let push = setback * 0.5 * if convex { 1.0 } else { -1.0 };
-    let (pb2, pc2, pa2) = (pb + nb * push, c + (na + nb) * push, pa + na * push);
+    let [pa2, pc2, pb2] = pushed_corners(pa, pb, c, na, nb, push);
     let segs = vec![
         round,
         Segment::Line { a: pb, b: pb2 },
@@ -441,6 +435,54 @@ fn pushed_section(
         Segment::Line { a: pa2, b: pa },
     ];
     Loop2::with_tags(segs, vec![tag_base + 2, tag_base + 4, tag_base + 4, tag_base, tag_base])
+}
+
+/// The corners of a tool's section pushed `push` off the faces: beside `pa`, beside the
+/// edge `c`, and beside `pb`.
+fn pushed_corners(pa: DVec2, pb: DVec2, c: DVec2, na: DVec2, nb: DVec2, push: f64) -> [DVec2; 3] {
+    [pa + na * push, c + (na + nb) * push, pb + nb * push]
+}
+
+/// How far to push a tool's sides off the faces (see [`pushed_section`]), signed as
+/// `pushed_section` takes it: half the setback, or less where that would carry the
+/// pushed part of the tool through the part (at a concave edge, out through the far side
+/// of a face thinner than that) or into other parts of it (at a convex edge). The tool is
+/// added to the part at a concave edge and cut from it at a convex one, so its pushed
+/// part must lie in the part, or out of it, for the blend to change nothing but the edge.
+/// `world` places a point of the section at a few places along the edge; the pushed
+/// corners and the middles of the pushed sides are checked there. A blend that leaves no
+/// room for any push is refused.
+#[allow(clippy::too_many_arguments)]
+fn fit_push<const N: usize>(
+    solid: &Solid,
+    pa: DVec2,
+    pb: DVec2,
+    c: DVec2,
+    na: DVec2,
+    nb: DVec2,
+    setback: f64,
+    convex: bool,
+    world: impl Fn(DVec2) -> [DVec3; N],
+) -> Result<f64> {
+    let sign = if convex { 1.0 } else { -1.0 };
+    let mut push = setback * 0.5;
+    for _ in 0..6 {
+        let [pa2, pc2, pb2] = pushed_corners(pa, pb, c, na, nb, sign * push);
+        let section =
+            [pa2, pc2, pb2, (pa + pa2) * 0.5, (pa2 + pc2) * 0.5, (pc2 + pb2) * 0.5, (pb2 + pb) * 0.5];
+        let points: Vec<DVec3> = section.iter().flat_map(|q| world(*q)).collect();
+        let fits =
+            boolean::locate_points(solid, &points)?.iter().all(|l| l.is_none_or(|inside| inside != convex));
+        if fits {
+            return Ok(sign * push);
+        }
+        push *= 0.5;
+    }
+    invalid(if convex {
+        "the blend would cut into other parts of the solid next to this edge"
+    } else {
+        "the faces next to this edge are too thin for a blend of this size"
+    })
 }
 
 /// Whether another edge leaves the vertex at `end` (an end of `edge`) in the direction
@@ -529,7 +571,11 @@ fn round_edge_tool(
         }
         _ => Segment::Line { a: pa, b: pb },
     };
-    let regions = build_regions(&[pushed_section(round, pa, pb, c, na2, nb2, setback, convex, tag_base)])?;
+    let angles = if whole { [e.t0, e.t0 + 2.0 * PI / 3.0, e.t0 + 4.0 * PI / 3.0] } else { [e.t0, mid, e.t1] };
+    let push = fit_push(solid, pa, pb, c, na2, nb2, setback, convex, |q| {
+        angles.map(|t| o + (at(t) - o).normalize() * q.x + a * q.y)
+    })?;
+    let regions = build_regions(&[pushed_section(round, pa, pb, c, na2, nb2, push, tag_base)])?;
     let region = regions.first().ok_or_else(|| KernelError::InvalidInput("degenerate blend".into()))?;
     // How far round the tool turns: the whole circle, or the arc, carried on past an
     // end (by the same margin as a straight edge's) only where nothing lies beyond it,
@@ -619,6 +665,34 @@ mod tests {
 
     fn edge(s: &Solid, p: DVec3) -> EdgeId {
         edge_near(s, p, 1e-6).expect("edge")
+    }
+
+    #[test]
+    fn concave_blend_consuming_both_faces() {
+        // An L-section, (0,0) (10,0) (10,3) (3,3) (3,10) (0,10) in xz, 10 long in y. A
+        // blend of 7 at its inside edge reaches the far edges of both faces beside it,
+        // where the legs are only 3 thick: the tool must add the blend and nothing beyond.
+        let section = [(0.0, 0.0), (10.0, 0.0), (10.0, 3.0), (3.0, 3.0), (3.0, 10.0), (0.0, 10.0)];
+        let l = Loop2::new(
+            (0..6)
+                .map(|i| {
+                    let (a, b) = (section[i], section[(i + 1) % 6]);
+                    Segment::Line { a: DVec2::new(a.0, a.1), b: DVec2::new(b.0, b.1) }
+                })
+                .collect(),
+        );
+        let r = build_regions(&[l]).expect("region");
+        let f = Frame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Z, z: DVec3::NEG_Y };
+        let block = extrude::extrude(&f, &r[0], -10.0, 0.0).expect("block");
+        let inside = edge(&block, DVec3::new(3.0, 5.0, 3.0));
+        let c = blend_edge(&block, inside, Blend::Chamfer(7.0), 1, 0).expect("chamfer");
+        assert!((volume(&c) - (510.0 + 24.5 * 10.0)).abs() < 1e-9, "{}", volume(&c));
+        let r = blend_edge(&block, inside, Blend::Fillet(7.0), 1, 0).expect("fillet");
+        let want = 510.0 + (49.0 - 49.0 * PI / 4.0) * 10.0;
+        let fine =
+            tess::tessellate(&r[0], &tess::TessParams { chord: 1e-6, max_angle: 0.0005 }).expect("tess");
+        let v = mass::properties(&fine).volume;
+        assert!((v - want).abs() < 1e-3, "{v} vs {want}");
     }
 
     #[test]

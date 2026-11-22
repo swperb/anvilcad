@@ -56,6 +56,11 @@ fn fail<T>(msg: impl Into<String>) -> Result<T> {
 }
 
 /// Combines two solids. The result may contain several bodies (or none).
+///
+/// An empty result is returned only when nothing is left. When the solids show that
+/// something should be left but it is thinner than the kernel can resolve (a lens where
+/// two balls overlap by a micron, a tube with a wall a few microns thick), the result is
+/// an error instead, so a caller can tell the two apart.
 pub fn boolean(a: &Solid, b: &Solid, op: BoolOp) -> Result<Vec<Solid>> {
     boolean_with_contacts(a, b, op, &[])
 }
@@ -197,6 +202,9 @@ struct Engine<'a> {
     touches: Vec<(DVec3, usize, usize)>,
     /// Face pairs known to touch without crossing (see [`boolean_with_contacts`]).
     contacts: Vec<(usize, usize)>,
+    /// The section curves of crossing faces, as (face of the first solid, face of the
+    /// second, curve), kept to tell an empty result from a lost one.
+    sections: Vec<(usize, usize, Curve)>,
 }
 
 fn unwrap(prev: f64, u: f64, period: f64) -> f64 {
@@ -284,6 +292,7 @@ impl<'a> Engine<'a> {
             ],
             touches: Vec::new(),
             contacts: Vec::new(),
+            sections: Vec::new(),
         };
         for (s, solid) in solids.iter().enumerate() {
             let ids = solid.vertices.iter().map(|v| eng.add_point(v.point, 0.0)).collect();
@@ -334,17 +343,7 @@ impl<'a> Engine<'a> {
 
     /// Records where faces `fa` and `fb` touch along `c`: a point of `c` inside both.
     fn note_touch(&mut self, fa: usize, fb: usize, c: &Curve) {
-        let (t0, t1) = match c {
-            Curve::Spline(sp) => sp.domain(),
-            Curve::Line { .. } => {
-                // A line is unbounded: look along it over both faces' boxes.
-                let (lo, hi) = self.infos[0][fa].bbox;
-                let r = (hi - lo).length();
-                let mid = c.param_of((lo + hi) * 0.5);
-                (mid - r, mid + r)
-            }
-            Curve::Circle { .. } | Curve::Ellipse { .. } => (0.0, TAU),
-        };
+        let (t0, t1) = self.sample_range(fa, c);
         // Inside both faces if it can be; on their boundaries (a seam, say) otherwise.
         let n = 64;
         let pts: Vec<(DVec3, Loc, Loc)> = (0..n)
@@ -355,6 +354,37 @@ impl<'a> Engine<'a> {
         let best = pts.iter().find(|(_, la, lb)| *la == Loc::Inside && *lb == Loc::Inside).or(pts.first());
         if let Some(&(p, _, _)) = best {
             self.touches.push((p, fa, fb));
+        }
+    }
+
+    /// Whether faces `fa` and `fb` cross along their section curve `c` somewhere inside
+    /// both: a point of `c` inside each face where their normals are not parallel. This is
+    /// decided on the curve itself, so it holds even where the crossing is too small for
+    /// its pieces to be placed (two balls overlapping by a micron).
+    fn crosses_inside(&self, fa: usize, fb: usize, c: &Curve) -> bool {
+        let (t0, t1) = self.sample_range(fa, c);
+        let (sa, sb) = (self.surface(0, fa), self.surface(1, fb));
+        let n = 64;
+        (0..n).map(|k| c.eval(t0 + (t1 - t0) * (k as f64 + 0.5) / n as f64)).any(|p| {
+            sa.normal_at(p).cross(sb.normal_at(p)).length() > 1e-6
+                && self.locate(0, fa, p) == Loc::Inside
+                && self.locate(1, fb, p) == Loc::Inside
+        })
+    }
+
+    /// The parameters over which to sample section curve `c` of face `fa` of the first
+    /// solid: a line, being unbounded, over the face's box.
+    fn sample_range(&self, fa: usize, c: &Curve) -> (f64, f64) {
+        match c {
+            Curve::Spline(sp) => sp.domain(),
+            Curve::Line { .. } => {
+                // A line is unbounded: look along it over both faces' boxes.
+                let (lo, hi) = self.infos[0][fa].bbox;
+                let r = (hi - lo).length();
+                let mid = c.param_of((lo + hi) * 0.5);
+                (mid - r, mid + r)
+            }
+            Curve::Circle { .. } | Curve::Ellipse { .. } => (0.0, TAU),
         }
     }
 
@@ -419,7 +449,79 @@ impl<'a> Engine<'a> {
         self.heal_whole_faces(&mut pieces, &mut keep);
         let bodies = self.assemble(&pieces, &keep)?;
         self.check_thickness(&bodies)?;
+        if bodies.is_empty() && op != BoolOp::Union && self.leaves_material(op) {
+            return Err(KernelError::Unsupported(
+                "a result thinner than 0.00001 mm: the solids leave something between them, but it \
+                 is too thin for the kernel to resolve"
+                    .into(),
+            ));
+        }
         Ok(bodies)
+    }
+
+    /// Whether the solids show that the result of `op` has material, for an empty result
+    /// to be refused rather than returned: two faces crossing inside both (where every
+    /// combination of inside and outside the two solids has material nearby, so neither
+    /// the difference nor the intersection can be empty), or faces taken as one surface
+    /// that are not quite one.
+    fn leaves_material(&self, op: BoolOp) -> bool {
+        self.sections.iter().any(|(fa, fb, c)| self.crosses_inside(*fa, *fb, c)) || self.material_below_on(op)
+    }
+
+    /// Whether a face of one solid passes within [`ON`] of a face of the other, so the
+    /// two were taken as one surface, while lying more than [`TOL`] on the side of it
+    /// that leaves material in the result of `op`. Such a point lies on one solid's
+    /// boundary and strictly inside (or outside) the other, so the result has material
+    /// beside it, however thin.
+    fn material_below_on(&self, op: BoolOp) -> bool {
+        for s in 0..2 {
+            let o = 1 - s;
+            for f in 0..self.solids[s].faces.len() {
+                for p in self.probes(s, f) {
+                    for (g, other) in self.solids[o].faces.iter().enumerate() {
+                        let d = other.surface.distance(p);
+                        if !(d > TOL && d < ON) {
+                            continue;
+                        }
+                        let q = other.surface.eval_uv(other.surface.uv(p));
+                        if self.locate(o, g, q) != Loc::Inside {
+                            continue;
+                        }
+                        let outside = (p - q).dot(other.normal_at(q)) > 0.0;
+                        // The difference keeps the first solid outside the second (and
+                        // its material beside the second's faces inside it); the
+                        // intersection keeps each solid inside the other.
+                        let keeps = match op {
+                            BoolOp::Subtract => outside == (s == 0),
+                            BoolOp::Intersect => !outside,
+                            BoolOp::Union => false,
+                        };
+                        if keeps {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Points on face `f` of solid `s`: its sampled boundary, a point inside it, and the
+    /// points halfway from that one to the boundary samples that lie on the face.
+    fn probes(&self, s: usize, f: usize) -> Vec<DVec3> {
+        let face = &self.solids[s].faces[f];
+        let loops = &self.infos[s][f].loops_uv;
+        let mut out: Vec<DVec3> = loops.iter().flatten().map(|uv| face.surface.eval_uv(*uv)).collect();
+        if let Some(c) = interior_point(loops) {
+            out.push(face.surface.eval_uv(c));
+            for uv in loops.iter().flatten() {
+                let p = face.surface.eval_uv((c + *uv) * 0.5);
+                if self.locate(s, f, p) == Loc::Inside {
+                    out.push(p);
+                }
+            }
+        }
+        out
     }
 
     /// Step 2: crossings of each solid's edges with the other's faces.
@@ -641,6 +743,7 @@ impl<'a> Engine<'a> {
                                 self.note_touch(fa, fb, &c);
                                 continue;
                             }
+                            self.sections.push((fa, fb, c.clone()));
                             self.cut_along(fa, fb, c);
                         }
                     }
@@ -1364,6 +1467,21 @@ pub fn contains_point(solid: &Solid, p: DVec3) -> Result<bool> {
         }
     }
     point_in_solid(solid, p, |g, q| locate_in(solid, g, &infos[g], q))
+}
+
+/// Where each of `points` lies against `solid`: `Some(true)` inside it, `Some(false)`
+/// outside, `None` on its boundary.
+pub(crate) fn locate_points(solid: &Solid, points: &[DVec3]) -> Result<Vec<Option<bool>>> {
+    let infos: Vec<FaceInfo> = solid.faces.iter().map(|f| face_info(solid, f)).collect();
+    points
+        .iter()
+        .map(|&p| {
+            if infos.iter().enumerate().any(|(g, info)| locate_in(solid, g, info, p) != Loc::Outside) {
+                return Ok(None);
+            }
+            point_in_solid(solid, p, |g, q| locate_in(solid, g, &infos[g], q)).map(Some)
+        })
+        .collect()
 }
 
 /// True when `p` lies on face `f` of `solid` (inside or on its boundary).

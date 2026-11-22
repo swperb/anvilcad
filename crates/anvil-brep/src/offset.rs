@@ -8,7 +8,8 @@
 //! faces' normal. Each vertex is solved onto all of its moved faces and edges. Faces,
 //! edges and vertices keep their places in the solid, so the result has the same
 //! topology; an offset that would change it (a round smaller than the offset on its
-//! convex side, a feature thinner than the offset, faces drifting apart) is refused.
+//! convex side, a feature thinner than the offset, faces drifting apart or running into
+//! each other) is refused.
 //!
 //! The behaviour is specified in `docs/re/shell-and-fillet.md`.
 
@@ -130,6 +131,13 @@ pub fn offset_faces(solid: &Solid, distance: &[f64]) -> Result<Solid> {
                 "an offset face turns inside out (the offset is larger than a round or a feature)",
             );
         }
+    }
+    // Faces that do not meet before may run into each other once moved (two holes
+    // widened until they overlap). The topology is kept, so their faces' boundaries then
+    // cross (the two holes' circles on the plate's top), which tessellating the result
+    // finds; a solid that cannot be tessellated could not be shown or measured either.
+    if crate::tess::tessellate(&out, &crate::tess::TessParams::default()).is_err() {
+        return refuse("offset faces run into each other (the offset changes the shape)");
     }
     Ok(out)
 }
