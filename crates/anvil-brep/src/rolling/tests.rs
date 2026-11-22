@@ -775,3 +775,74 @@ fn rounds_on_edges_meeting_at_a_corner() {
     let v = volume(&blend_edge(&a[0], e2, Blend::Fillet(2.0), 1, 8).expect("second"));
     assert!((v - closed_form).abs() / v < 1e-8, "{v} vs {closed_form}");
 }
+
+fn arc_deg(c: (f64, f64), r: f64, start: f64, sweep: f64) -> Segment {
+    Segment::Arc {
+        center: DVec2::new(c.0, c.1),
+        radius: r,
+        start: start.to_radians(),
+        sweep: sweep.to_radians(),
+    }
+}
+
+fn seg_line(a: (f64, f64), b: (f64, f64)) -> Segment {
+    Segment::Line { a: DVec2::new(a.0, a.1), b: DVec2::new(b.0, b.1) }
+}
+
+/// #127's plate: rounded corners of 5 and a step in the south side, where a convex
+/// quarter circle runs straight into a concave one (an S-bend).
+fn s_bend_plate() -> Loop2 {
+    Loop2::new(vec![
+        seg_line((5., 0.), (30., 0.)),
+        arc_deg((30., 5.), 5., -90., 90.),
+        arc_deg((40., 5.), 5., 180., -90.),
+        seg_line((40., 10.), (75., 10.)),
+        arc_deg((75., 15.), 5., -90., 90.),
+        seg_line((80., 15.), (80., 35.)),
+        arc_deg((75., 35.), 5., 0., 90.),
+        seg_line((75., 40.), (5., 40.)),
+        arc_deg((5., 35.), 5., 90., 90.),
+        seg_line((0., 35.), (0., 5.)),
+        arc_deg((5., 5.), 5., 180., 90.),
+    ])
+}
+
+/// The plate's top-rim edges.
+fn top_rim(plate: &Solid, z: f64) -> Vec<(EdgeId, u32)> {
+    (0..plate.edges.len() as u32)
+        .map(EdgeId)
+        .filter(|id| plate.edge(*id).is_some_and(|e| (e.curve.eval(0.5 * (e.t0 + e.t1)).z - z).abs() < 1e-9))
+        .map(|id| (id, 0))
+        .collect()
+}
+
+#[test]
+fn rim_round_over_an_s_bend() {
+    // #127: every edge of the rim is convex, including the concave arc of the outline,
+    // whose parameter runs against the edge (it is swept clockwise). Reading the edge's
+    // direction from its parameter took that one for concave and refused the run.
+    let plate = prism(&[s_bend_plate()], &Frame::world(), 0.0, 10.0);
+    let rim = top_rim(&plate, 10.0);
+    assert_eq!(rim.len(), 11);
+    let r = 2.0;
+    let out = crate::blend::blend_chain(&plate, &rim, Blend::Fillet(r), 1).expect("rim round");
+    // Pappus: the round takes off the corner section (r^2 (1 - pi/4)), whose centroid
+    // lies c = r (10 - 3 pi) / (12 - 3 pi) in from the wall, along the rim: 180 of lines,
+    // five convex quarter circles of radius 5 (the centroid on radius 5 - c) and one
+    // concave one (on 5 + c).
+    let area = r * r * (1.0 - PI / 4.0);
+    let c = r * (10.0 - 3.0 * PI) / (12.0 - 3.0 * PI);
+    let path = 180.0 + 5.0 * 0.5 * PI * (5.0 - c) + 0.5 * PI * (5.0 + c);
+    // The plate: an 80 x 40 rectangle less the 45 x 10 step, its five convex corners
+    // rounded off (25 - 25 pi / 4 each) and its concave one filled in by as much.
+    let plan = 80.0 * 40.0 - 45.0 * 10.0 - 4.0 * (25.0 - 25.0 * PI / 4.0);
+    let before = rough_volume(std::slice::from_ref(&plate));
+    assert!((before - plan * 10.0).abs() < 1.0, "{before} vs {}", plan * 10.0);
+    // What the round takes off, measured against the plate tessellated alike. The round's
+    // chords take off a little more (0.13 % at this tessellation, under half that at a
+    // tenth of the chord); leaving out the S-bend's two quarter circles would take off 7 %
+    // less.
+    let removed = before - rough_volume(&out);
+    let want = area * path;
+    assert!((removed - want).abs() / want < 2e-3, "{removed} vs {want}");
+}
