@@ -568,7 +568,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
     let (pm, dm) = roller.on_leg(0, 0.5);
     let first_leg = roller.legs[0].id;
     let sides =
-        crate::blend::edge_sides(solid, first_leg, pm, dm.normalize_or_zero() * roller.legs[0].dir_sign());
+        crate::blend::edge_sides(solid, first_leg, pm, dm.normalize_or_zero() * roller.legs[0].edge_sign());
     let [(_, _, wa), (_, nb, wb)] = sides[..] else {
         return Err(KernelError::InvalidInput("the edge is not shared by exactly two faces".into()));
     };
@@ -600,7 +600,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
             solid,
             first_leg,
             pm,
-            dm.normalize_or_zero() * roller.legs[0].dir_sign(),
+            dm.normalize_or_zero() * roller.legs[0].edge_sign(),
         );
         let w = |f: usize| s.iter().find(|x| x.0 == f).map(|x| x.2);
         (w(roller.legs[0].fa).unwrap_or(wa), w(roller.legs[0].fb).unwrap_or(wb))
@@ -794,9 +794,11 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
 }
 
 impl Leg<'_> {
-    /// +1 where the run goes the way the edge's parameter does.
-    fn dir_sign(&self) -> f64 {
-        self.dir
+    /// +1 where the run goes the way the edge does (from its start vertex to its end),
+    /// which is the direction [`crate::blend::edge_sides`] takes. An edge's parameter can
+    /// fall from start to end (an arc swept clockwise), so this is not `dir`.
+    fn edge_sign(&self) -> f64 {
+        self.dir * (self.edge.t1 - self.edge.t0).signum()
     }
 }
 
@@ -878,7 +880,9 @@ fn assign_sides(solid: &Solid, legs: &mut [Leg], convex: bool) -> Result<()> {
         let mid = 0.5 * (leg.lo + leg.hi);
         let p = leg.edge.curve.eval(mid);
         let h = (leg.hi - leg.lo) * 1e-6;
-        let along = (leg.edge.curve.eval(mid + h) - leg.edge.curve.eval(mid - h)).normalize_or_zero();
+        // The edge's own direction, which its parameter may run against.
+        let along = (leg.edge.curve.eval(mid + h) - leg.edge.curve.eval(mid - h)).normalize_or_zero()
+            * (leg.edge.t1 - leg.edge.t0).signum();
         let sides = crate::blend::edge_sides(solid, leg.id, p, along);
         let [(f1, _, w1), (f2, n2, _)] = sides[..] else {
             return Err(KernelError::InvalidInput("an edge is not shared by exactly two faces".into()));

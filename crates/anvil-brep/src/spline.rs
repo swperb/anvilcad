@@ -272,7 +272,15 @@ impl Spline {
         let above = samples().filter(|t| *t > best.0).fold(f64::MAX, f64::min);
         let left = if below > f64::MIN { step.max(best.0 - below) } else { step };
         let right = if above < f64::MAX { step.max(above - best.0) } else { step };
-        let (mut a, mut b) = ((best.0 - left).max(lo), (best.0 + right).min(hi));
+        // Over a whole turn of a closed curve the range has no ends: the closest point can
+        // lie just before the seam while the best sample is the one on it, so the search
+        // runs on across the seam and the answer is brought back into the range.
+        let whole = self.period().filter(|per| hi - lo >= per * (1.0 - 1e-12));
+        let (mut a, mut b) = if whole.is_some() {
+            (best.0 - left, best.0 + right)
+        } else {
+            ((best.0 - left).max(lo), (best.0 + right).min(hi))
+        };
         let f = |t: f64| (self.eval(t) - p).length_squared();
         for _ in 0..80 {
             let m1 = a + (b - a) * 0.381_966;
@@ -283,7 +291,10 @@ impl Spline {
                 a = m1;
             }
         }
-        let t = 0.5 * (a + b);
+        let t = match whole {
+            Some(per) => (lo + (0.5 * (a + b) - lo).rem_euclid(per)).min(hi),
+            None => 0.5 * (a + b),
+        };
         if f(t) < best.1 { t } else { best.0 }
     }
 
@@ -393,6 +404,33 @@ mod tests {
             let p = DVec3::new(x, 1.0, 0.0);
             let q = s.eval(s.closest(p, lo, hi));
             assert!((q - DVec3::new(x, 0.0, 0.0)).length() < 1e-6, "{x}: {q}");
+        }
+    }
+
+    #[test]
+    fn closest_point_just_before_a_closed_curves_seam() {
+        // A closed curve's best sample can be the one on its seam while the closest point
+        // lies a hair before it, at the end of the parameter range; the search must run
+        // on across the seam rather than stop at it (#126, where a point 1e-5 before the
+        // seam was taken to lie 1e-5 off the curve).
+        let n = 16;
+        let (pts, tans): (Vec<DVec3>, Vec<DVec3>) = (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                (DVec3::new(a.cos(), a.sin(), 0.0) * 5.0, DVec3::new(-a.sin(), a.cos(), 0.0))
+            })
+            .unzip();
+        let s = Spline::hermite(&pts, &tans, true).expect("spline");
+        let (lo, hi) = s.domain();
+        for back in [1e-9, 1e-7, 1e-5, 1e-3] {
+            let t = hi - back;
+            let p = s.eval(t);
+            let c = s.closest(p, lo, hi);
+            assert!((s.eval(c) - p).length() < 1e-10, "{back}: {c} vs {t}");
+            assert!((c - t).abs() < 1e-8 && c <= hi, "{back}: {c} vs {t}");
+            // And just after it, at the start of the range.
+            let p = s.eval(lo + back);
+            assert!((s.eval(s.closest(p, lo, hi)) - p).length() < 1e-10, "{back}");
         }
     }
 
