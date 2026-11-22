@@ -3,7 +3,7 @@
   "schema_version": "1.0.0",
   "engine": {
     "name": "anvilcad-partcheck",
-    "version": "0.1.1"
+    "version": "0.0.0"
   },
   "part": {
     "fingerprint": {

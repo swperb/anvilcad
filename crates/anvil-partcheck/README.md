@@ -17,7 +17,9 @@ cargo run -p anvil-partcheck -- --schema    # prints the JSON Schema
   generated from the Rust types in `src/lib.rs`. A test fails if the two don't match.
   Consumers pin a copy of this file.
 - **Golden example:** [`fixtures/plate-pocket-hole.v1.json`](fixtures/plate-pocket-hole.v1.json)
-  is the result for [`fixtures/plate-pocket-hole.step`](fixtures/plate-pocket-hole.step).
+  is the result for [`fixtures/plate-pocket-hole.step`](fixtures/plate-pocket-hole.step),
+  with the engine version written as `0.0.0`; a real result carries the version of
+  AnvilCAD that made it.
   That part is an 80 × 60 × 20 synthetic plate with a 40 × 30 × 8 pocket and a 6 mm
   through hole. It was built by AnvilCAD from the test in `tests/contract.rs`, and no real
   part was used. Consumers can build their stubs and tests on this pair.

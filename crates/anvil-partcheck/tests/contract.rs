@@ -133,7 +133,12 @@ fn synthetic_plate_gives_the_golden_result() {
     assert!(t.per_part_min > 0.0);
     assert!((t.total_min - 10.0 * t.per_part_min).abs() < 0.01);
 
-    let json = serde_json::to_string_pretty(&r).unwrap() + "\n";
+    // The engine version changes with every release and is not part of the contract, so
+    // the golden file holds a placeholder rather than going out of date at each one.
+    assert_eq!(r.engine.version, env!("CARGO_PKG_VERSION"));
+    let mut stable = r.clone();
+    stable.engine.version = "0.0.0".into();
+    let json = serde_json::to_string_pretty(&stable).unwrap() + "\n";
     golden("fixtures/plate-pocket-hole.v1.json", &json);
 }
 
