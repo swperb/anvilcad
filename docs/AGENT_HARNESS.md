@@ -96,6 +96,7 @@ sketch tool on the command bar and in the sketch panel, count as one.
 | `sample`, `new` | | |
 | `frames` | `n` | |
 | `wait` | `seconds` of virtual time, for example for hover tooltips | |
+| `mouse3d` | `connect` (a model name from [3D_MOUSE.md](3D_MOUSE.md), or `spacenavd`), `axes` `[tx, ty, tz, rx, ry, rz]` (each −1 to 1) held for `seconds` (default 0.5), `button` (number or label), `disconnect` | `device`: plays a 3D mouse into the app as the device would; the harness never opens a real device |
 | `project` | target | `at`: the screen position, without acting on it |
 | `lua` | `code` | runs a Lua chunk with the `anvil` API ([SCRIPTING.md](SCRIPTING.md)) |
 | `config` | `source` (init.lua text) or `path` | loads a Lua configuration |

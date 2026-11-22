@@ -95,7 +95,7 @@ pub(super) struct CommandPalette {
 pub(super) struct Scripting {
     pub(super) engine: Option<Engine>,
     /// A copy of the loaded config's options, readable while a script has the engine.
-    options: script::Options,
+    pub(super) options: script::Options,
     /// The config file, if the app reads one (the headless harness does not by default).
     path: Option<PathBuf>,
     modified: Option<SystemTime>,
@@ -252,7 +252,7 @@ impl AnvilApp {
 
     /// Runs `f` with the engine and the app as its host. The engine is taken out of the app
     /// while it runs, so a script cannot reach it re-entrantly.
-    fn with_engine(
+    pub(super) fn with_engine(
         &mut self,
         ctx: &egui::Context,
         f: impl FnOnce(&Engine, &mut dyn Host) -> Result<(), String>,
@@ -511,6 +511,7 @@ impl AnvilApp {
         if let Some(e) = o.edges {
             self.show_edges = e;
         }
+        self.sync_3d_mouse(ctx);
         let px = o.snap_px.unwrap_or(sketcher::PICK_PX);
         if let Some(s) = &mut self.sketch {
             s.pick_px = px;
@@ -989,6 +990,7 @@ pub const STARTER_CONFIG: &str = r##"-- AnvilCAD configuration. AnvilCAD reloads
 -- anvil.opt.ui_scale = 1.1
 -- anvil.opt.material = "6061 Alloy"
 -- anvil.opt.view = "isometric"
+-- anvil.opt.mouse_3d_speed = 1.5
 
 -- anvil.theme.dark.accent = "#e3825a"
 -- anvil.theme.body = "#b8bfcc"

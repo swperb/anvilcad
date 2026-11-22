@@ -170,9 +170,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "anvil-app"
-version = "0.1.1"
+name = "anvil-3dmouse"
+version = "0.1.2"
 dependencies = [
+ "hidapi",
+]
+
+[[package]]
+name = "anvil-app"
+version = "0.1.2"
+dependencies = [
+ "anvil-3dmouse",
  "anvil-io",
  "anvil-kernel",
  "anvil-model",
@@ -190,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-brep"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "glam",
  "proptest",
@@ -201,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-bulk"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-io",
  "anvil-kernel",
@@ -214,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-cam"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-kernel",
  "anvil-model",
@@ -229,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-evals"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-brep",
  "anvil-step",
@@ -241,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-io"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-kernel",
  "anvil-model",
@@ -254,14 +262,14 @@ dependencies = [
 
 [[package]]
 name = "anvil-kernel"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "anvil-migrate"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-io",
  "anvil-kernel",
@@ -274,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-model"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-brep",
  "anvil-kernel",
@@ -302,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-props"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-io",
  "anvil-model",
@@ -312,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-sketch"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-kernel",
  "serde",
@@ -321,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-step"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-brep",
  "glam",
@@ -1915,6 +1923,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
+name = "hidapi"
+version = "2.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "818c0e1d27887aaf76fe737042e27a66b796a7b099e6d2e1a72d106c2dff3fa6"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "pkg-config",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3133,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "proveout-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-cam",
  "anvil-kernel",
@@ -3145,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "proveout-web"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anvil-cam",
  "argon2",

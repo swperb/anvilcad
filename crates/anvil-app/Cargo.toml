@@ -24,6 +24,7 @@ anvil-kernel.workspace = true
 anvil-sketch.workspace = true
 anvil-model.workspace = true
 anvil-io.workspace = true
+anvil-3dmouse.workspace = true
 eframe = { version = "=0.31.1", default-features = false, features = ["accesskit", "wgpu", "default_fonts", "wayland", "x11"] }
 # The accessibility tree (also used by screen readers) lets the headless harness find
 # widgets by their labels.

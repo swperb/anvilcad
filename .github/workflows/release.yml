@@ -10,7 +10,7 @@ name: Release
 #
 # Cost: nothing. It uses only the standard GitHub-hosted runners (ubuntu-latest,
 # windows-latest, macos-latest), which are free for public repositories, and free tools
-# (WiX Toolset 5, appimagetool), and calls no paid service. It runs only for a tag, a
+# (WiX Toolset 5, squashfs-tools), and calls no paid service. It runs only for a tag, a
 # manual run, or a pull request that touches the packaging, not on every push.
 #
 # macOS signing and notarization use the maintainer's Apple Developer Program membership,
@@ -129,7 +129,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            build-essential ca-certificates curl file git pkg-config \
+            build-essential ca-certificates curl file git pkg-config squashfs-tools \
             libgtk-3-dev libwayland-dev libxkbcommon-dev
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

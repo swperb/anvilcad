@@ -38,6 +38,9 @@ anvil.opt.open = "sample"             -- or a path: what opens when no file is g
 anvil.opt.view = "isometric"          -- front, back, left, right, top, bottom, isometric
 anvil.opt.edges = true                -- Shaded with edges
 anvil.opt.snap_px = 10                -- sketch snap and pick radius, 2 to 40 pixels
+anvil.opt.mouse_3d = true             -- navigate with a 3D mouse; false leaves it alone
+anvil.opt.mouse_3d_speed = 1          -- 3D mouse speed, 0.1 to 10
+anvil.opt.mouse_3d_invert = { "tz" }  -- 3D mouse axes to reverse: tx ty tz rx ry rz
 ```
 
 A misspelled option, or a value of the wrong kind, is an error that lists the valid ones.
@@ -82,6 +85,23 @@ end, "Show the volume")
   on, so `g` then `x` still runs a binding on `x`.
 - Your bindings take priority over AnvilCAD's own shortcuts (such as Ctrl+S), and are not
   active while you type in a text field.
+
+## 3D mouse buttons
+
+```lua
+anvil.mouse_3d_button("Fit", "Isometric")        -- a command, by name
+anvil.mouse_3d_button("Button 12", function()    -- or any Lua function
+  anvil.run("Section View")
+end, "Section")
+anvil.mouse_3d_button("Menu", false)             -- false: the button does nothing
+```
+
+Buttons go by the label printed on them (`Menu`, `Fit`, `T`, `F`, `R`, `Roll`, `1` to `12`,
+`Esc`, `Ctrl`, `ISO`, `V1`, and so on), or `Left` and `Right` on two-button models; any
+button can also be named `Button N`. Without a binding, Left or Menu opens the command
+palette, Right or Fit zooms to fit, and `T`, `F`, `R`, `L` and `ISO` go to those views. The
+button names of each model, and how the axes are named, are in
+[3D_MOUSE.md](3D_MOUSE.md).
 
 ## Commands
 

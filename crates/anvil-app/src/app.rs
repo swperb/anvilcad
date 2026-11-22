@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 mod assembly;
 mod configs;
 use configs::{ConfigUi, Manager};
+mod navigation;
 mod scripting;
 pub use scripting::BUILTIN_COMMANDS;
 
@@ -156,6 +157,8 @@ pub struct AnvilApp {
     scripting: scripting::Scripting,
     /// The assembly open in the window, when one is: the part fields are then unused.
     asm: Option<assembly::AsmSession>,
+    /// The 3D mouse, when one is in use.
+    mouse3d: navigation::Mouse3dInput,
 }
 
 /// A file dialog the app asked for while dialogs were scripted.
@@ -237,6 +240,7 @@ impl AnvilApp {
             cfg: ConfigUi::default(),
             scripting: scripting::Scripting::default(),
             asm: None,
+            mouse3d: navigation::Mouse3dInput::default(),
         };
         if let Some(p) = open {
             if p.as_os_str() == "--sample" {
@@ -2891,6 +2895,7 @@ impl AnvilApp {
             self.camera.fit(&b, rect);
             self.fit_pending = false;
         }
+        self.step_3d_mouse(ui.ctx(), rect);
 
         // Camera navigation.
         let (scroll, mods, middle, secondary_down, delta, pointer_in) = ui.input(|i| {
@@ -5015,6 +5020,7 @@ impl AnvilApp {
         }
 
         self.poll_config(ctx);
+        self.poll_3d_mouse(ctx);
         self.user_keys(ctx);
         self.shortcuts(ctx);
 
@@ -5866,5 +5872,127 @@ mod ui_tests {
         s.delete_selection(h.app.doc.sketch_mut(id).unwrap());
         assert_eq!(h.sketch().entities.len(), 1);
         assert!((h.sketch().line_length(0) - 40.0).abs() < 1e-3);
+    }
+
+    /// A 3D mouse moves the view while its cap is deflected and the window has focus, at the
+    /// mapping's rate, and stops when the cap is released, goes quiet or focus is lost.
+    #[test]
+    fn a_3d_mouse_moves_the_view() {
+        use anvil_3dmouse::{Axes, Event as M, Layout, Status};
+        let mut h = Harness::new();
+        h.app.camera.set_view(StdView::Front);
+        h.app.camera.target = Vec3::ZERO;
+        h.app.camera.half_height = 50.0;
+        h.app.fit_pending = false;
+        let ctx = h.ctx.clone();
+        let connected =
+            M::Status(Status::Connected { name: "SpaceMouse Compact".into(), layout: Layout::TwoButton });
+        h.app.on_3d_mouse(&ctx, connected);
+        assert_eq!(h.app.status, "3D mouse connected: SpaceMouse Compact");
+
+        // Full deflection to the right for one frame pans one view height per second.
+        h.app.on_3d_mouse(&ctx, M::Motion(Axes([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])));
+        h.step(vec![]);
+        let dt = h.ctx.input(|i| i.stable_dt) as f64;
+        let x = h.app.camera.target.x;
+        assert!(dt > 0.0 && (x + dt * 100.0).abs() < 1e-6, "x {x}, dt {dt}");
+
+        // Released: the view stays where it is.
+        h.app.on_3d_mouse(&ctx, M::Motion(Axes::default()));
+        h.step(vec![]);
+        assert_eq!(h.app.camera.target.x, x);
+
+        // Deflected but no report for longer than AT_REST_AFTER: taken to be at rest.
+        h.app.on_3d_mouse(&ctx, M::Motion(Axes([0.0, 0.0, 0.0, 0.0, 1.0, 0.0])));
+        let back = h.app.camera.back;
+        for _ in 0..40 {
+            h.step(vec![]);
+        }
+        let turned = h.app.camera.back;
+        assert!((turned - back).length() > 0.1);
+        for _ in 0..5 {
+            h.step(vec![]);
+        }
+        assert_eq!(h.app.camera.back, turned);
+
+        // Another window has the focus: nothing moves.
+        h.app.on_3d_mouse(&ctx, M::Motion(Axes([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])));
+        let before = h.app.camera.target;
+        for _ in 0..2 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 900.0))),
+                focused: false,
+                ..Default::default()
+            };
+            let app = &mut h.app;
+            let _ = h.ctx.run(input, |ctx| app.frame(ctx));
+        }
+        assert_eq!(h.app.camera.target, before);
+        assert_eq!(h.app.mouse3d.axes, Axes::default());
+
+        h.app.on_3d_mouse(&ctx, M::Status(Status::Disconnected));
+        assert_eq!(h.app.status, "3D mouse disconnected: SpaceMouse Compact");
+        assert_eq!(h.app.mouse3d.axes, Axes::default());
+    }
+
+    /// 3D mouse buttons run their defaults, or what init.lua binds them to.
+    #[test]
+    fn a_3d_mouse_button_runs_its_command() {
+        use anvil_3dmouse::{Event as M, Layout, Status};
+        let mut h = Harness::new();
+        let ctx = h.ctx.clone();
+        let pro = M::Status(Status::Connected { name: "SpaceMouse Pro".into(), layout: Layout::Pro });
+        h.app.on_3d_mouse(&ctx, pro);
+        let press = |n: u16| M::Button { number: n, pressed: true };
+
+        // T (button 3) is the top view by default; Fit (2) zooms to fit; Menu (1) opens the
+        // command palette.
+        h.app.on_3d_mouse(&ctx, press(3));
+        assert!((h.app.camera.back - Vec3::Y).length() < 1e-9);
+        h.step(vec![]);
+        h.app.fit_pending = false;
+        h.app.on_3d_mouse(&ctx, press(2));
+        assert!(h.app.fit_pending);
+        h.app.on_3d_mouse(&ctx, press(1));
+        assert!(h.app.scripting.palette.is_some());
+        h.app.scripting.palette = None;
+
+        // init.lua rebinds T, switches Fit off and gives Esc a function.
+        h.app
+            .load_config_source(
+                &ctx,
+                r#"
+                anvil.mouse_3d_button("t", "Front")
+                anvil.mouse_3d_button("Fit", false)
+                anvil.mouse_3d_button("Esc", function() anvil.status("esc!") end)
+                "#,
+            )
+            .unwrap();
+        h.app.on_3d_mouse(&ctx, press(3));
+        assert!((h.app.camera.back - Vec3::Z).length() < 1e-9);
+        h.step(vec![]);
+        h.app.fit_pending = false;
+        h.app.on_3d_mouse(&ctx, press(2));
+        assert!(!h.app.fit_pending);
+        h.app.on_3d_mouse(&ctx, press(23));
+        assert_eq!(h.app.status, "esc!");
+        // A release does nothing, and neither does a button with no default.
+        h.app.on_3d_mouse(&ctx, M::Button { number: 3, pressed: false });
+        h.app.on_3d_mouse(&ctx, press(24));
+        assert_eq!(h.app.status, "esc!");
+    }
+
+    /// `anvil.opt.mouse_3d = false` stops the reader; the headless app never starts one.
+    #[test]
+    fn the_3d_mouse_option_starts_and_stops_the_reader() {
+        let mut h = Harness::new();
+        let ctx = h.ctx.clone();
+        assert!(h.app.mouse3d.reader.is_none());
+        h.app.enable_3d_mouse(&ctx);
+        assert!(h.app.mouse3d.reader.is_some());
+        h.app.load_config_source(&ctx, "anvil.opt.mouse_3d = false").unwrap();
+        assert!(h.app.mouse3d.reader.is_none());
+        h.app.load_config_source(&ctx, "").unwrap();
+        assert!(h.app.mouse3d.reader.is_some());
     }
 }
