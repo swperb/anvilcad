@@ -221,6 +221,9 @@ enum BevelKind {
     /// Between where a ball of the distance would touch the faces: the faces offset by
     /// the distance meet at its centre.
     Offset,
+    /// `radius` from the edge on side A's face and this on side B's (each as a chord in
+    /// the section).
+    Distances(f64),
 }
 
 /// Rates of change of a section's rows along the run.
@@ -329,7 +332,8 @@ impl Roller<'_> {
     fn section(&self, t: f64, near: &Section) -> Option<Section> {
         match (self.bevel, self.kind) {
             (false, _) => self.round_section(t, near),
-            (true, BevelKind::Equal) => self.bevel_section(t),
+            (true, BevelKind::Equal) => self.bevel_section(t, self.radius),
+            (true, BevelKind::Distances(other)) => self.bevel_section(t, other),
             (true, BevelKind::Angle(angle)) => self.angle_section(t, angle),
             (true, BevelKind::Offset) => {
                 // The ball's contacts, joined straight.
@@ -373,7 +377,7 @@ impl Roller<'_> {
     /// chamfer's distance from the edge (as for an equal-distance bevel), and from it a
     /// straight line leaving that face at `angle` across the corner to side B's face.
     fn angle_section(&self, t: f64, angle: f64) -> Option<Section> {
-        let first = self.bevel_section(t)?;
+        let first = self.bevel_section(t, self.radius)?;
         let (e, a) = (first.edge, first.a);
         let leg = &self.legs[self.leg_at(t)];
         let (fa, fb) = (&self.solid.faces[leg.fa], &self.solid.faces[leg.fb]);
@@ -472,16 +476,18 @@ impl Roller<'_> {
     /// The exact chamfer section in the plane square to the run at `t`: the point on each
     /// face the chamfer's distance from the run (as the chord in that plane), joined by a
     /// straight line.
-    fn bevel_section(&self, t: f64) -> Option<Section> {
+    /// The bevel's section at `t`: from the point `radius` from the edge on side A's face
+    /// to the point `other` from it on side B's, each a chord in the plane square to the
+    /// run.
+    fn bevel_section(&self, t: f64, other: f64) -> Option<Section> {
         let (e, tangent) = self.point(t);
         let n = self.span();
         let tt = if self.closed { t.rem_euclid(n) } else { t.clamp(0.0, n) };
         let leg = &self.legs[self.leg_of(tt).0];
         let u1 = tangent.any_orthonormal_vector();
         let u2 = tangent.cross(u1);
-        let c = self.radius;
         let tol = 1e-13 * self.size;
-        let on = |face: &Face, guess: DVec3| -> Option<DVec3> {
+        let on = |face: &Face, guess: DVec3, c: f64| -> Option<DVec3> {
             let mut x = glam::DVec2::new((guess - e).dot(u1), (guess - e).dot(u2));
             for _ in 0..60 {
                 let p = e + u1 * x.x + u2 * x.y;
@@ -508,8 +514,9 @@ impl Roller<'_> {
             let w = tangent.cross(n).normalize_or_zero();
             if (w.dot(other) < 0.0) == self.convex { w } else { -w }
         };
-        let a = on(fa, e + away(na, nb) * c)?;
-        let b = on(fb, e + away(nb, na) * c)?;
+        let (ca, cb) = (self.radius, other);
+        let a = on(fa, e + away(na, nb) * ca, ca)?;
+        let b = on(fb, e + away(nb, na) * cb, cb)?;
         Some(self.bevel_between(e, a, b, leg))
     }
 }
@@ -541,6 +548,14 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
                 ));
             }
             (distance, true, BevelKind::Angle(angle), Some(along))
+        }
+        Blend::ChamferDistances { distance, other, along } => {
+            if !(other.is_finite() && other > 0.0) {
+                return Err(KernelError::InvalidInput(
+                    "the chamfer's second distance must be a positive number".into(),
+                ));
+            }
+            (distance, true, BevelKind::Distances(other), Some(along))
         }
     };
     if !(radius.is_finite() && radius > 0.0) {
@@ -610,7 +625,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
         edge: pm,
         centre: pm + (wa + wb).normalize() * (radius / (0.5 * phi).sin()),
         a: pm + wa * radius,
-        b: pm + wb * radius,
+        b: pm + wb * if let BevelKind::Distances(other) = kind { other } else { radius },
         corner: pm,
         weight: 1.0,
         a_off: pm,
