@@ -274,6 +274,15 @@ pub fn blend(
         }
         runs += n;
     }
+    // Where every edge at a vertex is rounded, the ball closes the corner with a patch of
+    // its sphere once the rounds are made. The corners are found on the bodies as they
+    // are now, before blending renumbers them.
+    let corners = match treatment {
+        kernel::Blend::Fillet { radius, round: kernel::Round::Circular } => {
+            ball_corners(&bodies, edges, radius, propagate)?
+        }
+        _ => Vec::new(),
+    };
     // Blending renumbers a body, so the edges are found afresh each time. Edges that
     // run smoothly one into the next (a slot's outline) are blended together, in one
     // step, so their rounds join up.
@@ -319,7 +328,74 @@ pub fn blend(
     if edges.iter().any(|e| !find_edges(&bodies, e).is_empty()) {
         return Err("the edges to blend did not all blend".into());
     }
+    for (corner, tag) in &corners {
+        // The body holding the corner: around the ball's centre at a convex corner (the
+        // ball lies in the part), at the vertex at a concave one (the rounds filled it).
+        let probe = if corner.convex { corner.centre } else { corner.vertex };
+        let Some(b) = bodies.iter().position(|s| brep::boolean::contains_point(s, probe).unwrap_or(false))
+        else {
+            return Err("a rounded corner is no longer in any body".into());
+        };
+        let result =
+            brep::corner::close_corner(&bodies[b], corner, feature, *tag).map_err(|e| e.to_string())?;
+        bodies.splice(b..=b, result);
+    }
     Ok(bodies)
+}
+
+/// The corners that rounding `edges` with radius `r` closes with a ball (see
+/// [`brep::corner`]), each with the tag its patch's face is named by. A corner is named
+/// after the first selected edge at it, `k`: the patch at that edge's start vertex is face
+/// `8 + 8k` and at its end vertex `9 + 8k` (indices the edge's own blend faces, `2 + 8k`
+/// to `6 + 8k`, leave free). Should another corner already have the name (an edge that
+/// stands for several, each with corners), the corner takes the first free index past
+/// every edge's names, from `8 + 8n` for `n` edges.
+fn ball_corners(
+    bodies: &[brep::Solid],
+    edges: &[EdgeRef],
+    r: f64,
+    propagate: bool,
+) -> Result<Vec<(brep::corner::Corner, u32)>, String> {
+    let mut out: Vec<(brep::corner::Corner, u32)> = Vec::new();
+    for (b, solid) in bodies.iter().enumerate() {
+        let found: Vec<(brep::EdgeId, usize)> = edges
+            .iter()
+            .enumerate()
+            .flat_map(|(k, e)| find_edges(bodies, e).into_iter().filter(|f| f.0 == b).map(move |f| (f.1, k)))
+            .collect();
+        if found.is_empty() {
+            continue;
+        }
+        let mut ids: Vec<brep::EdgeId> = found.iter().map(|f| f.0).collect();
+        if propagate {
+            ids = brep::blend::tangent_edges(solid, &ids);
+        }
+        for corner in brep::corner::ball_corners(solid, &ids, r).map_err(|e| e.to_string())? {
+            let named = corner
+                .edges
+                .iter()
+                .filter_map(|(id, _)| found.iter().find(|f| f.0 == *id).map(|f| (f.1, *id)))
+                .min_by_key(|f| f.0);
+            let (k, at_start) = match named {
+                Some((k, id)) => {
+                    let start = solid.edge(id).and_then(|e| solid.vertex(e.start)).map(|v| v.point);
+                    (k, start.is_some_and(|p| (p - corner.vertex).length() < 1e-9))
+                }
+                None => (0, true),
+            };
+            let taken = |t: u32| out.iter().any(|(_, u)| *u == t);
+            let mut tag = 8 * k as u32 + if at_start { 6 } else { 7 };
+            if taken(tag) {
+                // Past every edge's names.
+                tag = 8 * edges.len() as u32 + 6;
+                while taken(tag) {
+                    tag += 1;
+                }
+            }
+            out.push((corner, tag));
+        }
+    }
+    Ok(out)
 }
 
 /// The faceted solid for exact bodies, with matching face names and surfaces.

@@ -1186,3 +1186,69 @@ mod tangent_propagation {
         assert!(matches!(&f.kind, FeatureKind::Fillet(f) if !f.tangent_propagation));
     }
 }
+
+#[cfg(test)]
+mod exact_ball_corners {
+    use super::*;
+    use anvil_kernel::{v2, EdgeRef, FaceId};
+
+    /// A 10 mm cube with all twelve edges rounded to 1 in one fillet feature: each corner
+    /// is closed by an eighth of the ball (#114). Volume 8^3 + 6 8^2 + 24 pi + 4 pi / 3.
+    #[test]
+    fn cube_with_every_edge_rounded() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        sf.sketch.add_rectangle(v2(0.0, 0.0), v2(10.0, 10.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            reverse: false,
+            op: BodyOp::Boss,
+            ..Default::default()
+        }));
+        let side = |e: u32| FaceId::side(base, e);
+        let (bottom, top) = (
+            FaceId { feature: base, index: FaceId::START_CAP },
+            FaceId { feature: base, index: FaceId::END_CAP },
+        );
+        let mut edges = Vec::new();
+        for i in 0..4 {
+            edges.push(EdgeRef::new(side(i), side((i + 1) % 4)));
+            edges.push(EdgeRef::new(side(i), top));
+            edges.push(EdgeRef::new(side(i), bottom));
+        }
+        let fillet = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges,
+            radius: Dim::Value(1.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert_eq!(st.faceted_from, None);
+        assert!(st.exact_features.contains(&fillet));
+        let exact = st.exact.as_ref().expect("exact");
+        assert_eq!(exact.len(), 1);
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        let v = anvil_brep::mass::properties(&anvil_brep::tess::tessellate(&exact[0], &fine).expect("tess"))
+            .volume;
+        let pi = std::f64::consts::PI;
+        let want = 512.0 + 384.0 + 24.0 * pi + 4.0 * pi / 3.0;
+        assert!((v - want).abs() / want < 5e-6, "{v} vs {want}");
+        // Eight patches, each a face of the fillet with a name of its own.
+        let patches: Vec<FaceId> = exact[0]
+            .faces
+            .iter()
+            .filter(|f| matches!(f.surface, anvil_brep::Surface::Sphere { .. }))
+            .map(crate::exact::face_id)
+            .collect();
+        assert_eq!(patches.len(), 8);
+        assert!(patches.iter().all(|f| f.feature == fillet));
+        let mut names: Vec<u32> = patches.iter().map(|f| f.index).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 8, "{names:?}");
+    }
+}

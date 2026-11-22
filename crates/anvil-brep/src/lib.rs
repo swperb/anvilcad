@@ -13,6 +13,7 @@
 pub mod blend;
 pub mod boolean;
 pub mod check;
+pub mod corner;
 pub mod dome;
 pub mod draft;
 pub mod error;
