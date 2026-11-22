@@ -846,3 +846,65 @@ fn rim_round_over_an_s_bend() {
     let want = area * path;
     assert!((removed - want).abs() / want < 2e-3, "{removed} vs {want}");
 }
+
+/// `profile` (in the plane through the z axis, x the radius and y the height) turned a
+/// whole turn about the z axis.
+fn turned(profile: Loop2) -> Solid {
+    let plane = Frame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Z, z: DVec3::NEG_Y };
+    let r = build_regions(&[profile]).expect("region");
+    crate::revolve::revolve(&plane, &r[0], DVec2::ZERO, DVec2::Y, 2.0 * PI).expect("revolve")
+}
+
+/// brep-bench's capped frustum: radius 2 at z = 0 widening to 4 at z = 3, capped by the
+/// part of the ball of radius 5 about the origin above z = 3, built as the bench builds it
+/// (the ball cut by a block, united with the frustum), which splits the rim in two arcs.
+fn capped_frustum() -> Solid {
+    let pts = [(0.0, 0.0), (2.0, 0.0), (4.0, 3.0), (0.0, 3.0)];
+    let frustum = turned(Loop2::new((0..4).map(|i| seg_line(pts[i], pts[(i + 1) % 4])).collect()));
+    let ball = turned(Loop2::new(vec![
+        Segment::Arc { center: DVec2::ZERO, radius: 5.0, start: -0.5 * PI, sweep: PI },
+        seg_line((0.0, 5.0), (0.0, -5.0)),
+    ]));
+    let below = Frame::new(DVec3::new(0.0, 0.0, 3.0), DVec3::NEG_Z, DVec3::Y).expect("frame");
+    let block = prism(&[square_at(-10.0, 20.0)], &below, 0.0, 10.0);
+    let cap = crate::boolean::boolean(&ball, &block, BoolOp::Subtract).expect("cap").remove(0);
+    crate::boolean::boolean(&frustum, &cap, BoolOp::Union).expect("union").remove(0)
+}
+
+fn square_at(lo: f64, s: f64) -> Loop2 {
+    let p = [DVec2::new(lo, lo), DVec2::new(lo + s, lo), DVec2::new(lo + s, lo + s), DVec2::new(lo, lo + s)];
+    Loop2::new((0..4).map(|i| Segment::Line { a: p[i], b: p[(i + 1) % 4] }).collect())
+}
+
+#[test]
+fn angle_chamfer_on_a_capped_frustum_rim() {
+    // #126: the frustum's rim, split in two arcs by the union, chamfered along the cone at
+    // an angle. Where the chamfer's far side meets the ball, the curve traced between the
+    // tool's side and the ball must pass through the tool's own vertex on its seam, or the
+    // ball is not divided there and the result does not close. Volumes from brep-bench
+    // (Pappus on the half section), each case's distance and angle.
+    let body = capped_frustum();
+    let rim: Vec<(EdgeId, u32)> = (0..body.edges.len() as u32)
+        .map(EdgeId)
+        .filter(|id| {
+            body.edge(*id).is_some_and(|e| {
+                let p = e.curve.eval(0.5 * (e.t0 + e.t1));
+                (p.z - 3.0).abs() < 1e-9 && (p.truncate().length() - 4.0).abs() < 1e-9
+            })
+        })
+        .map(|id| (id, 0))
+        .collect();
+    assert_eq!(rim.len(), 2, "the union splits the rim in two");
+    let cone = (0..body.faces.len())
+        .find(|&f| crate::boolean::face_contains(&body, f, DVec3::new(3.0, 0.0, 1.5)))
+        .expect("cone");
+    for (d, deg, want) in
+        [(2.0, 45.0, 95.34575251209515), (1.0, 45.0, 127.5907201864641), (1.0, 60.0, 116.51530940897516)]
+    {
+        let b = Blend::ChamferAngle { distance: d, angle: f64::to_radians(deg), along: cone };
+        let out = crate::blend::blend_chain(&body, &rim, b, 1).expect("chamfer");
+        let v = rough_volume(&out);
+        // The tessellation's chords cut the round faces short by about 3e-4 of the volume.
+        assert!((v - want).abs() / want < 5e-4, "{d} at {deg}: {v} vs {want}");
+    }
+}
