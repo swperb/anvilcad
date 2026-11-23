@@ -1819,16 +1819,35 @@ fn tol_finite(v: DVec2) -> bool {
 
 /// The centroid of the largest triangle inside the loops.
 fn largest_triangle_point(loops: &[Vec<DVec2>]) -> Option<DVec2> {
-    let mut cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = ConstrainedDelaunayTriangulation::new();
-    for l in loops {
-        let handles: Vec<_> = l.iter().filter_map(|p| cdt.insert(Point2::new(p.x, p.y)).ok()).collect();
-        for k in 0..handles.len() {
-            let (a, b) = (handles[k], handles[(k + 1) % handles.len()]);
-            if a != b && cdt.can_add_constraint(a, b) {
-                cdt.add_constraint(a, b);
+    // A long boundary (a fillet's face along a long curved edge has tens of thousands of
+    // points) is loaded in bulk: inserting its points one by one, in order along it, is
+    // quadratic. Smaller faces keep the one-by-one insertion, whose choice among equal
+    // triangles (a face of slivers a micron wide) the booleans are tested against. Either
+    // way a constraint that would cross another is left out.
+    let points: usize = loops.iter().map(Vec::len).sum();
+    let cdt: ConstrainedDelaunayTriangulation<Point2<f64>> = if points > 2000 {
+        let mut vertices = Vec::with_capacity(points);
+        let mut edges = Vec::with_capacity(points);
+        for l in loops {
+            let first = vertices.len();
+            vertices.extend(l.iter().filter(|p| tol_finite(**p)).map(|p| Point2::new(p.x, p.y)));
+            let n = vertices.len() - first;
+            edges.extend((0..n).filter(|_| n > 1).map(|k| [first + k, first + (k + 1) % n]));
+        }
+        ConstrainedDelaunayTriangulation::try_bulk_load_cdt(vertices, edges, |_| {}).ok()?
+    } else {
+        let mut cdt = ConstrainedDelaunayTriangulation::new();
+        for l in loops {
+            let handles: Vec<_> = l.iter().filter_map(|p| cdt.insert(Point2::new(p.x, p.y)).ok()).collect();
+            for k in 0..handles.len() {
+                let (a, b) = (handles[k], handles[(k + 1) % handles.len()]);
+                if a != b && cdt.can_add_constraint(a, b) {
+                    cdt.add_constraint(a, b);
+                }
             }
         }
-    }
+        cdt
+    };
     // The centroid of the largest triangle inside. Testing the triangles largest first
     // and stopping at the first inside gives the same point without testing every
     // triangle against every loop, which was quadratic in a face with many holes.

@@ -473,9 +473,6 @@ impl Roller<'_> {
 }
 
 impl Roller<'_> {
-    /// The exact chamfer section in the plane square to the run at `t`: the point on each
-    /// face the chamfer's distance from the run (as the chord in that plane), joined by a
-    /// straight line.
     /// The bevel's section at `t`: from the point `radius` from the edge on side A's face
     /// to the point `other` from it on side B's, each a chord in the plane square to the
     /// run.
@@ -701,66 +698,75 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
         let off = t - j;
         (joins && off.abs() >= 1e-9 && off.abs() < 2.0 * h && roller.legs.len() > 1).then_some(off.signum())
     };
-    let mut sections = solve(&ts)?;
+    let sections = solve(&ts)?;
+    // Rates of change of each row on either side of a section: central differences, but
+    // one-sided at a join (a leg's speed may differ from the next).
+    let rates_at = |t: f64, s: &Section| -> Result<(Rates, Rates)> {
+        let diff = |a: &Rates, b: &Rates, w: f64| -> Rates {
+            std::array::from_fn(|j| ((b[j].0 - a[j].0) / w, (b[j].1 - a[j].1) / w))
+        };
+        let here = s.rows();
+        if is_join(t) || (closed && (t == s0 || t == s1) && roller.legs.len() > 1) {
+            let (Some(a2), Some(a1), Some(b1), Some(b2)) =
+                (rows_at(t - 2.0 * h, s), rows_at(t - h, s), rows_at(t + h, s), rows_at(t + 2.0 * h, s))
+            else {
+                return refuse("the ball cannot roll along this edge");
+            };
+            // Second-order one-sided differences.
+            let left: Rates = std::array::from_fn(|j| {
+                (
+                    (here[j].0 * 3.0 - a1[j].0 * 4.0 + a2[j].0) / (2.0 * h),
+                    (here[j].1 * 3.0 - a1[j].1 * 4.0 + a2[j].1) / (2.0 * h),
+                )
+            });
+            let right: Rates = std::array::from_fn(|j| {
+                (
+                    (b1[j].0 * 4.0 - here[j].0 * 3.0 - b2[j].0) / (2.0 * h),
+                    (b1[j].1 * 4.0 - here[j].1 * 3.0 - b2[j].1) / (2.0 * h),
+                )
+            });
+            Ok((left, right))
+        } else if let Some(side) = beside_join(t) {
+            // Close beside a join: differences on this side of it only, as across it the
+            // run's speed may change.
+            let (Some(a1), Some(a2)) = (rows_at(t + side * h, s), rows_at(t + side * 2.0 * h, s)) else {
+                return refuse("the ball cannot roll along this edge");
+            };
+            let d: Rates = std::array::from_fn(|j| {
+                (
+                    (a1[j].0 * 4.0 - here[j].0 * 3.0 - a2[j].0) * (side / (2.0 * h)),
+                    (a1[j].1 * 4.0 - here[j].1 * 3.0 - a2[j].1) * (side / (2.0 * h)),
+                )
+            });
+            Ok((d, d))
+        } else {
+            let (Some(a), Some(b)) = (rows_at(t - h, s), rows_at(t + h, s)) else {
+                return refuse("the ball cannot roll along this edge");
+            };
+            let d = diff(&a, &b, 2.0 * h);
+            Ok((d, d))
+        }
+    };
+    let mut rates = ts.iter().zip(&sections).map(|(t, s)| rates_at(*t, s)).collect::<Result<Vec<_>>>()?;
+    if closed && let (Some(first), Some(last)) = (rates.first().copied(), rates.last_mut()) {
+        *last = first;
+    }
+    let mut sections = sections;
+    // Intervals already found to follow the exact sections: splitting others leaves them
+    // as they are, so each pass checks only the new ones (rechecking every interval each
+    // pass made a long run's refinement quadratic).
+    let mut fits = vec![false; ts.len() - 1];
     loop {
         if ts.len() > MAX_SECTIONS {
             return refuse("a rolling-ball fillet needs too many sections");
         }
-        // Rates of change of each row on either side of each section: central
-        // differences, but one-sided at a join (a leg's speed may differ from the next).
-        let mut rates: Vec<(Rates, Rates)> = Vec::with_capacity(ts.len());
-        let diff = |a: &Rates, b: &Rates, w: f64| -> Rates {
-            std::array::from_fn(|j| ((b[j].0 - a[j].0) / w, (b[j].1 - a[j].1) / w))
-        };
-        for (t, s) in ts.iter().zip(&sections) {
-            let here = s.rows();
-            if is_join(*t) || (closed && (*t == s0 || *t == s1) && roller.legs.len() > 1) {
-                let (Some(a2), Some(a1), Some(b1), Some(b2)) =
-                    (rows_at(t - 2.0 * h, s), rows_at(t - h, s), rows_at(t + h, s), rows_at(t + 2.0 * h, s))
-                else {
-                    return refuse("the ball cannot roll along this edge");
-                };
-                // Second-order one-sided differences.
-                let left: Rates = std::array::from_fn(|j| {
-                    (
-                        (here[j].0 * 3.0 - a1[j].0 * 4.0 + a2[j].0) / (2.0 * h),
-                        (here[j].1 * 3.0 - a1[j].1 * 4.0 + a2[j].1) / (2.0 * h),
-                    )
-                });
-                let right: Rates = std::array::from_fn(|j| {
-                    (
-                        (b1[j].0 * 4.0 - here[j].0 * 3.0 - b2[j].0) / (2.0 * h),
-                        (b1[j].1 * 4.0 - here[j].1 * 3.0 - b2[j].1) / (2.0 * h),
-                    )
-                });
-                rates.push((left, right));
-            } else if let Some(side) = beside_join(*t) {
-                // Close beside a join: differences on this side of it only, as across it
-                // the run's speed may change.
-                let (Some(a1), Some(a2)) = (rows_at(t + side * h, s), rows_at(t + side * 2.0 * h, s)) else {
-                    return refuse("the ball cannot roll along this edge");
-                };
-                let d: Rates = std::array::from_fn(|j| {
-                    (
-                        (a1[j].0 * 4.0 - here[j].0 * 3.0 - a2[j].0) * (side / (2.0 * h)),
-                        (a1[j].1 * 4.0 - here[j].1 * 3.0 - a2[j].1) * (side / (2.0 * h)),
-                    )
-                });
-                rates.push((d, d));
-            } else {
-                let (Some(a), Some(b)) = (rows_at(t - h, s), rows_at(t + h, s)) else {
-                    return refuse("the ball cannot roll along this edge");
-                };
-                let d = diff(&a, &b, 2.0 * h);
-                rates.push((d, d));
-            }
-        }
-        if closed && let (Some(first), Some(last)) = (rates.first().copied(), rates.last_mut()) {
-            *last = first;
-        }
-        // Check each interval's middle against the exact section.
-        let mut split = Vec::new();
+        // Check each interval's middle against the exact section; one that is off by
+        // more than FIT is split there.
+        let mut split = vec![false; fits.len()];
         for k in 0..ts.len() - 1 {
+            if fits[k] {
+                continue;
+            }
             let (t0, t1) = (ts[k], ts[k + 1]);
             let dt = t1 - t0;
             let tm = 0.5 * (t0 + t1);
@@ -793,18 +799,60 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
                 err = err.max(((arc_mid - exact.centre).length() - radius).abs());
             }
             if err > FIT {
-                split.push(tm);
+                split[k] = true;
+            } else {
+                fits[k] = true;
             }
         }
-        if split.is_empty() {
+        if !split.contains(&true) {
             let mut contacts: Vec<usize> = roller.legs.iter().flat_map(|l| [l.fa, l.fb]).collect();
             contacts.sort_unstable();
             contacts.dedup();
             return build(&roller, &ts, &sections, &rates, convex, closed, tag_base, &contacts);
         }
-        ts.extend(split);
-        ts.sort_by(f64::total_cmp);
-        sections = solve(&ts)?;
+        let n = ts.len();
+        let (mut ts2, mut cached, mut fits2) =
+            (Vec::with_capacity(2 * n), Vec::with_capacity(2 * n), Vec::with_capacity(2 * n));
+        for k in 0..n {
+            ts2.push(ts[k]);
+            cached.push(Some((sections[k], rates[k])));
+            let Some(fit) = fits.get(k) else { break };
+            if split[k] {
+                ts2.push(0.5 * (ts[k] + ts[k + 1]));
+                cached.push(None);
+                fits2.extend([false, false]);
+            } else {
+                fits2.push(*fit);
+            }
+        }
+        // Every section is solved again, each from its neighbour: one solved from a guess
+        // far off (the first, coarse pass) can land on another solution, which the closer
+        // guesses then correct. The rates are worked out again, and the intervals beside
+        // it checked again, only where a section moved.
+        let fresh = solve(&ts2)?;
+        let moved = |a: &Section, b: &Section| {
+            a.rows().iter().zip(b.rows().iter()).any(|(x, y)| (x.0 / x.1 - y.0 / y.1).length() > 1e-3 * FIT)
+        };
+        let mut rates2 = Vec::with_capacity(ts2.len());
+        for (k, (t, s)) in ts2.iter().zip(&fresh).enumerate() {
+            match cached[k] {
+                Some((old, r)) if !moved(&old, s) => rates2.push(r),
+                _ => {
+                    rates2.push(rates_at(*t, s)?);
+                    if k > 0 {
+                        fits2[k - 1] = false;
+                    }
+                    if let Some(f) = fits2.get_mut(k) {
+                        *f = false;
+                    }
+                }
+            }
+        }
+        if closed && let (Some(first), Some(last)) = (rates2.first().copied(), rates2.last_mut()) {
+            *last = first;
+        }
+        let sections2 = fresh;
+        (ts, sections, rates, fits) = (ts2, sections2, rates2, fits2);
     }
 }
 

@@ -139,7 +139,6 @@ fn face_integral(
     // their sign from the loops, which run counter-clockwise about the outward normal).
     let mut orient = 0.0;
     let mut loops: Vec<Vec<(DVec2, DVec2)>> = Vec::new();
-    let mut u0 = f64::INFINITY;
     for l in face.loops() {
         // Points along the loop's edges at Gauss nodes, with dv/dt times the weight.
         let mut pts: Vec<(DVec2, DVec2)> = Vec::new();
@@ -164,10 +163,23 @@ fn face_integral(
                 last = Some((p, last.map_or(q, |(_, q0)| unwrap(q, q0))));
             }
             let panels = ((len3.max(len2) / size * 8.0).ceil() as usize).clamp(4, 2000);
-            let step = (tb - ta) / panels as f64;
-            let dt = 1e-6 * step.abs().max(1e-12);
-            for k in 0..panels {
-                let mid = ta + step * (k as f64 + 0.5);
+            // Panels end at a spline edge's knots too, where it may bend sharply.
+            let mut cuts: Vec<f64> =
+                (0..=panels).map(|k| ta + (tb - ta) * k as f64 / panels as f64).collect();
+            if let crate::geom::Curve::Spline(sp) = &e.curve {
+                let (lo, hi) = (ta.min(tb), ta.max(tb));
+                let room = 1e-9 * (hi - lo);
+                cuts.extend(sp.knots.iter().filter(|k| **k > lo + room && **k < hi - room));
+                if tb >= ta {
+                    cuts.sort_by(f64::total_cmp)
+                } else {
+                    cuts.sort_by(|a, b| b.total_cmp(a))
+                }
+                cuts.dedup_by(|a, b| (*a - *b).abs() <= room);
+            }
+            let dt = 1e-6 * ((tb - ta) / panels as f64).abs().max(1e-12);
+            for c in cuts.windows(2) {
+                let (mid, step) = (0.5 * (c[0] + c[1]), c[1] - c[0]);
                 for (x, w) in GAUSS8 {
                     let t = mid + 0.5 * step * x;
                     let raw = s.uv(e.curve.eval(t));
@@ -190,7 +202,6 @@ fn face_integral(
                     };
                     pts.push((uv, d * (w * 0.5 * step)));
                     prev = Some(uv);
-                    u0 = u0.min(uv.x);
                     if orient == 0.0 {
                         let n = {
                             let su =
@@ -209,26 +220,46 @@ fn face_integral(
         }
         loops.push(pts);
     }
-    // A spline surface may bend sharply at its knots: the integrals along u stop there.
-    let breaks: Vec<f64> = match s {
-        Surface::BSpline(sp) => sp.u_breaks(),
-        _ => Vec::new(),
+    // A spline surface may bend sharply at its knots: the inner integrals stop there. They
+    // run along whichever parameter crosses fewer knots (along a rolling round's length
+    // there can be thousands), by either form of Green's theorem:
+    //   the double integral of g = the loop integral of G dv, G the integral of g along u,
+    //                            = minus the loop integral of H du, H that along v.
+    let (breaks, along_v) = match s {
+        Surface::BSpline(sp) => {
+            let (bu, bv) = (sp.u_breaks(), sp.v_breaks());
+            if bv.len() < bu.len() { (bv, true) } else { (bu, false) }
+        }
+        _ => (Vec::new(), false),
     };
-    let period = s.u_period();
+    // The parameter integrated along, the other one, and the period of the first.
+    let along = |q: DVec2| if along_v { q.y } else { q.x };
+    let across = |q: DVec2| if along_v { q.x } else { q.y };
+    let period = if along_v { None } else { s.u_period() };
+    let start = loops.iter().flatten().map(|(uv, _)| along(*uv)).fold(f64::INFINITY, f64::min);
+    let at = |x: f64, other: f64| if along_v { DVec2::new(other, x) } else { DVec2::new(x, other) };
     let mut sum = Densities::default();
     for pts in &loops {
         for (uv, dw) in pts {
-            // G(u, v): the densities along u from u0, piece by piece between the breaks
-            // (repeated every period on a wrapping surface).
-            let (a, b) = (u0.min(uv.x), u0.max(uv.x));
+            // Along a stretch where the other parameter stays put (a rolling round's
+            // contact curves, a cylinder's circles) the loop integral gains nothing: skip
+            // the work.
+            let dw_across = across(*dw);
+            if dw_across == 0.0 || dw_across.abs() <= 1e-14 * size {
+                continue;
+            }
+            // The densities along the parameter from `start`, piece by piece between the
+            // breaks (repeated every period on a wrapping surface).
+            let x = along(*uv);
+            let (a, b) = (start.min(x), start.max(x));
             let mut cuts = vec![a];
             for k in &breaks {
                 match period {
                     Some(p) => {
-                        let mut x = k + ((a - k) / p).ceil() * p;
-                        while x < b {
-                            cuts.push(x);
-                            x += p;
+                        let mut c = k + ((a - k) / p).ceil() * p;
+                        while c < b {
+                            cuts.push(c);
+                            c += p;
                         }
                     }
                     None if *k > a && *k < b => cuts.push(*k),
@@ -240,10 +271,11 @@ fn face_integral(
             let mut g = Densities::default();
             for w in cuts.windows(2) {
                 let panels = (((w[1] - w[0]) / size * 4.0).ceil() as usize).clamp(1, 2000);
-                g = g + gauss(w[0], w[1], panels, |u| dens(DVec2::new(u, uv.y)));
+                g = g + gauss(w[0], w[1], panels, |t| dens(at(t, across(*uv))));
             }
-            let sign = if uv.x >= u0 { 1.0 } else { -1.0 };
-            sum = sum + g * (dw.y * sign);
+            let sign = if x >= start { 1.0 } else { -1.0 };
+            let form = if along_v { -1.0 } else { 1.0 };
+            sum = sum + g * (dw_across * sign * form);
         }
     }
     if !(sum.volume.is_finite() && sum.area.is_finite()) {
