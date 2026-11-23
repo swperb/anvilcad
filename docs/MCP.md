@@ -12,11 +12,17 @@ and `run_lua` runs any script in that API.
 
 ## Setup
 
-Build and install the binary, then register it with your client.
+`anvilcad-agent` comes with every installer. The Windows installer and the Homebrew cask
+put it on the `PATH`. From the macOS `.dmg` it is
+`/Applications/AnvilCAD.app/Contents/MacOS/anvilcad-agent`, and on Linux the AppImage runs
+it as `AnvilCAD-<version>-linux-x86_64.AppImage anvilcad-agent`. From source, build and
+install it:
 
 ```bash
 cargo install --path crates/anvil-app --bin anvilcad-agent
 ```
+
+Then register it with your client.
 
 Claude Code:
 
@@ -35,7 +41,8 @@ configuration (for Cursor, `.cursor/mcp.json` in the project or `~/.cursor/mcp.j
 }
 ```
 
-If `~/.cargo/bin` is not on the client's `PATH`, give the full path to `anvilcad-agent`.
+If `anvilcad-agent` is not on the client's `PATH`, give its full path, as above (for a
+`cargo install`, it is in `~/.cargo/bin`).
 
 ## Tools
 

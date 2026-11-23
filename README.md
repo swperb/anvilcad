@@ -500,11 +500,18 @@ focus or touches your mouse and keyboard), use `anvilcad-agent`; see
 `anvilcad-agent mcp` is a Model Context Protocol server, so Claude Code, Cursor and other
 agents can model parts headlessly: create or open a part, add sketches and extrusions, set
 dimensions and variables, read mass properties, export STEP, 3MF or STL and take screenshots.
-Install it and add it to Claude Code:
+The installers include it. Add it to Claude Code:
 
 ```bash
-cargo install --path crates/anvil-app --bin anvilcad-agent && claude mcp add anvilcad -- anvilcad-agent mcp
+claude mcp add anvilcad -- anvilcad-agent mcp
 ```
+
+That works as it is where `anvilcad-agent` is on the `PATH`: after the Windows installer
+or `brew install --cask`. Otherwise give the program in full after the `--`:
+
+- **macOS** (the `.dmg`): `claude mcp add anvilcad -- /Applications/AnvilCAD.app/Contents/MacOS/anvilcad-agent mcp`
+- **Linux**: `claude mcp add anvilcad -- /path/to/AnvilCAD-<version>-linux-x86_64.AppImage anvilcad-agent mcp`
+- **From source**: run `cargo install --path crates/anvil-app --bin anvilcad-agent` first.
 
 Tools, other clients and examples are in [docs/MCP.md](docs/MCP.md).
 
