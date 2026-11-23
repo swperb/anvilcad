@@ -210,6 +210,22 @@ impl SplineSurface {
     }
 
     /// How far `u` goes before the patch repeats, if it wraps.
+    /// Where the kernel's `u` crosses the patch's interior knots along it, within one
+    /// layout of the domain: there the surface may only be continuous, not smooth, so an
+    /// integral along `u` is split at them.
+    pub fn u_breaks(&self) -> Vec<f64> {
+        let ((s0, s1), (t0, t1)) = self.domain();
+        let (knots, lo, hi, scale) = if self.wraps == Some(Wrap::T) {
+            (&self.knots_t, t0, t1, self.scale.1)
+        } else {
+            (&self.knots_s, s0, s1, self.scale.0)
+        };
+        let mut out: Vec<f64> =
+            knots.iter().filter(|k| **k > lo && **k < hi).map(|k| (k - lo) * scale).collect();
+        out.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+        out
+    }
+
     pub fn period(&self) -> Option<f64> {
         let ((s0, s1), (t0, t1)) = self.domain();
         match self.wraps? {
