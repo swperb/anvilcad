@@ -986,6 +986,8 @@ mod tests {
         run(&mut h, json!({"cmd": "click", "label": "Sketch", "index": 1}));
         let st = run(&mut h, json!({"cmd": "state"}))["state"].clone();
         assert!(st["sketch"].is_object(), "sketch open: {st}");
+        // A new sketch holds only its fixed origin: fully defined, not "over defined".
+        assert_eq!(st["sketch"]["status"], "Fully defined", "{st}");
 
         // Sketch tools are on the command bar and in the sketch panel; either will do.
         run(&mut h, json!({"cmd": "click", "label": "Rectangle"}));

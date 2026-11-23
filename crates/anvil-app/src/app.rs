@@ -714,6 +714,11 @@ impl AnvilApp {
         s.pick_px = self.snap_px();
         if let Some(st) = self.state.sketch_status.get(&id) {
             s.status = st.clone();
+        } else if let Some(sf) = self.doc.sketch_mut(id) {
+            // A sketch the rebuild has not solved yet (one just started): solve it now, so
+            // its status is its own rather than the solver's default (which reads as over
+            // defined).
+            s.status = sf.sketch.solve();
         }
         self.camera.normal_to(&frame);
         self.camera.target = frame.origin;
