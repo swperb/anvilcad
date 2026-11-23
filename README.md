@@ -14,6 +14,9 @@ The goal is a complete, free engineering stack: CAD now, then CAM, PDM and PLM (
 Status: early (0.1). The core modelling loop works end to end. Large parts of a full CAD
 system are still ahead; see the roadmap.
 
+Questions, ideas and show-and-tell: join the [AnvilCAD Discord](https://discord.gg/CEG4GcVASJ). Bugs and feature
+requests go in [GitHub issues](https://github.com/swperb/anvilcad/issues).
+
 ## Install
 
 Download the package for your system from the
@@ -552,7 +555,8 @@ ferrocad, and were merged into AnvilCAD in October 2026.
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) (commits carry a
 Developer Certificate of Origin sign-off) and the interoperability rules in
-[INTEROPERABILITY.md](INTEROPERABILITY.md).
+[INTEROPERABILITY.md](INTEROPERABILITY.md). To talk a change through before you start, ask
+in the [Discord](https://discord.gg/CEG4GcVASJ).
 
 ## License
 

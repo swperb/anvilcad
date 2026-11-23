@@ -96,7 +96,7 @@ with evidence; the maintainer decides.
 | G5 | Every claim in the README and the drafts below is true today | Check against the "Say / Do not say" table in [docs/POSITIONING.md](docs/POSITIONING.md) and the README's "What works today" |
 | G6 | Films rendered from the current release: the 60-second trailer, the `agent` film, and the feature spots. Add a migration before-and-after with the volume check when there is a part the project may publish | `python3 scripts/cinema/films.py` ([scripts/cinema/README.md](scripts/cinema/README.md)); watch each one, and check its captions against the README's "What works today" |
 | G7 | GitHub topics and homepage set | `gh repo view --json homepageUrl,repositoryTopics`. Suggested topics: `cad`, `parametric-cad`, `rust`, `brep`, `step`, `mcp`, `solidworks`, `cam`, `3d-modeling`. Ask the maintainer before running `gh repo edit --add-topic`. |
-| G8 | A place to talk: GitHub Discussions on (or a Discord), linked from the README | `gh repo view --json hasDiscussionsEnabled`. Ask before changing the setting. |
+| G8 | A place to talk: GitHub Discussions on (or a Discord), linked from the README | Done: the [AnvilCAD Discord](https://discord.gg/CEG4GcVASJ) (invite does not expire) is linked from the README, CONTRIBUTING.md and `docs/index.html`. |
 | G9 | 5 to 10 open issues labelled `good first issue`, each with the files involved and what done looks like | `gh issue list --label "good first issue"` |
 | G10 | CI is green on `main`, and `cargo test --workspace` passes locally | `gh run list --branch main --limit 1` |
 | G11 | The next two releases are ready to tag (small, real improvements with a one-line hook each) | A list of merged or nearly merged PRs |

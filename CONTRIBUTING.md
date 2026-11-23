@@ -4,6 +4,11 @@ Thank you for helping. AnvilCAD is free and open-source software, licensed under
 Apache-2.0, and everything in it should be something anyone may use, study, change and
 share.
 
+To ask a question or talk an idea through before you write code, join the
+[AnvilCAD Discord](https://discord.gg/CEG4GcVASJ). Bugs and feature requests belong in
+[GitHub issues](https://github.com/swperb/anvilcad/issues), so they are tracked; decisions
+made on Discord are written up in an issue or pull request.
+
 ## Build deliberately: no vibe coding
 
 AnvilCAD is not to be vibe coded, whether you write the code by hand or with an AI
@@ -41,8 +46,8 @@ use than the paid tools it replaces, so no one has a reason to go back to them.
 - **Small, reviewable changes.** Each pull request does one thing and says why. Do not mix
   refactors with features, and do not rewrite working code without a stated reason.
 - **When unsure, ask.** If a requirement, design choice or SOLIDWORKS behaviour is unclear,
-  open an issue or ask in the pull request, or record the open question, rather than
-  guessing and moving on.
+  open an issue, ask in the pull request or on the [Discord](https://discord.gg/CEG4GcVASJ), or record the open
+  question, rather than guessing and moving on.
 
 ## Developer Certificate of Origin
 

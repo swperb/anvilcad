@@ -250,7 +250,7 @@ pre code { color: var(--text); font-size: inherit; }
 .duo-item { padding: 40px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .duo-item h2 { font-size: 30px; }
 .duo-item > p:not(.eyebrow) { color: var(--muted); margin-top: 14px; }
-.duo-item .text-link { margin-top: 22px; }
+.duo-item .text-link { margin-top: 22px; margin-right: 24px; }
 
 /* Get */
 .get { text-align: center; background: radial-gradient(ellipse 60% 80% at 50% 0%, rgba(240, 120, 43, 0.12), transparent 70%), var(--bg); }
