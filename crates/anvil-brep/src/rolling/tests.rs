@@ -980,8 +980,7 @@ fn two_distance_chamfers_next_to_balls() {
     let up = DVec3::new(2.0, 0.0, (25.0f64 - 4.0).sqrt() - 3.0);
     two_distances(&lens, 4.0, 0.0, up, 2.0, 1.0, 85.163_595_116_861_79);
     // The ball of 5 bored through by 2, its upper rim, 2 down the bore and 1 on the ball.
-    // Built as the ball less a rod: revolving the band between the bore and the ball gives
-    // a solid that measures 3e-4 small, whatever the tessellation (a separate issue).
+    // Built as brep-bench builds it, the ball less a rod.
     let h = 21f64.sqrt();
     let ball = turned(Loop2::new(vec![
         arc((0.0, 0.0), 5.0, -0.5 * PI, 0.5 * PI),
