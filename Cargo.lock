@@ -171,14 +171,14 @@ dependencies = [
 
 [[package]]
 name = "anvil-3dmouse"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "hidapi",
 ]
 
 [[package]]
 name = "anvil-app"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-3dmouse",
  "anvil-io",
@@ -198,7 +198,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-brep"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "glam",
  "proptest",
@@ -209,7 +209,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-bulk"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-io",
  "anvil-kernel",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-cam"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-kernel",
  "anvil-model",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-evals"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-brep",
  "anvil-step",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-io"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-kernel",
  "anvil-model",
@@ -262,14 +262,14 @@ dependencies = [
 
 [[package]]
 name = "anvil-kernel"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "anvil-migrate"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-io",
  "anvil-kernel",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-model"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-brep",
  "anvil-kernel",
@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-partcheck"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-cam",
  "anvil-kernel",
@@ -310,7 +310,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-props"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-io",
  "anvil-model",
@@ -320,7 +320,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-sketch"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-kernel",
  "serde",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "anvil-step"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-brep",
  "glam",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "proveout-core"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-cam",
  "anvil-kernel",
@@ -3166,7 +3166,7 @@ dependencies = [
 
 [[package]]
 name = "proveout-web"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "anvil-cam",
  "argon2",
