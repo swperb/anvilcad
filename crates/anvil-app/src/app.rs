@@ -1502,10 +1502,7 @@ impl AnvilApp {
             let y = ui.cursor().top();
             ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0_f32, pal.border));
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.set_min_height(62.0);
-                self.assembly_commands(ui);
-            });
+            theme::command_bar(ui, "assembly", |ui| self.assembly_commands(ui));
             return;
         }
         ui.horizontal(|ui| {
@@ -1522,183 +1519,193 @@ impl AnvilApp {
         let y = ui.cursor().top();
         ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0_f32, pal.border));
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.set_min_height(62.0);
-            match self.tab {
-                Tab::Features => {
-                    theme::command_group(ui, "Body", |ui| {
-                        if theme::command_button(ui, Icon::Extrude, "Extruded Boss/Base", None).clicked() {
-                            self.cmd_extrude(BodyOp::Boss);
-                        }
-                        if theme::command_button(ui, Icon::Revolve, "Revolved Boss/Base", None).clicked() {
-                            self.cmd_revolve(BodyOp::Boss);
-                        }
-                        if theme::command_button(ui, Icon::ExtrudeCut, "Extruded Cut", None).clicked() {
-                            self.cmd_extrude(BodyOp::Cut);
-                        }
-                        if theme::command_button(ui, Icon::RevolveCut, "Revolved Cut", None).clicked() {
-                            self.cmd_revolve(BodyOp::Cut);
+        let key = match self.tab {
+            Tab::Features => "features",
+            Tab::Sketch if self.sketch.is_some() => "sketching",
+            Tab::Sketch => "sketch",
+            Tab::Evaluate => "evaluate",
+        };
+        theme::command_bar(ui, key, |ui| match self.tab {
+            Tab::Features => {
+                theme::command_group(ui, "Body", |ui| {
+                    if theme::command_button(ui, Icon::Extrude, "Extruded Boss/Base", None).clicked() {
+                        self.cmd_extrude(BodyOp::Boss);
+                    }
+                    if theme::command_button(ui, Icon::Revolve, "Revolved Boss/Base", None).clicked() {
+                        self.cmd_revolve(BodyOp::Boss);
+                    }
+                    if theme::command_button(ui, Icon::ExtrudeCut, "Extruded Cut", None).clicked() {
+                        self.cmd_extrude(BodyOp::Cut);
+                    }
+                    if theme::command_button(ui, Icon::RevolveCut, "Revolved Cut", None).clicked() {
+                        self.cmd_revolve(BodyOp::Cut);
+                    }
+                });
+                theme::group_rule(ui);
+                theme::command_group(ui, "Pattern", |ui| {
+                    if theme::command_button(ui, Icon::LinearPattern, "Linear Pattern", None).clicked() {
+                        self.cmd_pattern(false);
+                    }
+                    if theme::command_button(ui, Icon::CircularPattern, "Circular Pattern", None).clicked() {
+                        self.cmd_pattern(true);
+                    }
+                    if theme::command_button(ui, Icon::MirrorFeature, "Mirror", None).clicked() {
+                        self.cmd_mirror();
+                    }
+                });
+                theme::group_rule(ui);
+                theme::command_group(ui, "Modify", |ui| {
+                    if theme::command_button(ui, Icon::Fillet, "Fillet", None).clicked() {
+                        self.cmd_edge_treatment(false);
+                    }
+                    if theme::command_button(ui, Icon::Chamfer, "Chamfer", None).clicked() {
+                        self.cmd_edge_treatment(true);
+                    }
+                    if theme::command_button(ui, Icon::Shell, "Shell", None).clicked() {
+                        self.cmd_shell();
+                    }
+                    if theme::command_button(ui, Icon::Hole, "Hole", None).clicked() {
+                        self.cmd_hole();
+                    }
+                    if theme::command_button(ui, Icon::Sweep, "Sweep", None)
+                        .on_hover_text("Swept Boss/Base")
+                        .clicked()
+                    {
+                        self.cmd_sweep();
+                    }
+                    if theme::command_button(ui, Icon::Loft, "Loft", None)
+                        .on_hover_text("Lofted Boss/Base")
+                        .clicked()
+                    {
+                        self.cmd_loft();
+                    }
+                    if theme::command_button(ui, Icon::Draft, "Draft", None).clicked() {
+                        self.cmd_draft();
+                    }
+                    if theme::command_button(ui, Icon::Dome, "Dome", None).clicked() {
+                        self.cmd_dome();
+                    }
+                    if theme::command_button(ui, Icon::Rib, "Rib", None).clicked() {
+                        self.cmd_rib();
+                    }
+                    if let Some(i) = command_menu(
+                        ui,
+                        Icon::Bodies,
+                        "Bodies",
+                        &[
+                            (Icon::Bodies, "Combine"),
+                            (Icon::Bodies, "Move/Copy Bodies"),
+                            (Icon::Bodies, "Delete/Keep Bodies"),
+                            (Icon::Bodies, "Split"),
+                            (Icon::Bodies, "Scale"),
+                        ],
+                    ) {
+                        self.cmd_body(i);
+                    }
+                });
+                theme::group_rule(ui);
+                theme::command_group(ui, "Reference", |ui| {
+                    match command_menu(
+                        ui,
+                        Icon::Plane,
+                        "Reference",
+                        &[
+                            (Icon::Plane, "Plane"),
+                            (Icon::Axis, "Axis"),
+                            (Icon::RefPoint, "Point"),
+                            (Icon::CoordSys, "Coordinate System"),
+                        ],
+                    ) {
+                        Some(0) => self.cmd_plane(),
+                        Some(1) => self.cmd_axis(),
+                        Some(2) => self.cmd_point(),
+                        Some(3) => self.cmd_coordsys(),
+                        _ => {}
+                    }
+                });
+            }
+            Tab::Sketch => {
+                if self.sketch.is_none() {
+                    theme::command_group(ui, "Start", |ui| {
+                        if theme::command_button(ui, Icon::Sketch, "Sketch", None).clicked() {
+                            self.cmd_sketch();
                         }
                     });
-                    theme::group_rule(ui);
-                    theme::command_group(ui, "Pattern", |ui| {
-                        if theme::command_button(ui, Icon::LinearPattern, "Linear Pattern", None).clicked() {
-                            self.cmd_pattern(false);
+                    ui.add_space(8.0);
+                    ui.weak("Select a plane or planar face, then click Sketch.");
+                } else if let Some(s) = self.sketch.as_mut() {
+                    theme::command_group(ui, "Draw", |ui| {
+                        tool_family_button(ui, s, &[Tool::Select]);
+                        for family in sketcher::DRAW_FAMILIES {
+                            tool_family_button(ui, s, family);
                         }
-                        if theme::command_button(ui, Icon::CircularPattern, "Circular Pattern", None)
-                            .clicked()
-                        {
-                            self.cmd_pattern(true);
-                        }
-                        if theme::command_button(ui, Icon::MirrorFeature, "Mirror", None).clicked() {
-                            self.cmd_mirror();
-                        }
+                        tool_family_button(ui, s, &[Tool::Dimension]);
                     });
                     theme::group_rule(ui);
+                    let mut toggle = false;
                     theme::command_group(ui, "Modify", |ui| {
-                        if theme::command_button(ui, Icon::Fillet, "Fillet", None).clicked() {
-                            self.cmd_edge_treatment(false);
+                        for family in sketcher::MODIFY_FAMILIES {
+                            tool_family_button(ui, s, family);
                         }
-                        if theme::command_button(ui, Icon::Chamfer, "Chamfer", None).clicked() {
-                            self.cmd_edge_treatment(true);
-                        }
-                        if theme::command_button(ui, Icon::Shell, "Shell", None).clicked() {
-                            self.cmd_shell();
-                        }
-                        if theme::command_button(ui, Icon::Hole, "Hole", None).clicked() {
-                            self.cmd_hole();
-                        }
-                        if theme::command_button(ui, Icon::Sweep, "Sweep", None).on_hover_text("Swept Boss/Base").clicked() {
-                            self.cmd_sweep();
-                        }
-                        if theme::command_button(ui, Icon::Loft, "Loft", None).on_hover_text("Lofted Boss/Base").clicked() {
-                            self.cmd_loft();
-                        }
-                        if theme::command_button(ui, Icon::Draft, "Draft", None).clicked() {
-                            self.cmd_draft();
-                        }
-                        if theme::command_button(ui, Icon::Dome, "Dome", None).clicked() {
-                            self.cmd_dome();
-                        }
-                        if theme::command_button(ui, Icon::Rib, "Rib", None).clicked() {
-                            self.cmd_rib();
-                        }
-                        if let Some(i) = command_menu(
-                            ui,
-                            Icon::Bodies,
-                            "Bodies",
-                            &[
-                                (Icon::Bodies, "Combine"),
-                                (Icon::Bodies, "Move/Copy Bodies"),
-                                (Icon::Bodies, "Delete/Keep Bodies"),
-                                (Icon::Bodies, "Split"),
-                                (Icon::Bodies, "Scale"),
-                            ],
-                        ) {
-                            self.cmd_body(i);
-                        }
+                        toggle = theme::command_button(ui, Icon::Construction, "Construction", None)
+                            .on_hover_text("Construction Geometry: toggle the selected entities")
+                            .clicked();
                     });
-                    theme::group_rule(ui);
-                    theme::command_group(ui, "Reference", |ui| {
-                        match command_menu(
-                            ui,
-                            Icon::Plane,
-                            "Reference",
-                            &[(Icon::Plane, "Plane"), (Icon::Axis, "Axis"), (Icon::RefPoint, "Point"), (Icon::CoordSys, "Coordinate System")],
-                        ) {
-                            Some(0) => self.cmd_plane(),
-                            Some(1) => self.cmd_axis(),
-                            Some(2) => self.cmd_point(),
-                            Some(3) => self.cmd_coordsys(),
-                            _ => {}
-                        }
-                    });
-                }
-                Tab::Sketch => {
-                    if self.sketch.is_none() {
-                        theme::command_group(ui, "Start", |ui| {
-                            if theme::command_button(ui, Icon::Sketch, "Sketch", None).clicked() {
-                                self.cmd_sketch();
+                    if toggle {
+                        if let Some(sf) = self.doc.sketch_mut(s.feature) {
+                            if s.toggle_construction(sf) {
+                                s.status = sf.sketch.solve();
+                            } else {
+                                self.status =
+                                    "Select sketch entities to make them construction geometry.".into();
                             }
-                        });
-                        ui.add_space(8.0);
-                        ui.weak("Select a plane or planar face, then click Sketch.");
-                    } else if let Some(s) = self.sketch.as_mut() {
-                        theme::command_group(ui, "Draw", |ui| {
-                            tool_family_button(ui, s, &[Tool::Select]);
-                            for family in sketcher::DRAW_FAMILIES {
-                                tool_family_button(ui, s, family);
-                            }
-                            tool_family_button(ui, s, &[Tool::Dimension]);
-                        });
-                        theme::group_rule(ui);
-                        let mut toggle = false;
-                        theme::command_group(ui, "Modify", |ui| {
-                            for family in sketcher::MODIFY_FAMILIES {
-                                tool_family_button(ui, s, family);
-                            }
-                            toggle = theme::command_button(ui, Icon::Construction, "Construction", None)
-                                .on_hover_text("Construction Geometry: toggle the selected entities")
-                                .clicked();
-                        });
-                        if toggle {
-                            if let Some(sf) = self.doc.sketch_mut(s.feature) {
-                                if s.toggle_construction(sf) {
-                                    s.status = sf.sketch.solve();
-                                } else {
-                                    self.status =
-                                        "Select sketch entities to make them construction geometry.".into();
-                                }
-                            }
-                        }
-                        theme::group_rule(ui);
-                        let mut exit = false;
-                        let mut convert = false;
-                        theme::command_group(ui, "Finish", |ui| {
-                            convert = theme::command_button(ui, Icon::Convert, "Convert", None)
-                                .on_hover_text("Convert Entities: copy the edges of the sketch's face (or the face last clicked) into the sketch")
-                                .clicked();
-                            exit = theme::command_button(ui, Icon::ExitSketch, "Exit Sketch", None).clicked();
-                        });
-                        if convert {
-                            self.cmd_convert();
-                        }
-                        if exit {
-                            self.exit_sketch();
                         }
                     }
-                }
-                Tab::Evaluate => {
-                    theme::command_group(ui, "Analyze", |ui| {
-                        if theme::command_button(ui, Icon::Mass, "Mass Properties", None).clicked() {
-                            self.windows.mass = true;
-                        }
-                        if theme::command_button(ui, Icon::Check, "Check Design (DFM)", None).clicked() {
-                            self.open_dfm();
-                        }
-                        if theme::command_button(ui, Icon::Measure, "Measure", None).clicked() {
-                            self.measure = Some(Vec::new());
-                        }
-                        let on = self.doc.section.as_ref().is_some_and(|v| v.on);
-                        if theme::command_button(ui, Icon::Section, "Section View", Some(on)).clicked() {
-                            self.toggle_section();
-                        }
-                    });
                     theme::group_rule(ui);
-                    theme::command_group(ui, "Data", |ui| {
-                        if theme::command_button(ui, Icon::Equations, "Equations", None).clicked() {
-                            self.windows.equations = true;
-                        }
-                        if theme::command_button(ui, Icon::Properties, "Custom Properties", None).clicked() {
-                            self.windows.properties = true;
-                        }
-                        if theme::command_button(ui, Icon::Configuration, "Configuration Table", None)
-                            .clicked()
-                        {
-                            self.cfg.table = true;
-                        }
+                    let mut exit = false;
+                    let mut convert = false;
+                    theme::command_group(ui, "Finish", |ui| {
+                        convert = theme::command_button(ui, Icon::Convert, "Convert", None)
+                                .on_hover_text("Convert Entities: copy the edges of the sketch's face (or the face last clicked) into the sketch")
+                                .clicked();
+                        exit = theme::command_button(ui, Icon::ExitSketch, "Exit Sketch", None).clicked();
                     });
+                    if convert {
+                        self.cmd_convert();
+                    }
+                    if exit {
+                        self.exit_sketch();
+                    }
                 }
+            }
+            Tab::Evaluate => {
+                theme::command_group(ui, "Analyze", |ui| {
+                    if theme::command_button(ui, Icon::Mass, "Mass Properties", None).clicked() {
+                        self.windows.mass = true;
+                    }
+                    if theme::command_button(ui, Icon::Check, "Check Design (DFM)", None).clicked() {
+                        self.open_dfm();
+                    }
+                    if theme::command_button(ui, Icon::Measure, "Measure", None).clicked() {
+                        self.measure = Some(Vec::new());
+                    }
+                    let on = self.doc.section.as_ref().is_some_and(|v| v.on);
+                    if theme::command_button(ui, Icon::Section, "Section View", Some(on)).clicked() {
+                        self.toggle_section();
+                    }
+                });
+                theme::group_rule(ui);
+                theme::command_group(ui, "Data", |ui| {
+                    if theme::command_button(ui, Icon::Equations, "Equations", None).clicked() {
+                        self.windows.equations = true;
+                    }
+                    if theme::command_button(ui, Icon::Properties, "Custom Properties", None).clicked() {
+                        self.windows.properties = true;
+                    }
+                    if theme::command_button(ui, Icon::Configuration, "Configuration Table", None).clicked() {
+                        self.cfg.table = true;
+                    }
+                });
             }
         });
     }

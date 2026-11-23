@@ -946,6 +946,36 @@ mod tests {
     }
 
     #[test]
+    fn the_command_bar_fits_narrow_windows() {
+        let mut h = Headless::new();
+        let features = ["Extruded Boss/Base", "Linear Pattern", "Fillet", "Bodies", "Reference"];
+        // The button for each command, as (left, right, width).
+        let buttons = |h: &mut Headless| {
+            let w = run(h, json!({"cmd": "widgets", "role": "Button"}))["widgets"].clone();
+            features
+                .iter()
+                .map(|name| {
+                    let b = w
+                        .as_array()
+                        .and_then(|w| w.iter().find(|b| b["label"] == *name))
+                        .unwrap_or_else(|| panic!("no {name} button"));
+                    let r = |k: usize| b["rect"][k].as_f64().unwrap_or(f64::NAN);
+                    (r(0), r(2), r(2) - r(0))
+                })
+                .collect::<Vec<_>>()
+        };
+        // Wide: every command with its label under it.
+        run(&mut h, json!({"cmd": "resize", "width": 1700, "height": 900}));
+        assert!(buttons(&mut h).iter().all(|b| b.1 <= 1700.0 && b.2 > 50.0));
+        // A 1280-wide laptop: too narrow for every label, so icons only, all on screen.
+        run(&mut h, json!({"cmd": "resize", "width": 1280, "height": 800}));
+        assert!(buttons(&mut h).iter().all(|b| b.1 <= 1280.0 && b.2 < 50.0), "{:?}", buttons(&mut h));
+        // Wide again: the labels come back.
+        run(&mut h, json!({"cmd": "resize", "width": 1700, "height": 900}));
+        assert!(buttons(&mut h).iter().all(|b| b.2 > 50.0));
+    }
+
+    #[test]
     fn sketch_and_extrude_by_clicking_labels() {
         let mut h = Headless::new();
         run(&mut h, json!({"cmd": "click", "label": "Front Plane"}));
