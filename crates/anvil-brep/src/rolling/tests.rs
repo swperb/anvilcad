@@ -1029,3 +1029,81 @@ fn two_distance_chamfer_on_flat_faces() {
         assert!(crate::blend::blend_edge(&cube, edge, b, 1, 0).is_err(), "{b:?}");
     }
 }
+
+/// brep-bench's elliptic rims and root, measured exactly: an ellipse's round and chamfer
+/// are pipes, which only the rolling tool builds.
+#[test]
+fn elliptic_rims_and_roots_round_and_bevel_exactly() {
+    let plate = |x: f64, y: f64| {
+        Loop2::new(vec![
+            seg_line((-x, -y), (x, -y)),
+            seg_line((x, -y), (x, y)),
+            seg_line((x, y), (-x, y)),
+            seg_line((-x, y), (-x, -y)),
+        ])
+    };
+    let ellipse = |a: f64, b: f64| Loop2::new(vec![Segment::ellipse(DVec2::ZERO, a, b, 0.0)]);
+    let cylinder = prism(&[ellipse(10.0, 6.0)], &Frame::world(), 0.0, 8.0);
+    let bored = prism(&[plate(15.0, 10.0), ellipse(6.0, 3.0)], &Frame::world(), 0.0, 4.0);
+    let boss = boolean_with_contacts(
+        &prism(&[plate(20.0, 15.0)], &Frame::world(), 0.0, 4.0),
+        &prism(&[ellipse(10.0, 6.0)], &Frame::world(), 4.0, 10.0),
+        BoolOp::Union,
+        &[],
+    )
+    .expect("boss")
+    .remove(0);
+    // The ellipses' perimeters, 40 E(0.64) and 24 E(0.75), for the rounds' areas.
+    let (l1, l2) = (51.053_997_726_796_254, 29.065_344_661_643_028);
+    let round_area = |r: f64, l: f64| (PI / 2.0 - 2.0) * r * l + (PI - 3.0) * PI * r * r;
+    let cases = [
+        // fillet/elliptic-cylinder-rim, chamfer/elliptic-cylinder-rim.
+        ("cylinder rim round", &cylinder, 8.0, Blend::Fillet(2.0), 1_466.548_831_454_315_4, None),
+        ("cylinder rim chamfer", &cylinder, 8.0, Blend::Chamfer(2.0), 1_414.234_058_679_081, None),
+        // fillet/elliptic-hole-rim, chamfer/elliptic-hole-rim.
+        (
+            "hole rim round",
+            &bored,
+            4.0,
+            Blend::Fillet(1.0),
+            2_167.266_667_040_222,
+            Some(1600.0 - 36.0 * PI + 4.0 * l2 + round_area(1.0, l2)),
+        ),
+        ("hole rim chamfer", &bored, 4.0, Blend::Chamfer(1.0), 2_158.225_459_059_516_7, None),
+        // fillet/elliptic-boss-root.
+        (
+            "boss root round",
+            &boss,
+            4.0,
+            Blend::Fillet(2.0),
+            5_977.207_966_448_124,
+            Some(2960.0 + 6.0 * l1 + round_area(2.0, l1)),
+        ),
+    ];
+    for (name, solid, z, blend, volume, area) in cases {
+        let rim = rim_ellipse(solid, z);
+        assert_eq!(rim.len(), 1, "{name}: the rim");
+        let out = crate::blend::blend_chain(solid, &rim, blend, 1).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(out.len(), 1, "{name}");
+        check::validate(&out[0]).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let m = mass::exact_properties(&out[0]).expect("measure");
+        assert!(((m.volume - volume) / volume).abs() < 1e-8, "{name}: volume {} against {volume}", m.volume);
+        if let Some(area) = area {
+            assert!(((m.area - area) / area).abs() < 1e-8, "{name}: area {} against {area}", m.area);
+        }
+    }
+}
+
+/// The elliptic edges of `s` at height `z`.
+fn rim_ellipse(s: &Solid, z: f64) -> Vec<(EdgeId, u32)> {
+    (0..s.edges.len() as u32)
+        .map(EdgeId)
+        .filter(|id| {
+            s.edge(*id).is_some_and(|e| {
+                matches!(e.curve, crate::geom::Curve::Ellipse { .. })
+                    && (e.curve.eval(e.t0).z - z).abs() < 1e-9
+            })
+        })
+        .map(|id| (id, 0))
+        .collect()
+}

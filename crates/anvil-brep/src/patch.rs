@@ -226,6 +226,21 @@ impl SplineSurface {
         out
     }
 
+    /// The knots inside the domain along the kernel's `v` (the other direction to
+    /// [`Self::u_breaks`]), in kernel parameters. Along `v` the layout runs the patch's
+    /// parameter backwards when the patch wraps along t.
+    pub fn v_breaks(&self) -> Vec<f64> {
+        let ((s0, s1), (t0, t1)) = self.domain();
+        let mut out: Vec<f64> = if self.wraps == Some(Wrap::T) {
+            self.knots_s.iter().filter(|k| **k > s0 && **k < s1).map(|k| -(k - s0) * self.scale.0).collect()
+        } else {
+            self.knots_t.iter().filter(|k| **k > t0 && **k < t1).map(|k| (k - t0) * self.scale.1).collect()
+        };
+        out.sort_by(f64::total_cmp);
+        out.dedup_by(|a, b| (*a - *b).abs() < 1e-12);
+        out
+    }
+
     pub fn period(&self) -> Option<f64> {
         let ((s0, s1), (t0, t1)) = self.domain();
         match self.wraps? {
@@ -286,13 +301,18 @@ impl SplineSurface {
     pub fn partials(&self, st: DVec2) -> (DVec3, DVec3) {
         let ((s0, s1), (t0, t1)) = self.domain();
         let (hs, ht) = ((s1 - s0) * 1e-6, (t1 - t0) * 1e-6);
-        let d = |a: DVec2, b: DVec2, h: f64| (self.eval_st(b) - self.eval_st(a)) / h;
-        // Within the domain, one-sided at its edges; past them, on the extrapolated patch.
-        let within = |x: f64, h: f64, lo: f64, hi: f64| {
-            if x < lo || x > hi { (x - h, x + h) } else { ((x - h).max(lo), (x + h).min(hi)) }
+        // Points across a closed direction's seam are taken round it, so differences there
+        // stay central (one-sided ones would tilt the tangents at the seam).
+        let d = |a: DVec2, b: DVec2, h: f64| {
+            (self.eval_st(self.keep_in_closed(b)) - self.eval_st(self.keep_in_closed(a))) / h
         };
-        let (sa, sb) = within(st.x, hs, s0, s1);
-        let (ta, tb) = within(st.y, ht, t0, t1);
+        // Within the domain, one-sided at its open edges; past them, on the extrapolated
+        // patch; round a closed direction, central.
+        let within = |x: f64, h: f64, lo: f64, hi: f64, closed: bool| {
+            if closed || x < lo || x > hi { (x - h, x + h) } else { ((x - h).max(lo), (x + h).min(hi)) }
+        };
+        let (sa, sb) = within(st.x, hs, s0, s1, self.closed.0);
+        let (ta, tb) = within(st.y, ht, t0, t1, self.closed.1);
         (
             d(DVec2::new(sa, st.y), DVec2::new(sb, st.y), (sb - sa).max(1e-300)),
             d(DVec2::new(st.x, ta), DVec2::new(st.x, tb), (tb - ta).max(1e-300)),
@@ -431,6 +451,16 @@ impl SplineSurface {
     }
 
     /// `st` brought into the domain: wrapped along a wrapping parameter, clamped otherwise.
+    /// `st` taken round a closed direction's seam into the domain, and left as it is along
+    /// an open one (where it may lie on the extrapolated patch).
+    fn keep_in_closed(&self, st: DVec2) -> DVec2 {
+        let ((s0, s1), (t0, t1)) = self.domain();
+        let wrap = |x: f64, lo: f64, hi: f64, closed: bool| {
+            if closed { lo + (x - lo).rem_euclid(hi - lo) } else { x }
+        };
+        DVec2::new(wrap(st.x, s0, s1, self.closed.0), wrap(st.y, t0, t1, self.closed.1))
+    }
+
     pub(crate) fn keep_in(&self, st: DVec2) -> DVec2 {
         let ((s0, s1), (t0, t1)) = self.domain();
         let fit = |x: f64, lo: f64, hi: f64, wraps: bool| {
@@ -466,13 +496,23 @@ impl SplineSurface {
                     break;
                 }
             }
-            // Halve the step until it helps.
+            // Halve the step until it helps. Near the answer the distance changes only to
+            // second order, below its rounding while the parameters are still off by about
+            // 1e-8; a step that leaves the distance as it is but brings the first-order
+            // condition (the gradient, `a . f` and `b . f`) closer to zero helps too.
+            let gradient = |st: DVec2| {
+                let f = self.eval_st(st) - p;
+                let (a, b) = self.partials(st);
+                DVec2::new(a.dot(f), b.dot(f)).length()
+            };
+            let g0 = DVec2::new(g1, g2).length();
             let mut k = 1.0;
             let mut moved = false;
             while k > 1e-6 {
                 let next = self.keep_in(st - step * k);
                 let e = (self.eval_st(next) - p).length_squared();
-                if e < err {
+                // (The gradient is tried for the full step only: it costs the partials.)
+                if e < err || (k == 1.0 && e <= err * (1.0 + 1e-12) + 1e-30 && gradient(next) < 0.5 * g0) {
                     moved = (next - st).length() > 1e-15 * (s1 - s0 + t1 - t0);
                     st = next;
                     err = e;
