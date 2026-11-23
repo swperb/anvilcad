@@ -182,6 +182,10 @@ fn seg_point(s: &Segment, f: f64) -> DVec2 {
         Segment::Arc { center, radius, start, sweep } => {
             center + DVec2::from_angle(start + sweep * f) * radius
         }
+        // Lofts refuse ellipses (see `lines_and_arcs_only`); its parameter fraction.
+        Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+            Segment::Ellipse { center, a, b, rotation, start: start + sweep * f, sweep: 0.0 }.start()
+        }
     }
 }
 
@@ -191,6 +195,9 @@ fn seg_piece(s: &Segment, g0: f64, g1: f64) -> Segment {
         Segment::Line { .. } => Segment::Line { a: seg_point(s, g0), b: seg_point(s, g1) },
         Segment::Arc { center, radius, start, sweep } => {
             Segment::Arc { center, radius, start: start + sweep * g0, sweep: sweep * (g1 - g0) }
+        }
+        Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+            Segment::Ellipse { center, a, b, rotation, start: start + sweep * g0, sweep: sweep * (g1 - g0) }
         }
     }
 }
@@ -231,6 +238,14 @@ fn centroid2(l: &Loop2) -> DVec2 {
                 let e = start + sweep;
                 mx += 0.5 * (fx(e) - fx(start));
                 my += 0.5 * (fy(e) - fy(start));
+            }
+            // Lofts refuse ellipses; its chords, for completeness.
+            Segment::Ellipse { .. } => {
+                for w in s.sample(1e-6, 0.01).windows(2) {
+                    let (a, d) = (w[0], w[1] - w[0]);
+                    mx += 0.5 * d.y * (a.x * a.x + a.x * d.x + d.x * d.x / 3.0);
+                    my -= 0.5 * d.x * (a.y * a.y + a.y * d.y + d.y * d.y / 3.0);
+                }
             }
         }
     }
@@ -300,7 +315,7 @@ fn start_nearest(r: &Ring, target: DVec3) -> Loop2 {
                 let d = DVec2::new(l.x, l.y) - center;
                 if d.length() < tol::LINEAR { 0.0 } else { d.to_angle() }
             }
-            Segment::Line { .. } => 0.0,
+            Segment::Line { .. } | Segment::Ellipse { .. } => 0.0,
         };
         return circle_from(&r.outline, theta);
     }
@@ -380,6 +395,11 @@ fn match_inner(a: &Section, b: &Section, picks: [Option<DVec3>; 2]) -> Result<Ma
     if picks.iter().flatten().any(|p| !tol::is_finite3(*p)) {
         return Err(KernelError::NonFinite);
     }
+    let outlines = [a, b].into_iter().filter_map(|s| match s {
+        Section::Loop { outline, .. } => Some(outline),
+        Section::Point(_) => None,
+    });
+    crate::profile::lines_and_arcs_only(outlines, "lofting")?;
     let (mut pa, mut pb) = (prepare(a)?, prepare(b)?);
     if matches!((&pa, &pb), (Prep::Point(_), Prep::Point(_))) {
         return invalid("a loft needs at least one closed section");
@@ -500,7 +520,7 @@ impl Arc3 {
                 start,
                 sweep,
             }),
-            Segment::Line { .. } => None,
+            Segment::Line { .. } | Segment::Ellipse { .. } => None,
         }
     }
 
@@ -544,7 +564,7 @@ fn flat_plane(pts: &[DVec3]) -> Result<Option<Surface>> {
     Ok(Some(Surface::Plane { frame: Frame::new(o, normal, hint)? }))
 }
 
-fn bezier_knots(degree: usize, spans: usize) -> Vec<f64> {
+pub(crate) fn bezier_knots(degree: usize, spans: usize) -> Vec<f64> {
     let mut k = vec![0.0; degree + 1];
     for j in 1..spans {
         k.extend(std::iter::repeat_n(j as f64 / spans as f64, degree));
@@ -555,7 +575,13 @@ fn bezier_knots(degree: usize, spans: usize) -> Vec<f64> {
 
 /// A ruled patch from two rows of control points over the same knots: `s` along the
 /// rows, `t` from row `a` (0) to row `b` (1).
-fn ruled_patch(degree: usize, knots: Vec<f64>, a: &[DVec3], b: &[DVec3], weights: &[f64]) -> Result<Surface> {
+pub(crate) fn ruled_patch(
+    degree: usize,
+    knots: Vec<f64>,
+    a: &[DVec3],
+    b: &[DVec3],
+    weights: &[f64],
+) -> Result<Surface> {
     let m = a.len();
     let mut points = Vec::with_capacity(2 * m);
     let mut w = Vec::with_capacity(if weights.is_empty() { 0 } else { 2 * m });
@@ -572,7 +598,7 @@ fn ruled_patch(degree: usize, knots: Vec<f64>, a: &[DVec3], b: &[DVec3], weights
 }
 
 /// Number of rational quadratic pieces for an arc (each at most a quarter turn).
-fn quarter_pieces(sweep: f64) -> usize {
+pub(crate) fn quarter_pieces(sweep: f64) -> usize {
     ((sweep.abs() / FRAC_PI_2) - 1e-9).ceil().max(1.0) as usize
 }
 
@@ -595,7 +621,9 @@ fn rational_row(arc: &Arc3, k: usize) -> (Vec<DVec3>, Vec<f64>) {
 fn quintic_spans(s: &Segment) -> usize {
     match *s {
         Segment::Line { .. } => 1,
-        Segment::Arc { sweep, .. } => (sweep.abs() / QUINTIC_STEP).ceil().max(1.0) as usize,
+        Segment::Arc { sweep, .. } | Segment::Ellipse { sweep, .. } => {
+            (sweep.abs() / QUINTIC_STEP).ceil().max(1.0) as usize
+        }
     }
 }
 
@@ -740,7 +768,7 @@ fn check_blend(m: &Matched) -> Result<()> {
                 .into_iter()
                 .flatten()
                 .map(|s| match *s {
-                    Segment::Arc { sweep, .. } => sweep.abs(),
+                    Segment::Arc { sweep, .. } | Segment::Ellipse { sweep, .. } => sweep.abs(),
                     Segment::Line { .. } => 0.0,
                 })
                 .fold(0.0, f64::max);

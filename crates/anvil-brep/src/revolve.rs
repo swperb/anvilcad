@@ -33,6 +33,7 @@ pub fn revolve(
     if !angle.is_finite() || angle.abs() < 1e-9 {
         return Err(KernelError::InvalidDistance);
     }
+    crate::profile::lines_and_arcs_only(std::iter::once(&region.outer).chain(&region.holes), "revolving")?;
     let d = axis_dir
         .try_normalize()
         .ok_or_else(|| KernelError::InvalidInput("the axis has no direction".into()))?;
@@ -303,6 +304,8 @@ fn segment_extremes(s: &Segment, d: DVec2) -> Vec<DVec2> {
 /// needs a boundary.
 fn meridian_segment(s: &Segment, to_q: &dyn Fn(DVec2) -> DVec2, full: bool, on_axis: f64) -> Vec<Segment> {
     match *s {
+        // Revolving refuses ellipses (see `lines_and_arcs_only`).
+        Segment::Ellipse { .. } => Vec::new(),
         Segment::Line { a, b } => vec![Segment::Line { a: to_q(a), b: to_q(b) }],
         Segment::Arc { center, radius, start, sweep } => {
             let c = to_q(center);
@@ -332,6 +335,7 @@ fn meridian_segment(s: &Segment, to_q: &dyn Fn(DVec2) -> DVec2, full: bool, on_a
 /// The middle of a segment and its unit direction of travel there.
 fn midpoint_and_tangent(s: &Segment) -> (DVec2, DVec2) {
     match *s {
+        Segment::Ellipse { .. } => (s.midpoint(), s.travel_at(0.5)),
         Segment::Line { a, b } => (0.5 * (a + b), (b - a).normalize_or_zero()),
         Segment::Arc { center, radius, start, sweep } => {
             let m = start + 0.5 * sweep;
@@ -361,6 +365,9 @@ fn side_surface(axis: &Frame, seg: &Segment, theta: f64, full: bool, on_axis: f6
     // The axis frame upside down (still right-handed), for surfaces opening downwards.
     let flipped = |h: f64| Frame { origin: axis.origin + axis.z * h, x: axis.x, y: -axis.y, z: -axis.z };
     match *seg {
+        Segment::Ellipse { .. } => {
+            Err(KernelError::Unsupported("revolving an ellipse is not supported yet".into()))
+        }
         Segment::Line { a, b } => {
             let (dh, dr) = (b.x - a.x, b.y - a.y);
             let len = (dh * dh + dr * dr).sqrt();

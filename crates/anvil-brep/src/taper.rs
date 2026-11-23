@@ -27,6 +27,7 @@ fn travel(s: &Segment, at_end: bool) -> DVec2 {
             let t = if at_end { start + sweep } else { start };
             DVec2::from_angle(t).perp() * sweep.signum()
         }
+        Segment::Ellipse { .. } => s.travel_at(if at_end { 1.0 } else { 0.0 }),
     }
 }
 
@@ -57,6 +58,10 @@ pub fn offset_loop(l: &Loop2, d: f64) -> Result<Loop2> {
                     return refuse("the draft closes an arc of the profile to a point");
                 }
                 Ok(Segment::Arc { center, radius: r, start, sweep })
+            }
+            // An ellipse moved sideways is not an ellipse.
+            Segment::Ellipse { .. } => {
+                refuse("drafting a profile with an ellipse in it is not supported yet")
             }
         })
         .collect::<Result<_>>()?;

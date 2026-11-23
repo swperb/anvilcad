@@ -4,6 +4,7 @@ use crate::geom::{Curve, Frame, Surface};
 use crate::profile::{Loop2, Region, Segment};
 use crate::topo::{Coedge, Edge, EdgeId, Face, FaceTag, Loop, Solid};
 use crate::{KernelError, Result, check, tol};
+use glam::{DVec2, DVec3};
 
 /// Extrudes `region` (in the 2D coordinates of `frame`) between the planes
 /// `z0` and `z1` measured along `frame.z`. The order of `z0` and `z1` does not
@@ -101,6 +102,7 @@ pub fn extrude(frame: &Frame, region: &Region, z0: f64, z1: f64) -> Result<Solid
                     Surface::Cylinder { frame: bottom.with_origin(bottom.to_world(center)), radius },
                     sweep < 0.0,
                 ),
+                Segment::Ellipse { .. } => elliptic_side(&bottom, seg, height)?,
             };
             solid.add_face(Face {
                 surface,
@@ -131,7 +133,53 @@ pub(crate) fn segment_curve(frame: &Frame, seg: &Segment) -> (Curve, f64, f64) {
         Segment::Arc { center, radius, start, sweep } => {
             (Curve::Circle { frame: frame.with_origin(frame.to_world(center)), radius }, start, start + sweep)
         }
+        Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+            let u = DVec2::from_angle(rotation);
+            let f = Frame {
+                origin: frame.to_world(center),
+                x: frame.x * u.x + frame.y * u.y,
+                y: frame.x * -u.y + frame.y * u.x,
+                z: frame.z,
+            };
+            (Curve::Ellipse { frame: f, a, b }, start, start + sweep)
+        }
     }
+}
+
+/// The side an elliptic arc in `bottom` sweeps when extruded `height` along its normal,
+/// and whether its natural normal points into the solid. There is no elliptic cylinder
+/// among the surfaces, so the side is the exact rational patch ruled between the arc at
+/// the bottom and at the top: the arc as a rational quadratic in pieces of at most a
+/// quarter turn (the circle's, carried over by the ellipse's affine map).
+fn elliptic_side(bottom: &Frame, seg: &Segment, height: f64) -> Result<(Surface, bool)> {
+    let Segment::Ellipse { center, a, b, rotation, start, sweep } = *seg else {
+        return Err(KernelError::InvalidInput("not an elliptic arc".into()));
+    };
+    let u = DVec2::from_angle(rotation);
+    let (ua, vb) = (u * a, u.perp() * b);
+    let at = |t: f64, scale: f64| bottom.to_world(center + (ua * t.cos() + vb * t.sin()) * scale);
+    let k = crate::loft::quarter_pieces(sweep);
+    let phi = sweep / k as f64;
+    let w = (0.5 * phi).cos();
+    let mut row = vec![at(start, 1.0)];
+    let mut weights = vec![1.0];
+    for j in 0..k {
+        let t0 = start + phi * j as f64;
+        // The middle point of a piece, off the curve where the end tangents meet: the
+        // circle's (cos, sin) of the middle angle over cos(phi / 2), mapped.
+        let m = t0 + 0.5 * phi;
+        row.push(bottom.to_world(center + (ua * m.cos() + vb * m.sin()) / w));
+        row.push(at(t0 + phi, 1.0));
+        weights.extend([w, 1.0]);
+    }
+    let top: Vec<DVec3> = row.iter().map(|p| *p + bottom.z * height).collect();
+    let surface = crate::loft::ruled_patch(2, crate::loft::bezier_knots(2, k), &row, &top, &weights)?;
+    // Material is to the left of travel, so outward is travel x the extrusion direction.
+    let mid = bottom.to_world(seg.midpoint()) + bottom.z * (0.5 * height);
+    let travel = seg.travel_at(0.5);
+    let outward = (bottom.x * travel.x + bottom.y * travel.y).cross(bottom.z);
+    let reversed = surface.normal_at(mid).dot(outward) < 0.0;
+    Ok((surface, reversed))
 }
 
 /// Extrudes every region of a profile, one solid per region.
@@ -169,6 +217,56 @@ mod tests {
         assert_eq!((s.vertices.len(), s.edges.len(), s.faces.len()), (8, 12, 6));
         assert_eq!(check::genus(&s).expect("valid"), 0);
         assert!((volume(&s) - 1000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ellipses_extrude_exactly() {
+        let measure = |s: &Solid| {
+            check::validate(s).expect("valid");
+            let m = mass::exact_properties(s).expect("measure");
+            (m.volume, m.area)
+        };
+        let rel = |x: f64, want: f64| ((x - want) / want).abs();
+        // brep-bench's geometry/elliptic-cylinder: semi-axes 5 and 3, 10 high. Volume
+        // 150 pi; area 30 pi + 200 E(16/25).
+        let ellipse = Loop2::new(vec![Segment::ellipse(DVec2::ZERO, 5.0, 3.0, 0.0)]);
+        let r = build_regions(&[ellipse]).expect("valid");
+        let s = extrude(&Frame::world(), &r[0], 0.0, 10.0).expect("extrudes");
+        assert_eq!(s.faces.len(), 3);
+        assert!(s.edges.iter().any(|e| matches!(e.curve, crate::geom::Curve::Ellipse { .. })));
+        let (v, a) = measure(&s);
+        assert!(rel(v, 150.0 * PI) < 1e-8 && rel(a, 349.517_768_241_675_07) < 1e-8, "{v} {a}");
+        // brep-bench's geometry/elliptic-hole: a block 24 x 16 x 8 with a hole of semi-axes 6
+        // and 3 through it. Volume 3072 - 144 pi; area 1408 - 36 pi + 192 E(3/4).
+        let hole = Loop2::new(vec![Segment::ellipse(DVec2::new(12.0, 8.0), 6.0, 3.0, 0.0)]);
+        let r = build_regions(&[rect(24.0, 16.0), hole]).expect("valid");
+        let s = extrude(&Frame::world(), &r[0], 0.0, 8.0).expect("extrudes");
+        let (v, a) = measure(&s);
+        assert!(rel(v, 3072.0 - 144.0 * PI) < 1e-8 && rel(a, 1_527.425_421_763_911_6) < 1e-8, "{v} {a}");
+        // Half an ellipse turned a little, closed by its axis: a D-shaped prism of volume
+        // 2 (15 pi / 2), its flat side 6 by 2.
+        let u = DVec2::from_angle(0.4);
+        let half = Loop2::new(vec![
+            Segment::Ellipse {
+                center: DVec2::ZERO,
+                a: 5.0,
+                b: 3.0,
+                rotation: 0.4,
+                start: -PI / 2.0,
+                sweep: PI,
+            },
+            Segment::Line { a: u.perp() * 3.0, b: -u.perp() * 3.0 },
+        ]);
+        let r = build_regions(&[half]).expect("valid");
+        let s = extrude(&Frame::world(), &r[0], 0.0, 2.0).expect("extrudes");
+        let (v, _) = measure(&s);
+        assert!(rel(v, 15.0 * PI) < 1e-8, "{v}");
+        // Operations that take only lines and arcs so far say so.
+        let ellipse = Loop2::new(vec![Segment::ellipse(DVec2::new(10.0, 0.0), 5.0, 3.0, 0.0)]);
+        let r = build_regions(&[ellipse]).expect("valid");
+        let err =
+            crate::revolve::revolve(&Frame::world(), &r[0], DVec2::ZERO, DVec2::Y, PI).expect_err("revolve");
+        assert!(matches!(err, crate::KernelError::Unsupported(_)), "{err}");
     }
 
     #[test]

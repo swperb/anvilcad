@@ -1,4 +1,4 @@
-//! Planar profiles: closed contours of lines and arcs in a 2D frame.
+//! Planar profiles: closed contours of lines, arcs and elliptic arcs in a 2D frame.
 //!
 //! [`build_regions`] is the gatekeeper between the sketcher and the solid
 //! modeller. It rejects open, degenerate and self-intersecting input, sorts
@@ -21,6 +21,18 @@ pub enum Segment {
     Arc {
         center: DVec2,
         radius: f64,
+        start: f64,
+        sweep: f64,
+    },
+    /// Elliptic arc: the point at parameter `t` is `center + u a cos t + v b sin t`, with
+    /// `u` the unit vector at angle `rotation` (the `a` axis) and `v` square to it, from
+    /// `t = start` sweeping `sweep` (positive is counter-clockwise). `|sweep| == TAU` is a
+    /// whole ellipse.
+    Ellipse {
+        center: DVec2,
+        a: f64,
+        b: f64,
+        rotation: f64,
         start: f64,
         sweep: f64,
     },
@@ -50,10 +62,31 @@ impl Segment {
         Some(Segment::Arc { center, radius, start, sweep })
     }
 
+    /// A whole ellipse with semi-axes `a` along the direction at angle `rotation` and `b`
+    /// square to it, run counter-clockwise from the end of its `a` axis.
+    pub fn ellipse(center: DVec2, a: f64, b: f64, rotation: f64) -> Self {
+        Segment::Ellipse { center, a, b, rotation, start: 0.0, sweep: TAU }
+    }
+
+    /// An elliptic arc's axes, scaled: `(u a, v b)`.
+    fn ellipse_axes(a: f64, b: f64, rotation: f64) -> (DVec2, DVec2) {
+        let u = DVec2::from_angle(rotation);
+        (u * a, u.perp() * b)
+    }
+
+    /// The point at parameter `t` of an ellipse.
+    fn ellipse_at(center: DVec2, a: f64, b: f64, rotation: f64, t: f64) -> DVec2 {
+        let (ua, vb) = Self::ellipse_axes(a, b, rotation);
+        center + ua * t.cos() + vb * t.sin()
+    }
+
     pub fn start(&self) -> DVec2 {
         match *self {
             Segment::Line { a, .. } => a,
             Segment::Arc { center, radius, start, .. } => center + DVec2::from_angle(start) * radius,
+            Segment::Ellipse { center, a, b, rotation, start, .. } => {
+                Self::ellipse_at(center, a, b, rotation, start)
+            }
         }
     }
 
@@ -62,6 +95,9 @@ impl Segment {
             Segment::Line { b, .. } => b,
             Segment::Arc { center, radius, start, sweep } => {
                 center + DVec2::from_angle(start + sweep) * radius
+            }
+            Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+                Self::ellipse_at(center, a, b, rotation, start + sweep)
             }
         }
     }
@@ -72,6 +108,9 @@ impl Segment {
             Segment::Arc { center, radius, start, sweep } => {
                 center + DVec2::from_angle(start + sweep * 0.5) * radius
             }
+            Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+                Self::ellipse_at(center, a, b, rotation, start + sweep * 0.5)
+            }
         }
     }
 
@@ -79,6 +118,31 @@ impl Segment {
         match *self {
             Segment::Line { a, b } => (b - a).length(),
             Segment::Arc { radius, sweep, .. } => radius * sweep.abs(),
+            Segment::Ellipse { a, b, start, sweep, .. } => {
+                // The speed is sqrt(a^2 sin^2 t + b^2 cos^2 t): Simpson's rule over enough
+                // steps to be exact to well below the linear tolerance.
+                let n = 512;
+                let f = |t: f64| (a * a * t.sin().powi(2) + b * b * t.cos().powi(2)).sqrt();
+                let h = sweep / n as f64;
+                let mut sum = f(start) + f(start + sweep);
+                for i in 1..n {
+                    sum += f(start + h * i as f64) * if i % 2 == 1 { 4.0 } else { 2.0 };
+                }
+                (sum * h / 3.0).abs()
+            }
+        }
+    }
+
+    /// The unit direction of travel at the fraction `f` of the way along (by parameter).
+    pub fn travel_at(&self, f: f64) -> DVec2 {
+        match *self {
+            Segment::Line { a, b } => (b - a).normalize_or_zero(),
+            Segment::Arc { start, sweep, .. } => DVec2::from_angle(start + sweep * f).perp() * sweep.signum(),
+            Segment::Ellipse { a, b, rotation, start, sweep, .. } => {
+                let (ua, vb) = Self::ellipse_axes(a, b, rotation);
+                let t = start + sweep * f;
+                ((vb * t.cos() - ua * t.sin()) * sweep.signum()).normalize_or_zero()
+            }
         }
     }
 
@@ -86,11 +150,22 @@ impl Segment {
         matches!(*self, Segment::Arc { sweep, .. } if sweep.abs() >= TAU - 1e-12)
     }
 
+    /// A whole circle or a whole ellipse: a segment that closes on itself.
+    pub fn is_closed(&self) -> bool {
+        match *self {
+            Segment::Line { .. } => false,
+            Segment::Arc { sweep, .. } | Segment::Ellipse { sweep, .. } => sweep.abs() >= TAU - 1e-12,
+        }
+    }
+
     pub fn reversed(&self) -> Self {
         match *self {
             Segment::Line { a, b } => Segment::Line { a: b, b: a },
             Segment::Arc { center, radius, start, sweep } => {
                 Segment::Arc { center, radius, start: start + sweep, sweep: -sweep }
+            }
+            Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+                Segment::Ellipse { center, a, b, rotation, start: start + sweep, sweep: -sweep }
             }
         }
     }
@@ -100,6 +175,9 @@ impl Segment {
             Segment::Line { a, b } => tol::is_finite2(a) && tol::is_finite2(b),
             Segment::Arc { center, radius, start, sweep } => {
                 tol::is_finite2(center) && radius.is_finite() && start.is_finite() && sweep.is_finite()
+            }
+            Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+                tol::is_finite2(center) && [a, b, rotation, start, sweep].iter().all(|x| x.is_finite())
             }
         }
     }
@@ -111,6 +189,14 @@ impl Segment {
             Segment::Arc { center: c, radius: r, start: s, sweep: w } => {
                 let e = s + w;
                 r * r * w + r * (c.x * (e.sin() - s.sin()) - c.y * (e.cos() - s.cos()))
+            }
+            Segment::Ellipse { center: c, a, b, rotation, start: s, sweep: w } => {
+                // P = c + A cos t + B sin t: P x P' = c x (B cos t - A sin t) + A x B.
+                let (ua, vb) = Self::ellipse_axes(a, b, rotation);
+                let e = s + w;
+                c.perp_dot(ua) * (e.cos() - s.cos())
+                    + c.perp_dot(vb) * (e.sin() - s.sin())
+                    + ua.perp_dot(vb) * w
             }
         }
     }
@@ -132,12 +218,29 @@ impl Segment {
                     })
                     .collect()
             }
+            Segment::Ellipse { center, a, b, rotation, start, sweep } => {
+                // Even steps in the parameter, as many as the tightest bend (radius
+                // b^2 / a at the ends of the long axis, travelled at speed b there... and at
+                // speed a where it is flattest) needs: a circle of the short radius swept at
+                // the long one's pace bounds both the chord and the turn.
+                let (lo, hi) = (a.min(b), a.max(b));
+                let n = crate::geom::arc_steps(lo * lo / hi, sweep.abs() * hi / lo, chord, max_angle);
+                (0..=n)
+                    .map(|i| {
+                        if i == n {
+                            self.end()
+                        } else {
+                            Self::ellipse_at(center, a, b, rotation, start + sweep * i as f64 / n as f64)
+                        }
+                    })
+                    .collect()
+            }
         }
     }
 
     fn angle_on_arc(&self, theta: f64) -> bool {
         match *self {
-            Segment::Line { .. } => false,
+            Segment::Line { .. } | Segment::Ellipse { .. } => false,
             Segment::Arc { radius, start, sweep, .. } => {
                 let eps = tol::LINEAR / radius.max(tol::LINEAR);
                 let d = if sweep >= 0.0 {
@@ -224,6 +327,17 @@ impl Region {
     }
 }
 
+/// Refuses loops with elliptic segments, for operations that take only lines and arcs
+/// so far (`what` names the operation).
+pub(crate) fn lines_and_arcs_only<'a>(loops: impl IntoIterator<Item = &'a Loop2>, what: &str) -> Result<()> {
+    if loops.into_iter().flat_map(|l| &l.segments).any(|s| matches!(s, Segment::Ellipse { .. })) {
+        return Err(KernelError::Unsupported(format!(
+            "{what} a profile with an ellipse in it is not supported yet; only extruding one is"
+        )));
+    }
+    Ok(())
+}
+
 /// Validates closed contours and groups them into regions.
 pub fn build_regions(loops: &[Loop2]) -> Result<Vec<Region>> {
     if loops.is_empty() {
@@ -295,13 +409,18 @@ fn validate_loop(li: usize, l: &Loop2) -> Result<()> {
         {
             return Err(KernelError::DegenerateSegment { contour: li, segment: si });
         }
+        if let Segment::Ellipse { a, b, .. } = s
+            && a.min(*b) < tol::LINEAR
+        {
+            return Err(KernelError::DegenerateSegment { contour: li, segment: si });
+        }
         let next = &l.segments[(si + 1) % l.segments.len()];
         let gap = (s.end() - next.start()).length();
         if gap > tol::LINEAR {
             return Err(KernelError::OpenLoop { contour: li, segment: si, gap });
         }
     }
-    if l.segments.len() > 1 && l.segments.iter().any(Segment::is_full_circle) {
+    if l.segments.len() > 1 && l.segments.iter().any(Segment::is_closed) {
         return Err(KernelError::SelfIntersection { point: l.segments[0].start() });
     }
     Ok(())
@@ -354,6 +473,12 @@ fn bbox(s: &Segment) -> (DVec2, DVec2) {
     match *s {
         Segment::Line { a, b } => (a.min(b), a.max(b)),
         Segment::Arc { center, radius, .. } => (center - DVec2::splat(radius), center + DVec2::splat(radius)),
+        Segment::Ellipse { center, a, b, rotation, .. } => {
+            // The whole ellipse's box: half-widths sqrt((a ux)^2 + (b vx)^2) and so on.
+            let (ua, vb) = Segment::ellipse_axes(a, b, rotation);
+            let half = DVec2::new(ua.x.hypot(vb.x), ua.y.hypot(vb.y));
+            (center - half, center + half)
+        }
     }
 }
 
@@ -362,11 +487,38 @@ fn bbox(s: &Segment) -> (DVec2, DVec2) {
 /// the caller as a point that is not a shared vertex.
 pub fn intersect(a: &Segment, b: &Segment) -> Vec<DVec2> {
     match (a, b) {
+        (Segment::Ellipse { .. }, _) | (_, Segment::Ellipse { .. }) => with_ellipse(a, b),
         (Segment::Line { a: p0, b: p1 }, Segment::Line { a: q0, b: q1 }) => line_line(*p0, *p1, *q0, *q1),
         (Segment::Line { a: p0, b: p1 }, arc @ Segment::Arc { .. })
         | (arc @ Segment::Arc { .. }, Segment::Line { a: p0, b: p1 }) => line_arc(*p0, *p1, arc),
         (Segment::Arc { .. }, Segment::Arc { .. }) => arc_arc(a, b),
     }
+}
+
+/// Intersections where either segment is elliptic: each ellipse as a fine polyline (its
+/// points within 1e-7 of the curve), crossed piece by piece with the other segment. This
+/// serves to reject loops that cross, where the points need to be found to within the
+/// tolerance at which a shared vertex is allowed, not exactly.
+fn with_ellipse(a: &Segment, b: &Segment) -> Vec<DVec2> {
+    let pieces = |s: &Segment| -> Vec<Segment> {
+        match s {
+            Segment::Ellipse { .. } => {
+                s.sample(1e-7, 0.05).windows(2).map(|w| Segment::Line { a: w[0], b: w[1] }).collect()
+            }
+            other => vec![*other],
+        }
+    };
+    let mut out: Vec<DVec2> = Vec::new();
+    for pa in pieces(a) {
+        for pb in pieces(b) {
+            for p in intersect(&pa, &pb) {
+                if !out.iter().any(|q| (*q - p).length() < 1e-6) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
 }
 
 fn line_line(p0: DVec2, p1: DVec2, q0: DVec2, q1: DVec2) -> Vec<DVec2> {
@@ -520,6 +672,40 @@ mod tests {
     fn circle_area() {
         let c = Loop2::new(vec![Segment::circle(DVec2::new(3.0, -1.0), 2.0)]);
         assert!((c.signed_area() - PI * 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ellipse_measures() {
+        // Semi-axes 5 and 3, turned a quarter: area 15 pi, perimeter 20 E(16/25).
+        let e = Segment::ellipse(DVec2::new(1.0, 2.0), 5.0, 3.0, PI / 2.0);
+        assert!(e.is_closed() && !e.is_full_circle());
+        assert!((e.length() - 25.526_998_863_398_127).abs() < 1e-9);
+        assert!((e.start() - DVec2::new(1.0, 7.0)).length() < 1e-12);
+        assert!((e.midpoint() - DVec2::new(1.0, -3.0)).length() < 1e-12);
+        // Running counter-clockwise from the end of its long axis, it heads in -x.
+        assert!((e.travel_at(0.0) - DVec2::new(-1.0, 0.0)).length() < 1e-12);
+        let l = Loop2::new(vec![e]);
+        assert!((l.signed_area() - 15.0 * PI).abs() < 1e-9);
+        assert!((l.reversed().signed_area() + 15.0 * PI).abs() < 1e-9);
+        // Half of it closed by its long axis: the D-shape of area 15 pi / 2.
+        let half = Loop2::new(vec![
+            Segment::Ellipse {
+                center: DVec2::ZERO,
+                a: 5.0,
+                b: 3.0,
+                rotation: 0.0,
+                start: -PI / 2.0,
+                sweep: PI,
+            },
+            Segment::Line { a: DVec2::new(0.0, 3.0), b: DVec2::new(0.0, -3.0) },
+        ]);
+        assert!((half.signed_area() - 7.5 * PI).abs() < 1e-9);
+        // An elliptic hole in a plate, and one that runs out of it, crossing its side.
+        let hole = Loop2::new(vec![Segment::ellipse(DVec2::new(5.0, 5.0), 4.0, 2.0, 0.3)]);
+        let r = build_regions(&[rect(0.0, 0.0, 10.0, 10.0), hole]).expect("plate");
+        assert!((r[0].area() - (100.0 - 8.0 * PI)).abs() < 1e-9);
+        let out = Loop2::new(vec![Segment::ellipse(DVec2::new(9.0, 5.0), 4.0, 2.0, 0.0)]);
+        assert!(build_regions(&[rect(0.0, 0.0, 10.0, 10.0), out]).is_err());
     }
 
     #[test]
