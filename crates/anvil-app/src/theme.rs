@@ -944,11 +944,15 @@ fn button_info(resp: &Response, label: &str, selected: Option<bool>) {
 
 /// A command-bar button: an icon with its name under it. `selected` is `Some` for tools
 /// that stay on (sketch tools), and the widget then reports itself as a toggle.
+///
+/// In a command bar too narrow for every label (see [`command_bar`]) it shows only its
+/// icon, and its name as a tooltip.
 pub fn command_button(ui: &mut Ui, icon: Icon, label: &str, selected: Option<bool>) -> Response {
     let p = Palette::of(ui);
     let font = FontId::proportional(11.5);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, p.text);
-    let width = (galley.size().x + 14.0).max(52.0);
+    let compact = compact_commands(ui);
+    let width = if compact { 40.0 } else { (galley.size().x + 14.0).max(52.0) };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 54.0), Sense::click());
     button_info(&resp, label, selected);
     if ui.is_rect_visible(rect) {
@@ -971,12 +975,67 @@ pub fn command_button(ui: &mut Ui, icon: Icon, label: &str, selected: Option<boo
             );
         }
         let ink = if resp.enabled() { p.text } else { p.text_weak };
-        let icon_rect =
-            Rect::from_center_size(Pos2::new(rect.center().x, rect.top() + 18.0), Vec2::splat(22.0));
+        let icon_y = if compact { rect.center().y } else { rect.top() + 18.0 };
+        let icon_rect = Rect::from_center_size(Pos2::new(rect.center().x, icon_y), Vec2::splat(22.0));
         paint_icon(painter, icon_rect, icon, ink, p.accent);
-        painter.galley(Pos2::new(rect.center().x - galley.size().x / 2.0, rect.bottom() - 18.0), galley, ink);
+        if !compact {
+            painter.galley(
+                Pos2::new(rect.center().x - galley.size().x / 2.0, rect.bottom() - 18.0),
+                galley,
+                ink,
+            );
+        }
     }
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if compact {
+        resp.on_hover_text(label)
+    } else {
+        resp
+    }
+}
+
+/// The memory key of the flag [`command_bar`] sets while its buttons show icons only.
+fn compact_id() -> egui::Id {
+    egui::Id::new("anvilcad-command-bar-compact")
+}
+
+fn compact_commands(ui: &Ui) -> bool {
+    ui.data(|d| d.get_temp::<bool>(compact_id())).unwrap_or(false)
+}
+
+/// A row of command groups that fits the window: with every label where they fit, with
+/// icons only (names in tooltips) where they do not, and scrolling sideways if even that is
+/// too wide. `key` names what the row holds (a tab, a mode), since each has its own width.
+///
+/// The width the row takes with labels is remembered from the last frame it was drawn
+/// with them, so it goes back to labels as soon as the window is wide enough again.
+pub fn command_bar(ui: &mut Ui, key: impl std::hash::Hash, add: impl FnOnce(&mut Ui)) {
+    let id = egui::Id::new(("anvilcad-command-bar-width", key));
+    let full: Option<f32> = ui.data(|d| d.get_temp(id));
+    let compact = full.is_some_and(|w| w > ui.available_width());
+    ui.data_mut(|d| d.insert_temp(compact_id(), compact));
+    let width = egui::ScrollArea::horizontal()
+        .id_salt(id)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.set_min_height(62.0);
+                add(ui);
+            })
+            .response
+            .rect
+            .width()
+        })
+        .inner;
+    ui.data_mut(|d| d.insert_temp(compact_id(), false));
+    if !compact {
+        let fits = width <= ui.available_width() + 0.5;
+        ui.data_mut(|d| d.insert_temp(id, width));
+        if !fits {
+            // Drawn with labels but too wide: draw again, compact, before anyone sees it.
+            ui.ctx().request_discard("the command bar is too wide for its labels");
+        }
+    }
 }
 
 /// A compact icon-only button with a tooltip, for the view toolbar and header.
@@ -1003,9 +1062,13 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, selected: Op
 /// painted, not a widget, so it never clashes with a command's label in the harness.
 pub fn command_group(ui: &mut Ui, caption: &str, add: impl FnOnce(&mut Ui)) {
     let p = Palette::of(ui);
+    let caption_width =
+        ui.painter().layout_no_wrap(caption.to_uppercase(), FontId::proportional(9.5), p.text_weak).size().x;
     let r = ui
         .vertical(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
+            // At least as wide as its caption, which a group of one icon-only button is not.
+            ui.set_min_width(caption_width + 6.0);
             ui.horizontal(add);
             ui.add_space(14.0);
         })
