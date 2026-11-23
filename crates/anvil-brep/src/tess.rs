@@ -382,6 +382,38 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
                     }));
                 }
                 pts
+            } else if let Surface::Sphere { frame, radius } = face.surface {
+                // On a sphere, rings of equal angle about the layout's middle, each with as
+                // many points as its circumference needs, mapped into the layout. Its
+                // parameters stretch away from the middle (a band round the equator
+                // reaches out to many times the radius), and a grid over them would need
+                // far more points than the face to keep its spacing on the sphere.
+                let reach = loops3
+                    .iter()
+                    .flatten()
+                    .map(|p| (*p - frame.origin).normalize_or_zero().dot(frame.z).clamp(-1.0, 1.0).acos())
+                    .fold(0.0, f64::max);
+                // At 0.7 of the step the rings keep each triangle's sag well inside the
+                // chord (a whole ball comes out closer to its volume than the grid did).
+                let mut step = 0.7 * step_angle;
+                let count = |step: f64| (TAU / step) * (reach / step);
+                while count(step) > 200_000.0 {
+                    step *= 1.25;
+                }
+                let rings = (reach / step).ceil() as usize;
+                let mut pts = vec![face.surface.uv(frame.origin + frame.z * radius)];
+                for k in 1..rings {
+                    let phi = step * k as f64;
+                    let n = ((TAU * phi.sin() / step).ceil() as usize).max(6);
+                    // Stagger alternate rings so triangles between them are not slivers.
+                    let shift = if k % 2 == 0 { 0.5 } else { 0.0 };
+                    pts.extend((0..n).map(|j| {
+                        let a = TAU * (j as f64 + shift) / n as f64;
+                        let d = (frame.x * a.cos() + frame.y * a.sin()) * phi.sin() + frame.z * phi.cos();
+                        face.surface.uv(frame.origin + d * radius)
+                    }));
+                }
+                pts
             } else {
                 (1..nu)
                     .flat_map(|i| {

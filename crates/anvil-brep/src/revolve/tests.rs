@@ -242,3 +242,40 @@ fn revolved_bodies_in_booleans() {
     assert!(close(fine(&i) + fine(&d), whole, 1e-3), "{} + {}", fine(&i), fine(&d));
     assert!(close(fine(&i), 0.5 * whole, 1e-3), "{}", fine(&i));
 }
+
+#[test]
+fn sphere_band_measures_true() {
+    // A ball of 5 bored through by 2: the band of the sphere between the bore's rims holds
+    // a point near wherever its layout is projected from, so its parameters stretch to
+    // many times the radius. Tessellated on a grid over them, it came out 3e-4 small at
+    // any fineness (the grid hit its point budget and widened). Ball less the bore and
+    // its two caps: 4 pi 125 / 3 - pi 4 2h - 2 pi (5 - h)^2 (15 - (5 - h)) / 3, h = sqrt 21.
+    let h = 21f64.sqrt();
+    let b = (h / 5.0).asin();
+    let band = Loop2::new(vec![
+        Segment::Arc { center: DVec2::ZERO, radius: 5.0, start: -b, sweep: 2.0 * b },
+        Segment::Line { a: DVec2::new(2.0, h), b: DVec2::new(2.0, -h) },
+    ]);
+    let s = turn(&region(&[band]), 2.0 * PI);
+    let want = 4.0 * PI * 125.0 / 3.0 - PI * 8.0 * h - 2.0 * PI * (5.0 - h).powi(2) * (10.0 + h) / 3.0;
+    let v = volume(&s);
+    assert!(close(v, want, 1e-4), "{v} vs {want}");
+    // A whole ball, too, and within the display tolerance at the default settings.
+    let ball = Loop2::new(vec![
+        Segment::Arc { center: DVec2::ZERO, radius: 5.0, start: -0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(0.0, 5.0), b: DVec2::new(0.0, -5.0) },
+    ]);
+    let ball = turn(&region(&[ball]), 2.0 * PI);
+    assert!(close(volume(&ball), 4.0 * PI * 125.0 / 3.0, 1e-4));
+    let m = tess::tessellate(&ball, &tess::TessParams::default()).expect("tess");
+    let sag = m
+        .triangles
+        .iter()
+        .map(|t| {
+            5.0 - ((m.positions[t[0] as usize] + m.positions[t[1] as usize] + m.positions[t[2] as usize])
+                / 3.0)
+                .length()
+        })
+        .fold(0.0, f64::max);
+    assert!(sag <= crate::tol::CHORD, "{sag}");
+}
