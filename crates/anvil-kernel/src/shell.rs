@@ -129,6 +129,10 @@ pub fn shell(solid: &Solid, remove: &[FaceId], thickness: f64, feature: u32) -> 
     // Cavity: same topology, moved vertices, split into triangles so faces stay planar.
     let index_of: HashMap<FaceId, u32> = ids.iter().enumerate().map(|(i, id)| (*id, 2 + i as u32)).collect();
     let mut cavity = Vec::new();
+    // Offset triangles that turned over, which means the offset surface crossed itself,
+    // split by whether they come from a curved face (issue #173: a wall simply thicker than
+    // the part turns flat faces over too, and is not a curved region's fault).
+    let (mut flipped_curved, mut flipped_flat) = (false, false);
     for p in &solid.polygons {
         let tag = FaceTag {
             id: FaceId { feature, index: index_of[&p.tag.id] },
@@ -141,14 +145,23 @@ pub fn shell(solid: &Solid, remove: &[FaceId], thickness: f64, feature: u32) -> 
         let vs: Vec<Vec3> = p.verts.iter().map(|&v| v + moved[&key(v)]).collect();
         for i in 1..vs.len().saturating_sub(1) {
             if let Some(t) = Polygon::new(vec![vs[0], vs[i], vs[i + 1]], tag) {
-                // An offset triangle that turned over means the offset surface crossed
-                // itself; the result would be wrong, so refuse.
                 if t.normal.dot(p.normal) < 0.0 && t.area() > 1e-9 {
-                    return Err(ShellError::FoldsOver);
+                    if p.tag.surface == SurfaceKind::Plane {
+                        flipped_flat = true;
+                    } else {
+                        flipped_curved = true;
+                    }
                 }
                 cavity.push(t);
             }
         }
+    }
+    // The result would be wrong, so refuse, blaming a curved region only when one folded.
+    if flipped_curved {
+        return Err(ShellError::FoldsOver);
+    }
+    if flipped_flat {
+        return Err(ShellError::TooThick);
     }
     let cavity = Solid::new(cavity);
     let (v_body, v_cav) = (solid.mass_properties().volume, cavity.mass_properties().volume);
@@ -221,7 +234,35 @@ mod tests {
     #[test]
     fn too_thick() {
         let b = block(v3(0.0, 0.0, 0.0), v3(10.0, 10.0, 2.0), 1).unwrap();
-        assert!(matches!(shell(&b, &[], 1.5, 7), Err(ShellError::TooThick | ShellError::FoldsOver)));
+        assert_eq!(shell(&b, &[], 1.5, 7).err(), Some(ShellError::TooThick));
+    }
+
+    /// Issue #173: a plain box with a wall thicker than the box is too thick; there is no
+    /// curved region to blame. A box with rounded edges and a wall thicker than the rounds
+    /// does fold over.
+    #[test]
+    fn too_thick_and_folds_over_are_told_apart() {
+        let b = block(v3(0.0, 0.0, 0.0), v3(40.0, 30.0, 20.0), 1).unwrap();
+        let top = FaceId { feature: 1, index: 1 };
+        assert_eq!(shell(&b, &[top], 25.0, 7).err(), Some(ShellError::TooThick));
+        // Its four upright edges rounded with radius 2, then a 3 mm wall.
+        let upright = (2..6).map(|i| {
+            crate::solid::EdgeRef::new(
+                FaceId { feature: 1, index: i },
+                FaceId { feature: 1, index: 2 + (i - 1) % 4 },
+            )
+        });
+        let rounded = crate::blend::blend_edges(
+            &b,
+            &upright.collect::<Vec<_>>(),
+            crate::blend::EdgeTreatment::Fillet { radius: 2.0 },
+            5,
+        )
+        .unwrap();
+        assert_eq!(shell(&rounded, &[top], 3.0, 7).err(), Some(ShellError::FoldsOver));
+        // A wall well inside the rounds is fine. (The faceted rounds fold from about 1 mm,
+        // before a true R2 curve would; the exact kernel shells them properly.)
+        assert!(shell(&rounded, &[top], 0.5, 7).is_ok());
     }
 }
 

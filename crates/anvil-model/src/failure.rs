@@ -551,6 +551,8 @@ mod tests {
         let id = doc
             .add_feature(FeatureKind::Shell(ShellFeature { remove: vec![top], thickness: Dim::Value(25.0) }));
         let e = failed(&mut doc, id);
-        assert!(e.suggestion.contains("thinner"), "{e}");
+        // Too thick for the part, not a curved region's fault: the block has none (#173).
+        assert_eq!(e.cause, "the wall thickness is too large for this part");
+        assert_eq!(e.suggestion, "Try a thinner wall.");
     }
 }
