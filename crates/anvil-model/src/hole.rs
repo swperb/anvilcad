@@ -765,7 +765,7 @@ mod tests {
         let (mut doc, _, sk) = block_with_points(&[]);
         let id = doc.add_feature(FeatureKind::Hole(simple(sk, 6.0, HoleEnd::ThroughAll, 0.0)));
         let st = doc.rebuild();
-        assert!(st.errors[&id].contains("no points"));
+        assert!(st.errors[&id].cause.contains("no points"));
         assert!((st.body.mass_properties().volume - BLOCK).abs() < 1e-6);
     }
 

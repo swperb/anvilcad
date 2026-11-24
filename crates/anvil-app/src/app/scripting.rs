@@ -313,7 +313,7 @@ impl AnvilApp {
                     "kind": kind_name(&f.kind),
                     "suppressed": f.suppressed,
                     "rolled_back": self.doc.rollback.is_some_and(|r| i >= r),
-                    "error": self.state.errors.get(&f.id),
+                    "error": self.state.errors.get(&f.id).map(|e| e.message()),
                     "dimensions": dims,
                 })
             })

@@ -14,6 +14,7 @@ pub mod document;
 pub mod equations;
 pub mod exact;
 mod extrude;
+pub mod failure;
 pub mod hole;
 pub mod kernel;
 pub mod loft;
@@ -37,6 +38,7 @@ pub use bodies::{
 };
 pub use config::{ConfigError, ConfigParam, ConfigValue, Configuration, ConfiguredParam, DimSlot};
 pub use document::*;
+pub use failure::{Cause, FeatureError};
 pub use hole::{HoleEnd, HoleFeature, HoleKind, HoleSize, Sink};
 pub use loft::LoftFeature;
 pub use material::{Material, MaterialClass};
@@ -1013,7 +1015,7 @@ mod fillet_profiles {
         let (mut doc, id) = block(FilletProfile::ConicRho { rho: Dim::Value(0.3) });
         let st = doc.rebuild();
         let err = st.errors.get(&id).expect("error");
-        assert!(err.contains("rho"), "{err}");
+        assert!(err.cause.contains("rho"), "{err}");
     }
 
     #[test]

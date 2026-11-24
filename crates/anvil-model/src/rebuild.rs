@@ -31,8 +31,8 @@ pub struct BuildState {
     /// Placement of every sketch and reference plane, keyed by feature id.
     pub frames: HashMap<u32, Frame>,
     pub sketch_status: HashMap<u32, SolveResult>,
-    /// Rebuild errors keyed by feature id.
-    pub errors: HashMap<u32, String>,
+    /// Why each failed feature failed, keyed by feature id.
+    pub errors: HashMap<u32, crate::failure::FeatureError>,
     pub variables: BTreeMap<String, f64>,
     pub variable_errors: BTreeMap<String, String>,
     /// The tool body each solid feature contributed, used by patterns.
@@ -284,14 +284,15 @@ impl Document {
                 continue;
             }
             let id = self.features[i].id;
-            if let Err(e) = self.rebuild_feature(i, &mut st) {
-                st.errors.insert(id, e);
+            if let Err(cause) = self.rebuild_feature(i, &mut st) {
+                let f = &self.features[i];
+                st.errors.insert(id, crate::failure::explain(&f.name, &f.kind, cause));
             }
         }
         st
     }
 
-    fn rebuild_feature(&mut self, i: usize, st: &mut BuildState) -> Result<(), String> {
+    fn rebuild_feature(&mut self, i: usize, st: &mut BuildState) -> Result<(), crate::failure::Cause> {
         let id = self.features[i].id;
         let kind = self.features[i].kind.clone();
         let num = |d: &Dim, what: &str| -> Result<f64, String> {
@@ -451,10 +452,11 @@ impl Document {
                     return Ok(());
                 }
                 if f.profile != FilletProfile::Circular {
-                    return Err(st.needs_exact(id, &format!("{} fillets", f.profile.label().to_lowercase())));
+                    return Err(st
+                        .needs_exact(id, &format!("{} fillets", f.profile.label().to_lowercase()))
+                        .into());
                 }
-                st.body = blend_edges(&st.body, &f.edges, EdgeTreatment::Fillet { radius }, id)
-                    .map_err(|e| e.to_string())?;
+                st.body = blend_edges(&st.body, &f.edges, EdgeTreatment::Fillet { radius }, id)?;
             }
             FeatureKind::Chamfer(c) => {
                 use kernel::Blend;
@@ -472,15 +474,16 @@ impl Document {
                     return Ok(());
                 }
                 if c.kind != ChamferKind::EqualDistance {
-                    return Err(st.needs_exact(id, &format!("{} chamfers", c.kind.label().to_lowercase())));
+                    return Err(st
+                        .needs_exact(id, &format!("{} chamfers", c.kind.label().to_lowercase()))
+                        .into());
                 }
-                st.body = blend_edges(&st.body, &c.edges, EdgeTreatment::Chamfer { distance }, id)
-                    .map_err(|e| e.to_string())?;
+                st.body = blend_edges(&st.body, &c.edges, EdgeTreatment::Chamfer { distance }, id)?;
             }
             FeatureKind::Shell(s) => {
                 let thickness = num(&s.thickness, "thickness")?;
                 if !st.exact_step(id, |bodies| EXACT.shell(bodies, &s.remove, thickness, id)) {
-                    st.body = shell(&st.body, &s.remove, thickness, id).map_err(|e| e.to_string())?;
+                    st.body = shell(&st.body, &s.remove, thickness, id)?;
                 }
             }
             FeatureKind::Hole(h) => self.rebuild_hole(id, &h, st)?,

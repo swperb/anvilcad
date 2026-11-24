@@ -264,7 +264,11 @@ impl Document {
     }
 
     /// Plans an extrusion: its regions and pieces.
-    pub(crate) fn plan_extrude(&self, ef: &ExtrudeFeature, st: &BuildState) -> Result<Plan, String> {
+    pub(crate) fn plan_extrude(
+        &self,
+        ef: &ExtrudeFeature,
+        st: &BuildState,
+    ) -> Result<Plan, crate::failure::Cause> {
         let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
         let sf = self.sketch(ef.sketch).ok_or("the sketch this feature uses is missing")?;
         let sketch_frame =
@@ -294,9 +298,12 @@ impl Document {
             None => match sf.sketch.profiles() {
                 Ok(p) => p,
                 Err(anvil_sketch::ProfileError::OpenContour { .. }) => {
-                    return Err("open profile: use a thin feature".into());
+                    return Err(crate::failure::Cause::told(
+                        "its sketch's outline is open, so it encloses no area to extrude",
+                        "Close the outline so every end meets another, or turn on Thin feature to extrude the open curves as a wall.",
+                    ));
                 }
-                Err(e) => return Err(e.to_string()),
+                Err(e) => return Err(e.to_string().into()),
             },
         };
 
@@ -412,8 +419,8 @@ fn trim_box(t: &Trim, near: Vec3, reach: f64) -> (Frame, Profile, f64, f64) {
 
 impl Plan {
     /// The extruded tool on the faceted kernel.
-    pub(crate) fn faceted(&self, id: u32) -> Result<Solid, String> {
-        let e = |r: anvil_kernel::build::BuildError| r.to_string();
+    pub(crate) fn faceted(&self, id: u32) -> Result<Solid, crate::failure::Cause> {
+        let e = crate::failure::Cause::Build;
         let mut tool: Option<Solid> = None;
         for p in &self.pieces {
             let mut s = match &self.capped {
@@ -904,7 +911,10 @@ mod tests {
         let (mut doc, s) = l_doc();
         let e = extrude(&mut doc, s, blind(10.0));
         let st = doc.rebuild();
-        assert!(st.errors.get(&e).is_some_and(|m| m.contains("thin")));
+        assert!(st
+            .errors
+            .get(&e)
+            .is_some_and(|m| m.cause.contains("open") && m.suggestion.contains("Thin feature")));
     }
 
     #[test]
