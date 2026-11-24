@@ -1700,7 +1700,7 @@ impl SketchSession {
                 Color32::from_rgb(240, 170, 60)
             } else if conflicted.contains(&e) {
                 Color32::from_rgb(220, 30, 30)
-            } else if self.status.converged && self.status.dof == 0 {
+            } else if self.status.fully_defined() {
                 Color32::from_rgb(20, 20, 20)
             } else {
                 Color32::from_rgb(20, 60, 230)

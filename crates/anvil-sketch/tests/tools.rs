@@ -915,3 +915,30 @@ fn offset_dimension_is_drawn_between_the_lines() {
     let g = anvil_sketch::dimension::graphic(&s, &c, at);
     assert_eq!(g.arrows.len(), 2);
 }
+
+// Issue #150: a result the solver never produced must not read as over defined.
+#[test]
+fn status_text_tells_not_solved_from_fully_defined_from_conflicting() {
+    use anvil_sketch::SolveResult;
+    let none = SolveResult::default();
+    assert!(!none.solved && !none.failed() && !none.fully_defined());
+    assert_eq!(none.status_text(), "Not solved yet");
+
+    let (mut s, l, c) = rect();
+    s.add_constraint(Constraint::Fix { p: c[0], x: 0.0, y: 0.0 });
+    s.add_constraint(Constraint::Length { line: l[0], value: 40.0 });
+    let under = s.solve();
+    assert!(under.solved && under.converged && !under.fully_defined(), "{under:?}");
+    assert_eq!(under.status_text(), "Under defined (1 DOF)");
+
+    s.add_constraint(Constraint::Length { line: l[1], value: 20.0 });
+    let full = s.solve();
+    assert!(full.fully_defined(), "{full:?}");
+    assert_eq!(full.status_text(), "Fully defined");
+
+    // The top of a rectangle must match its bottom: asking for 30 conflicts with 40.
+    s.add_constraint(Constraint::Length { line: l[2], value: 30.0 });
+    let over = s.solve();
+    assert!(over.failed() && !over.unsatisfied.is_empty(), "{over:?}");
+    assert!(over.status_text().starts_with("Over defined / unsolvable ("), "{}", over.status_text());
+}

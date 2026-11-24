@@ -2686,9 +2686,11 @@ impl AnvilApp {
         };
         let pal = Palette::of(ui);
         panel_title(ui, Icon::Sketch, &name);
-        let color = if !s.status.converged {
+        let color = if !s.status.solved {
+            pal.text_weak
+        } else if s.status.failed() {
             pal.error
-        } else if s.status.dof == 0 {
+        } else if s.status.fully_defined() {
             pal.text
         } else {
             pal.select
