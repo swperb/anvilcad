@@ -7,6 +7,8 @@
 //! like any revolve.
 
 use crate::document::Dim;
+use crate::failure::Cause;
+use crate::refgeom::{num_text as n, value};
 use anvil_kernel::{v2, Vec2};
 use anvil_sketch::{Geom, Sketch, ORIGIN};
 use serde::{Deserialize, Serialize};
@@ -237,16 +239,15 @@ impl HoleFeature {
     }
 
     /// Resolves every dimension and checks the hole is a shape that can be made.
-    pub fn resolve(&self, vars: &BTreeMap<String, f64>) -> Result<HoleSection, String> {
-        let num =
-            |d: &Dim, what: &str| -> Result<f64, String> { d.eval(vars).map_err(|e| format!("{what}: {e}")) };
-        let sink = |s: &Sink, what: &str| -> Result<(f64, f64), String> {
+    pub fn resolve(&self, vars: &BTreeMap<String, f64>) -> Result<HoleSection, Cause> {
+        let num = |d: &Dim, what: &str| value(d, vars, what);
+        let sink = |s: &Sink, what: &str| -> Result<(f64, f64), Cause> {
             Ok((num(&s.diameter, &format!("{what} diameter"))?, num(&s.angle, &format!("{what} angle"))?))
         };
         let mut sec = HoleSection {
-            diameter: num(&self.diameter, "diameter")?,
+            diameter: num(&self.diameter, "hole diameter")?,
             depth: match self.end {
-                HoleEnd::Blind => Some(num(&self.depth, "depth")?),
+                HoleEnd::Blind => Some(num(&self.depth, "hole depth")?),
                 HoleEnd::ThroughAll => None,
             },
             drill_angle: match (&self.drill_angle, self.end) {
@@ -266,17 +267,34 @@ impl HoleFeature {
             HoleKind::Tapped { major, pitch, thread_depth } => {
                 let (m, p, t) = (
                     num(major, "thread diameter")?,
-                    num(pitch, "pitch")?,
+                    num(pitch, "thread pitch")?,
                     num(thread_depth, "thread depth")?,
                 );
                 if !wider(m, sec.diameter) {
-                    return Err("the thread diameter must be larger than the tap drill".into());
+                    return Err(Cause::told(
+                        format!(
+                            "the thread diameter ({} mm) must be larger than the tap drill ({} mm)",
+                            n(m),
+                            n(sec.diameter)
+                        ),
+                        "Make the thread diameter larger than the hole's, or pick a standard size.",
+                    ));
                 }
                 if !wider(p, 0.0) || !wider(t, 0.0) {
-                    return Err("the thread pitch and depth must be positive".into());
+                    return Err(Cause::told(
+                        format!(
+                            "the thread pitch ({} mm) and depth ({} mm) must both be greater than zero",
+                            n(p),
+                            n(t)
+                        ),
+                        "Give the thread a pitch and a depth above 0.",
+                    ));
                 }
-                if sec.depth.is_some_and(|d| t > d + 1e-9) {
-                    return Err("the thread cannot be deeper than the hole".into());
+                if let Some(d) = sec.depth.filter(|d| t > d + 1e-9) {
+                    return Err(Cause::told(
+                        format!("the thread ({} mm deep) cannot be deeper than the hole ({} mm)", n(t), n(d)),
+                        "Make the thread shallower or the hole deeper.",
+                    ));
                 }
             }
         }
@@ -304,51 +322,91 @@ pub struct HoleSection {
 }
 
 impl HoleSection {
-    fn check(&self) -> Result<(), String> {
+    fn check(&self) -> Result<(), Cause> {
         let positive = |v: f64| v.is_finite() && v > 0.0;
         if !positive(self.diameter) {
-            return Err("the hole diameter must be positive".into());
+            return Err(Cause::told(
+                format!("the hole diameter ({} mm) must be greater than zero", n(self.diameter)),
+                "Give the hole a diameter above 0.",
+            ));
         }
         if let Some(d) = self.depth {
             if !positive(d) {
-                return Err("the hole depth must be positive".into());
+                return Err(Cause::told(
+                    format!("the hole depth ({} mm) must be greater than zero", n(d)),
+                    "Give the hole a depth above 0, or make it Through All.",
+                ));
             }
         }
         if let Some(a) = self.drill_angle {
             if !(a > 0.0 && a < 180.0) {
-                return Err("the drill point angle must be between 0 and 180 degrees".into());
+                return Err(Cause::told(
+                    format!("the drill point angle ({} degrees) must be between 0 and 180 degrees", n(a)),
+                    "Use 118 degrees for a standard twist drill, or turn off Drill point for a flat bottom.",
+                ));
             }
         }
         let mut bore = self.diameter;
         let mut top = 0.0;
         if let Some((d, h)) = self.counterbore {
             if !wider(d, self.diameter) {
-                return Err("the counterbore must be wider than the hole".into());
+                return Err(Cause::told(
+                    format!(
+                        "the counterbore ({} mm) must be wider than the hole ({} mm)",
+                        n(d),
+                        n(self.diameter)
+                    ),
+                    "Make the counterbore diameter larger than the hole's.",
+                ));
             }
             if !positive(h) {
-                return Err("the counterbore depth must be positive".into());
+                return Err(Cause::told(
+                    format!("the counterbore depth ({} mm) must be greater than zero", n(h)),
+                    "Give the counterbore a depth above 0.",
+                ));
             }
-            if self.depth.is_some_and(|depth| h >= depth) {
-                return Err("the counterbore must be shallower than the hole".into());
+            if let Some(depth) = self.depth.filter(|&depth| h >= depth) {
+                return Err(Cause::told(
+                    format!(
+                        "the counterbore ({} mm deep) must be shallower than the hole ({} mm)",
+                        n(h),
+                        n(depth)
+                    ),
+                    "Make the counterbore shallower or the hole deeper.",
+                ));
             }
             bore = d;
             top = h;
         }
         if let Some((d, a)) = self.sink {
             if !(a > 0.0 && a < 180.0) {
-                return Err("the countersink angle must be between 0 and 180 degrees".into());
+                return Err(Cause::told(
+                    format!("the countersink angle ({} degrees) must be between 0 and 180 degrees", n(a)),
+                    "Use 90 degrees for ISO metric flat head screws, or 82 degrees for inch ones.",
+                ));
             }
+            let opens = if self.counterbore.is_some() { "counterbore" } else { "hole" };
             if !wider(d, bore) {
-                return Err("the countersink must be wider than the bore it opens".into());
+                return Err(Cause::told(
+                    format!(
+                        "the countersink ({} mm) must be wider than the {opens} it opens ({} mm)",
+                        n(d),
+                        n(bore)
+                    ),
+                    format!("Make the countersink diameter larger than the {opens}'s."),
+                ));
             }
             let sink_depth = 0.5 * (d - bore) / (0.5 * a).to_radians().tan();
             let floor = if self.counterbore.is_some() { top } else { self.depth.unwrap_or(f64::INFINITY) };
             if sink_depth >= floor {
-                return Err(if self.counterbore.is_some() {
-                    "the countersink is deeper than the counterbore".into()
-                } else {
-                    "the countersink is deeper than the hole".into()
-                });
+                return Err(Cause::told(
+                    format!(
+                        "the countersink ({} mm deep) is deeper than the {opens} ({} mm)",
+                        n(sink_depth),
+                        n(floor)
+                    ),
+                    format!("Make the countersink diameter smaller or its angle wider, or make the {opens} deeper."),
+                ));
             }
         }
         Ok(())
@@ -738,35 +796,169 @@ mod tests {
         assert!((sec.volume(20.0) - expected).abs() < 1e-9);
     }
 
+    /// Every hole that cannot be made says why, with its sizes, and what to change; the
+    /// block is left whole.
     #[test]
-    fn impossible_holes_are_errors() {
-        let vars = BTreeMap::new();
-        let mut h = simple(0, 6.0, HoleEnd::Blind, 10.0);
-        h.kind = HoleKind::Counterbore { diameter: Dim::Value(5.0), depth: Dim::Value(3.0) };
-        assert_eq!(h.resolve(&vars).err().as_deref(), Some("the counterbore must be wider than the hole"));
-        h.kind = HoleKind::Counterbore { diameter: Dim::Value(10.0), depth: Dim::Value(12.0) };
-        assert_eq!(
-            h.resolve(&vars).err().as_deref(),
-            Some("the counterbore must be shallower than the hole")
-        );
-        h.kind = HoleKind::Countersink(Sink { diameter: Dim::Value(40.0), angle: Dim::Value(90.0) });
-        assert_eq!(h.resolve(&vars).err().as_deref(), Some("the countersink is deeper than the hole"));
-        h.kind = HoleKind::Tapped {
-            major: Dim::Value(8.0),
-            pitch: Dim::Value(1.25),
-            thread_depth: Dim::Value(11.0),
-        };
-        assert_eq!(h.resolve(&vars).err().as_deref(), Some("the thread cannot be deeper than the hole"));
-        h.kind = HoleKind::Simple;
-        h.diameter = Dim::Value(-1.0);
-        assert_eq!(h.resolve(&vars).err().as_deref(), Some("the hole diameter must be positive"));
+    fn impossible_holes_say_what_to_change() {
+        let v = Dim::Value;
+        let sink = |d: f64, a: f64| Sink { diameter: Dim::Value(d), angle: Dim::Value(a) };
+        let blind = |sk: u32| simple(sk, 6.0, HoleEnd::Blind, 10.0);
+        type Make = Box<dyn Fn(u32) -> HoleFeature>;
+        let cases: Vec<(Make, &str, &str)> = vec![
+            (
+                Box::new(move |sk| HoleFeature { diameter: v(-1.0), ..blind(sk) }),
+                "the hole diameter (-1 mm) must be greater than zero",
+                "Give the hole a diameter above 0.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature { diameter: Dim::Expr("dd".into()), ..blind(sk) }),
+                "the hole diameter cannot be worked out: unknown variable 'dd'",
+                "Edit the hole diameter and fix its equation, or define the variables it uses in Equations.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature { depth: v(0.0), ..blind(sk) }),
+                "the hole depth (0 mm) must be greater than zero",
+                "Give the hole a depth above 0, or make it Through All.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature { drill_angle: Some(v(180.0)), ..blind(sk) }),
+                "the drill point angle (180 degrees) must be between 0 and 180 degrees",
+                "Use 118 degrees for a standard twist drill, or turn off Drill point for a flat bottom.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Counterbore { diameter: v(5.0), depth: v(3.0) },
+                    ..blind(sk)
+                }),
+                "the counterbore (5 mm) must be wider than the hole (6 mm)",
+                "Make the counterbore diameter larger than the hole's.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Counterbore { diameter: v(10.0), depth: v(0.0) },
+                    ..blind(sk)
+                }),
+                "the counterbore depth (0 mm) must be greater than zero",
+                "Give the counterbore a depth above 0.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Counterbore { diameter: v(10.0), depth: v(12.0) },
+                    ..blind(sk)
+                }),
+                "the counterbore (12 mm deep) must be shallower than the hole (10 mm)",
+                "Make the counterbore shallower or the hole deeper.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature { kind: HoleKind::Countersink(sink(12.0, 0.0)), ..blind(sk) }),
+                "the countersink angle (0 degrees) must be between 0 and 180 degrees",
+                "Use 90 degrees for ISO metric flat head screws, or 82 degrees for inch ones.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature { kind: HoleKind::Countersink(sink(5.0, 90.0)), ..blind(sk) }),
+                "the countersink (5 mm) must be wider than the hole it opens (6 mm)",
+                "Make the countersink diameter larger than the hole's.",
+            ),
+            (
+                // At 90 degrees the cone drops (40 - 6) / 2 = 17 mm, past the 10 mm hole.
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Countersink(sink(40.0, 90.0)),
+                    ..blind(sk)
+                }),
+                "the countersink (17 mm deep) is deeper than the hole (10 mm)",
+                "Make the countersink diameter smaller or its angle wider, or make the hole deeper.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Counterbore { diameter: v(11.0), depth: v(6.5) },
+                    near_sink: Some(sink(10.0, 90.0)),
+                    ..blind(sk)
+                }),
+                "the countersink (10 mm) must be wider than the counterbore it opens (11 mm)",
+                "Make the countersink diameter larger than the counterbore's.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Counterbore { diameter: v(11.0), depth: v(3.0) },
+                    near_sink: Some(sink(20.0, 90.0)),
+                    ..blind(sk)
+                }),
+                "the countersink (4.5 mm deep) is deeper than the counterbore (3 mm)",
+                "Make the countersink diameter smaller or its angle wider, or make the counterbore deeper.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Tapped { major: v(5.0), pitch: v(0.8), thread_depth: v(8.0) },
+                    ..blind(sk)
+                }),
+                "the thread diameter (5 mm) must be larger than the tap drill (6 mm)",
+                "Make the thread diameter larger than the hole's, or pick a standard size.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Tapped { major: v(8.0), pitch: v(0.0), thread_depth: v(8.0) },
+                    ..blind(sk)
+                }),
+                "the thread pitch (0 mm) and depth (8 mm) must both be greater than zero",
+                "Give the thread a pitch and a depth above 0.",
+            ),
+            (
+                Box::new(move |sk| HoleFeature {
+                    kind: HoleKind::Tapped { major: v(8.0), pitch: v(1.25), thread_depth: v(11.0) },
+                    ..blind(sk)
+                }),
+                "the thread (11 mm deep) cannot be deeper than the hole (10 mm)",
+                "Make the thread shallower or the hole deeper.",
+            ),
+        ];
+        for (make, cause, suggestion) in cases {
+            let (mut doc, _, sk) = block_with_points(&[(0.0, 0.0)]);
+            let id = doc.add_feature(FeatureKind::Hole(make(sk)));
+            assert_eq!(crate::refgeom::failure_of(&mut doc, id), (cause.to_string(), suggestion.to_string()));
+            assert!((doc.rebuild().body.mass_properties().volume - BLOCK).abs() < 1e-6, "{cause}");
+        }
+    }
 
+    /// A hole with nowhere to go, or nothing to cut, says so.
+    #[test]
+    fn misplaced_holes_say_where_to_put_them() {
+        let told = |c: &str, s: &str| (c.to_string(), s.to_string());
         // No points to drill at: the feature fails and the block stays whole.
         let (mut doc, _, sk) = block_with_points(&[]);
         let id = doc.add_feature(FeatureKind::Hole(simple(sk, 6.0, HoleEnd::ThroughAll, 0.0)));
-        let st = doc.rebuild();
-        assert!(st.errors[&id].cause.contains("no points"));
-        assert!((st.body.mass_properties().volume - BLOCK).abs() < 1e-6);
+        assert_eq!(
+            crate::refgeom::failure_of(&mut doc, id),
+            told(
+                "the sketch has no points to place holes at",
+                "Add sketch points where the holes go, on the face."
+            )
+        );
+        assert!((doc.rebuild().body.mass_properties().volume - BLOCK).abs() < 1e-6);
+
+        // Its sketch suppressed.
+        let (mut doc, _, sk) = block_with_points(&[(0.0, 0.0)]);
+        let id = doc.add_feature(FeatureKind::Hole(simple(sk, 6.0, HoleEnd::ThroughAll, 0.0)));
+        if let Some(f) = doc.feature_mut(sk) {
+            f.suppressed = true;
+        }
+        assert_eq!(
+            crate::refgeom::failure_of(&mut doc, id),
+            told(
+                "the sketch that places the holes failed, is suppressed or is missing",
+                "Fix or unsuppress that sketch, or edit the hole and place it again."
+            )
+        );
+
+        // Nothing to cut yet.
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        sf.sketch.add_point(v2(5.0, 5.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let id = doc.add_feature(FeatureKind::Hole(simple(sk, 6.0, HoleEnd::ThroughAll, 0.0)));
+        assert_eq!(
+            crate::refgeom::failure_of(&mut doc, id),
+            told("there is no body to cut", "Move the hole after a feature that makes a body.")
+        );
     }
 
     #[test]

@@ -511,16 +511,34 @@ impl Document {
 
     /// Cuts one hole at each free point of the hole's sketch. Each hole is its section
     /// turned about the hole's axis; see `docs/re/hole-wizard.md`.
-    fn rebuild_hole(&self, id: u32, h: &crate::hole::HoleFeature, st: &mut BuildState) -> Result<(), String> {
-        let sf = self.sketch(h.sketch).ok_or("the sketch this feature uses is missing")?;
-        let frame = self.sketch_profiles_frame(h.sketch, st)?;
+    fn rebuild_hole(
+        &self,
+        id: u32,
+        h: &crate::hole::HoleFeature,
+        st: &mut BuildState,
+    ) -> Result<(), crate::failure::Cause> {
+        use crate::failure::Cause;
+        let lost = || {
+            Cause::told(
+                "the sketch that places the holes failed, is suppressed or is missing",
+                "Fix or unsuppress that sketch, or edit the hole and place it again.",
+            )
+        };
+        let sf = self.sketch(h.sketch).ok_or_else(lost)?;
+        let frame = self.sketch_profiles_frame(h.sketch, st).map_err(|_| lost())?;
         let centers = crate::hole::positions(&sf.sketch);
         if centers.is_empty() {
-            return Err("the sketch has no points to place holes at; add sketch points".into());
+            return Err(Cause::told(
+                "the sketch has no points to place holes at",
+                "Add sketch points where the holes go, on the face.",
+            ));
         }
         let section = h.resolve(&st.variables)?;
         if st.body.is_empty() {
-            return Err("there is no body to cut".into());
+            return Err(Cause::told(
+                "there is no body to cut",
+                "Move the hole after a feature that makes a body.",
+            ));
         }
         let b = st.body.bounds();
         let through = b.diagonal() + (b.center() - frame.origin).length() + 1.0;
@@ -538,7 +556,7 @@ impl Document {
 
         let mut faceted = Vec::new();
         for &c in &centers {
-            faceted.push(revolve(&profiles, &place(c), axis.0, axis.1, full, id).map_err(|e| e.to_string())?);
+            faceted.push(revolve(&profiles, &place(c), axis.0, axis.1, full, id)?);
         }
         let mut exact_tools = Vec::new();
         let done = st.exact_step(id, |bodies| {
