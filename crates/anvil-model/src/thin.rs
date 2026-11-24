@@ -37,7 +37,7 @@ pub struct Chain {
 /// Every chain of the sketch's non-construction curves. An open chain runs from the
 /// loose end of its lowest-numbered curve; a closed one runs counter-clockwise. Errors
 /// if three or more curves meet at a point.
-pub fn chains(sk: &Sketch) -> Result<Vec<Chain>, String> {
+pub fn chains(sk: &Sketch) -> Result<Vec<Chain>, crate::failure::Cause> {
     // Group points that coincide, by relation or by position.
     let n = sk.points.len();
     let mut root: Vec<usize> = (0..n).collect();
@@ -97,7 +97,10 @@ pub fn chains(sk: &Sketch) -> Result<Vec<Chain>, String> {
     }
     if let Some((_, list)) = at.iter().find(|(_, l)| l.len() > 2) {
         let e = edges[list[0]].0;
-        return Err(format!("three or more curves meet at a point of sketch curve {}", e + 1));
+        return Err(crate::failure::Cause::told(
+            format!("three or more curves of its sketch meet at one point (an end of sketch curve {})", e + 1),
+            "Edit the sketch so the curves form chains, each end meeting at most one other curve, or make the extra curves construction geometry.",
+        ));
     }
     let mut used = vec![false; edges.len()];
     // Open chains first, each from the loose end of its lowest curve.
@@ -194,7 +197,10 @@ fn sides(w: &ThinWall, closed: bool, t1: f64, t2: f64) -> (f64, f64) {
 
 /// Rounds the corners between lines of an open chain. `radius_for(turns_left)` gives
 /// the chain's own radius at a corner that turns left (true) or right.
-fn round_corners(segs: &[Seg2], radius_for: impl Fn(bool) -> f64) -> Result<Vec<Seg2>, String> {
+fn round_corners(
+    segs: &[Seg2],
+    radius_for: impl Fn(bool) -> f64,
+) -> Result<Vec<Seg2>, crate::failure::Cause> {
     let mut out: Vec<Seg2> = Vec::new();
     let mut cur = segs.first().copied().ok_or("an empty chain")?;
     for (k, next) in segs.iter().skip(1).enumerate() {
@@ -214,7 +220,10 @@ fn round_corners(segs: &[Seg2], radius_for: impl Fn(bool) -> f64) -> Result<Vec<
         let half = 0.5 * (-u.dot(w)).clamp(-1.0, 1.0).acos();
         let setback = rad / half.tan();
         if setback >= a.distance(b) - 1e-9 || setback >= b.distance(nb) - 1e-9 {
-            return Err("the corner round does not fit on the sketch lines".into());
+            return Err(crate::failure::Cause::told(
+                "a rounded corner does not fit on the sketch lines next to it",
+                "Give Round corners a smaller Inside radius, or turn it off.",
+            ));
         }
         let p = b - u * setback;
         let q = b + w * setback;
@@ -238,9 +247,12 @@ pub fn wall_profiles(
     t1: f64,
     t2: f64,
     fillet: Option<f64>,
-) -> Result<Vec<Profile>, String> {
+) -> Result<Vec<Profile>, crate::failure::Cause> {
     if t1 <= 0.0 || (w.kind == ThinKind::TwoDirection && t2 < 0.0) {
-        return Err("the wall thickness must be positive".into());
+        return Err(crate::failure::Cause::told(
+            "the wall thickness must be greater than zero",
+            "Give the thin wall a Thickness greater than 0.",
+        ));
     }
     let mut profiles = Vec::new();
     for (ci, chain) in chains(sk)?.into_iter().enumerate() {
@@ -252,8 +264,7 @@ pub fn wall_profiles(
             })?,
             _ => chain.segs.clone(),
         };
-        let loops = thin_wall(&segs, chain.closed, left, right, CAP_TAG + 2 * ci as u32, LEFT_TAG)
-            .map_err(|e| format!("thin wall: {e}"))?;
+        let loops = thin_wall(&segs, chain.closed, left, right, CAP_TAG + 2 * ci as u32, LEFT_TAG)?;
         let mut loops = loops.into_iter();
         let Some(first) = loops.next() else { continue };
         match loops.next() {
@@ -273,7 +284,10 @@ pub fn wall_profiles(
         }
     }
     if profiles.is_empty() {
-        return Err("the sketch has no curves to thicken".into());
+        return Err(crate::failure::Cause::told(
+            "its sketch has no curves to thicken into a wall",
+            "Add curves to the sketch, or make some of its construction geometry normal geometry.",
+        ));
     }
     Ok(profiles)
 }

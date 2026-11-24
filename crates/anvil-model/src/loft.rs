@@ -18,29 +18,54 @@ pub struct LoftFeature {
 
 impl Document {
     /// One loft section from a sketch: its one closed loop, or its one free point.
-    fn loft_section(&self, id: u32, st: &BuildState) -> Result<Section, String> {
-        let sf = self.sketch(id).ok_or("a profile's sketch is missing")?;
-        let f = *st.frames.get(&id).ok_or("a profile's sketch failed or is suppressed")?;
+    fn loft_section(&self, id: u32, st: &BuildState) -> Result<Section, crate::failure::Cause> {
+        let sf = self.sketch(id).ok_or_else(|| {
+            crate::failure::Cause::told(
+                "one of its profile sketches has been deleted",
+                "Edit the feature and pick the profiles again, or undo the deletion.",
+            )
+        })?;
+        let name = self.feature(id).map(|f| f.name.clone()).unwrap_or_default();
+        let f = *st.frames.get(&id).ok_or_else(|| {
+            crate::failure::Cause::told(
+                format!("its profile {name} failed or is suppressed"),
+                format!("Fix or unsuppress {name} first; a failed sketch is marked in the tree."),
+            )
+        })?;
         match sf.sketch.profiles() {
             Ok(p) => match p.as_slice() {
                 [one] if one.holes.is_empty() => {
                     Ok(Section::Loop { frame: exact::frame(&f), outline: exact::exact_loop(&one.outer) })
                 }
-                _ => Err("each loft profile must be one closed loop without holes".into()),
+                _ => Err(crate::failure::Cause::told(
+                    format!("its profile {name} is not one closed loop without holes"),
+                    format!("Edit {name} so it holds one closed outline and nothing else, or make the rest construction geometry."),
+                )),
             },
             Err(_) => match crate::hole::positions(&sf.sketch).as_slice() {
                 [p] => {
                     let w = f.to_world(*p);
                     Ok(Section::Point(glam::DVec3::new(w.x, w.y, w.z)))
                 }
-                _ => Err("each loft profile must be one closed loop or one point".into()),
+                _ => Err(crate::failure::Cause::told(
+                    format!("its profile {name} is neither one closed loop nor one point"),
+                    format!("Edit {name} so it holds one closed outline, or a single point for a pointed end."),
+                )),
             },
         }
     }
 
-    pub(crate) fn rebuild_loft(&self, id: u32, lf: &LoftFeature, st: &mut BuildState) -> Result<(), String> {
+    pub(crate) fn rebuild_loft(
+        &self,
+        id: u32,
+        lf: &LoftFeature,
+        st: &mut BuildState,
+    ) -> Result<(), crate::failure::Cause> {
         if lf.profiles.len() < 2 {
-            return Err("a loft needs two profiles".into());
+            return Err(crate::failure::Cause::told(
+                "a loft needs at least two profiles",
+                "Edit the feature and pick two or more profile sketches, in order.",
+            ));
         }
         if lf.profiles.len() > 2 {
             let sections =
@@ -52,10 +77,13 @@ impl Document {
             return Ok(());
         }
         let [a, b] = lf.profiles.as_slice() else {
-            return Err("a loft needs two profiles".into());
+            return Err(crate::failure::Cause::told(
+                "a loft needs at least two profiles",
+                "Edit the feature and pick two or more profile sketches, in order.",
+            ));
         };
         let (a, b) = (self.loft_section(*a, st)?, self.loft_section(*b, st)?);
-        let mut solid = brep::loft::loft_ruled(&a, &b, [None, None]).map_err(|e| e.to_string())?;
+        let mut solid = brep::loft::loft_ruled(&a, &b, [None, None])?;
         solid.set_owner(id);
         // The faceted tool is the exact one tessellated, so it is the same shape.
         let tool = exact::faceted(std::slice::from_ref(&solid))?;
@@ -75,11 +103,14 @@ impl Document {
 /// lined up with the first (start point and direction, as for a ruled loft) and sampled
 /// at the same fractions of its length; each run of matching points is joined by a
 /// Catmull-Rom curve through the sections, so equal sections give a straight prism.
-fn faceted_skin(sections: &[Section], id: u32) -> Result<anvil_kernel::Solid, String> {
+fn faceted_skin(sections: &[Section], id: u32) -> Result<anvil_kernel::Solid, crate::failure::Cause> {
     use anvil_kernel::{FaceId, FaceTag, Polygon, SurfaceKind, Vec3};
     let n = sections.len();
     if sections[1..n - 1].iter().any(|s| matches!(s, Section::Point(_))) {
-        return Err("only the first or last profile of a loft may be a point".into());
+        return Err(crate::failure::Cause::told(
+            "only its first or last profile may be a single point",
+            "Make the middle profiles closed outlines, or reorder the profiles so the point comes first or last.",
+        ));
     }
     let m = 128;
     let e = |k: anvil_brep::KernelError| k.to_string();

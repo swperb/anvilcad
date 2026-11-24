@@ -83,6 +83,33 @@ impl From<KernelError> for Cause {
     }
 }
 
+/// A length or angle for a message: up to three decimals, without trailing zeros.
+pub fn mm(x: f64) -> String {
+    let s = format!("{x:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" {
+        "0".into()
+    } else {
+        s.into()
+    }
+}
+
+/// The feature's sketch has been deleted.
+pub fn sketch_missing() -> Cause {
+    Cause::told(
+        "the sketch it uses has been deleted",
+        "Edit the feature and pick another sketch, or undo the deletion.",
+    )
+}
+
+/// The feature's sketch is in the tree but did not build, or is suppressed.
+pub fn sketch_failed() -> Cause {
+    Cause::told(
+        "the sketch it uses failed or is suppressed",
+        "Fix or unsuppress that sketch first; a failed one is marked in the tree.",
+    )
+}
+
 /// A failed feature, explained.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct FeatureError {

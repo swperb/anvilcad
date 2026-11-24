@@ -36,16 +36,23 @@ impl Document {
         st: &BuildState,
     ) -> Result<RevolvePlan, crate::failure::Cause> {
         let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
-        let sf = self.sketch(rf.sketch).ok_or("the sketch this feature uses is missing")?;
+        let sf = self.sketch(rf.sketch).ok_or_else(crate::failure::sketch_missing)?;
         let sk = &sf.sketch;
-        let frame =
-            *st.frames.get(&rf.sketch).ok_or("the sketch this feature uses failed or is suppressed")?;
+        let frame = *st.frames.get(&rf.sketch).ok_or_else(crate::failure::sketch_failed)?;
         let (a, b) = match sk.entities.get(rf.axis).map(|e| e.geom) {
             Some(Geom::Line { a, b }) => (sk.pos(a), sk.pos(b)),
-            _ => return Err("the axis of revolution must be a sketch line".into()),
+            _ => {
+                return Err(crate::failure::Cause::told(
+                    "its axis is not a line in its sketch",
+                    "Edit the feature and pick a straight line or centerline of the sketch as the axis.",
+                ))
+            }
         };
         if a.distance(b) < 1e-9 {
-            return Err("the axis of revolution has no length".into());
+            return Err(crate::failure::Cause::told(
+                "its axis line has no length",
+                "Edit the sketch so the axis line has two distinct ends, or pick another axis.",
+            ));
         }
         let profiles = match &rf.thin {
             Some(w) => {
@@ -80,7 +87,13 @@ impl Document {
         };
         let deg = num(&rf.angle, "angle")?;
         if !(deg > 0.0 && deg <= 360.0 + 1e-9) {
-            return Err("the angle must be more than 0 and at most 360 degrees".into());
+            return Err(crate::failure::Cause::told(
+                format!(
+                    "the angle is {} degrees, and must be more than 0 and at most 360",
+                    crate::failure::mm(deg)
+                ),
+                "Give it an angle from just above 0 to 360 degrees.",
+            ));
         }
         let s = if rf.reverse { -1.0 } else { 1.0 };
         let (start, sweep) = match &rf.kind {
@@ -89,10 +102,19 @@ impl Document {
             RevolveKind::TwoDirection { angle2 } => {
                 let d2 = num(angle2, "Direction 2 angle")?;
                 if d2 <= 0.0 {
-                    return Err("the Direction 2 angle must be more than 0".into());
+                    return Err(crate::failure::Cause::told(
+                        "the Direction 2 angle must be more than 0",
+                        "Give Direction 2 an angle above 0, or revolve in one direction.",
+                    ));
                 }
                 if deg + d2 > 360.0 + 1e-9 {
-                    return Err("the two directions together turn more than 360 degrees".into());
+                    return Err(crate::failure::Cause::told(
+                        format!(
+                            "the two directions turn {} degrees together, more than a full turn",
+                            crate::failure::mm(deg + d2)
+                        ),
+                        "Make the two angles add up to 360 degrees or less.",
+                    ));
                 }
                 (-s * d2, s * (deg + d2))
             }

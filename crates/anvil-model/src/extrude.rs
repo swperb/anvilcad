@@ -78,15 +78,23 @@ fn inner_points(frame: &Frame, profiles: &[Profile]) -> Vec<Vec3> {
 
 impl Document {
     /// The plane of an Up To or Offset From Surface target.
-    fn target_plane(&self, t: &Option<EndTarget>, st: &BuildState) -> Result<(Frame, bool, bool), String> {
+    fn target_plane(
+        &self,
+        t: &Option<EndTarget>,
+        st: &BuildState,
+    ) -> Result<(Frame, bool, bool), crate::failure::Cause> {
         match t {
             Some(EndTarget::Plane { plane, reverse_offset, translate }) => {
                 Ok((self.resolve_plane(plane, st)?, *reverse_offset, *translate))
             }
-            Some(EndTarget::Point(_)) => {
-                Err("this end condition needs a plane or flat face, not a point".into())
-            }
-            None => Err("choose the plane or face the extrusion goes up to".into()),
+            Some(EndTarget::Point(_)) => Err(crate::failure::Cause::told(
+                "this end condition ends at a plane or flat face, and a point was picked",
+                "Edit the feature and pick a plane or a flat face to end at.",
+            )),
+            None => Err(crate::failure::Cause::told(
+                "no plane or face is picked for it to end at",
+                "Edit the feature and pick the plane or face to end at.",
+            )),
         }
     }
 
@@ -118,29 +126,36 @@ impl Document {
         boss: bool,
         profiles: &[Profile],
         st: &BuildState,
-    ) -> Result<Reach, String> {
+    ) -> Result<Reach, crate::failure::Cause> {
         let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
         let positive = |d: f64, what: &str| {
             if d > 1e-9 && d.is_finite() {
                 Ok(d)
             } else {
-                Err(format!("the {what} must be greater than zero"))
+                Err(crate::failure::Cause::told(
+                    format!("the {what} is {} mm, and must be greater than zero", crate::failure::mm(d)),
+                    format!("Give it a {what} greater than 0."),
+                ))
             }
         };
         // Up to a plane, leaning or not.
-        let to_plane = |origin: Vec3, normal: Vec3| -> Result<Reach, String> {
+        let to_plane = |origin: Vec3, normal: Vec3| -> Result<Reach, crate::failure::Cause> {
             let un = u.dot(normal);
             if un.abs() < 1e-9 {
-                return Err(
-                    "the surface runs along the direction of extrusion, so it is never reached".into()
-                );
+                return Err(crate::failure::Cause::told(
+                    "the surface it ends at runs along the direction of extrusion, so it is never reached",
+                    "Pick a surface that faces the sketch.",
+                ));
             }
             let ts: Vec<f64> =
                 world_points(start, profiles).iter().map(|p| (origin - *p).dot(normal) / un).collect();
             let (lo, hi) =
                 ts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &t| (a.min(t), b.max(t)));
             if lo <= 1e-9 {
-                return Err("part of the profile does not reach the surface in this direction".into());
+                return Err(crate::failure::Cause::told(
+                    "part of the sketch does not reach the surface it ends at in this direction",
+                    "Turn on Reverse direction, or pick a surface that lies all on one side of the sketch.",
+                ));
             }
             if hi - lo < 1e-9 {
                 return Ok(Reach::Distance(lo));
@@ -152,7 +167,10 @@ impl Document {
             EndCondition::MidPlane => Ok(Reach::Distance(positive(num(depth, "depth")?, "depth")? / 2.0)),
             EndCondition::ThroughAll | EndCondition::ThroughAllBoth => {
                 if st.body.is_empty() {
-                    return Err("there is no geometry to extrude through".into());
+                    return Err(crate::failure::Cause::told(
+                        "there is no body yet for Through All to pass through",
+                        "Use Blind with a depth, or move this feature after one that makes a body.",
+                    ));
                 }
                 if boss {
                     // A boss ends where the existing geometry ends, never past it.
@@ -164,7 +182,10 @@ impl Document {
                         .map(|v| (*v - start.origin).dot(u))
                         .fold(f64::NEG_INFINITY, f64::max);
                     if far <= 1e-9 {
-                        return Err("there is no geometry in this direction to extrude up to".into());
+                        return Err(crate::failure::Cause::told(
+                            "there is no body in this direction to extrude up to",
+                            "Turn on Reverse direction, or use Blind with a depth.",
+                        ));
                     }
                     Ok(Reach::Distance(far))
                 } else {
@@ -174,11 +195,17 @@ impl Document {
             }
             EndCondition::UpToVertex => {
                 let Some(EndTarget::Point(p)) = target else {
-                    return Err("choose the vertex or point the extrusion goes up to".into());
+                    return Err(crate::failure::Cause::told(
+                        "no vertex or point is picked for it to end at",
+                        "Edit the feature and pick the vertex or point to end at.",
+                    ));
                 };
                 let d = (self.resolve_point(p, st)? - start.origin).dot(u);
                 if d <= 1e-9 {
-                    return Err("the vertex is on or behind the start of the extrusion".into());
+                    return Err(crate::failure::Cause::told(
+                        "the vertex it ends at is level with or behind the sketch",
+                        "Turn on Reverse direction, or pick a vertex in front of the sketch.",
+                    ));
                 }
                 Ok(Reach::Distance(d))
             }
@@ -190,7 +217,10 @@ impl Document {
                 let (plane, reverse, translate) = self.target_plane(target, st)?;
                 let d = num(depth, "offset")?;
                 if d < 0.0 {
-                    return Err("the offset must not be negative".into());
+                    return Err(crate::failure::Cause::told(
+                        format!("the offset is {} mm, and cannot be negative", crate::failure::mm(d)),
+                        "Give it an offset of 0 or more; turn on Reverse offset to end beyond the surface.",
+                    ));
                 }
                 // Short of the surface (towards the sketch) unless reversed.
                 let sign = if reverse { 1.0 } else { -1.0 };
@@ -214,11 +244,14 @@ impl Document {
         u: Vec3,
         profiles: &[Profile],
         st: &BuildState,
-        to_plane: &dyn Fn(Vec3, Vec3) -> Result<Reach, String>,
-    ) -> Result<Reach, String> {
+        to_plane: &dyn Fn(Vec3, Vec3) -> Result<Reach, crate::failure::Cause>,
+    ) -> Result<Reach, crate::failure::Cause> {
         let rays = inner_points(start, profiles);
         if rays.is_empty() || st.body.is_empty() {
-            return Err("no face covers the whole profile in this direction".into());
+            return Err(crate::failure::Cause::told(
+                "no single face covers the whole sketch in this direction",
+                "Use Up To Surface with a face that covers the whole sketch, or Blind.",
+            ));
         }
         // For each ray, the nearest hit on each face.
         let mut common: Option<std::collections::BTreeMap<anvil_kernel::FaceId, f64>> = None;
@@ -251,15 +284,19 @@ impl Document {
                 }
             });
         }
-        let best = common
-            .unwrap_or_default()
-            .into_iter()
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .ok_or("no face covers the whole profile in this direction")?;
-        let frame = st
-            .body
-            .planar_face_frame(best.0)
-            .ok_or("the next face is curved; Up To Next works up to flat faces")?;
+        let best =
+            common.unwrap_or_default().into_iter().min_by(|a, b| a.1.total_cmp(&b.1)).ok_or_else(|| {
+                crate::failure::Cause::told(
+                    "no single face covers the whole sketch in this direction",
+                    "Use Up To Surface with a face that covers the whole sketch, or Blind.",
+                )
+            })?;
+        let frame = st.body.planar_face_frame(best.0).ok_or_else(|| {
+            crate::failure::Cause::told(
+                "the next face is curved, and Up To Next ends only at flat faces",
+                "Use Up To Surface or Blind instead.",
+            )
+        })?;
         to_plane(frame.origin, frame.z)
     }
 
@@ -270,9 +307,8 @@ impl Document {
         st: &BuildState,
     ) -> Result<Plan, crate::failure::Cause> {
         let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
-        let sf = self.sketch(ef.sketch).ok_or("the sketch this feature uses is missing")?;
-        let sketch_frame =
-            *st.frames.get(&ef.sketch).ok_or("the sketch this feature uses failed or is suppressed")?;
+        let sf = self.sketch(ef.sketch).ok_or_else(crate::failure::sketch_missing)?;
+        let sketch_frame = *st.frames.get(&ef.sketch).ok_or_else(crate::failure::sketch_failed)?;
         let boss = ef.op == BodyOp::Boss;
 
         let mut capped = None;
@@ -285,11 +321,17 @@ impl Document {
                 if let Some(c) = &w.cap {
                     let c = num(c, "cap thickness")?;
                     if c <= 0.0 {
-                        return Err("the cap thickness must be greater than zero".into());
+                        return Err(crate::failure::Cause::told(
+                            "the cap thickness must be greater than zero",
+                            "Give the caps a thickness greater than 0, or turn off Cap ends.",
+                        ));
                     }
                     let hollows = crate::thin::hollows(&walls);
                     if hollows.is_empty() {
-                        return Err("cap ends need a closed contour".into());
+                        return Err(crate::failure::Cause::told(
+                            "Cap ends needs a closed outline, and the sketch's curves are open",
+                            "Close the sketch's outline, or turn off Cap ends.",
+                        ));
                     }
                     capped = Some((crate::thin::outlines(&walls), hollows, c));
                 }
@@ -326,19 +368,25 @@ impl Document {
             Some(self.reach(ef.end, &ef.depth, &ef.target, &start, -u1, boss, &profiles, st)?)
         } else if let Some(d2) = &ef.direction2 {
             if d2.end.two_sided() {
-                return Err("Direction 2 cannot be two-sided".into());
+                return Err(crate::failure::Cause::told(
+                    "Direction 2 cannot use a two-sided end condition",
+                    "Pick a one-sided end condition for Direction 2, or use Mid Plane or Through All - Both in Direction 1 instead.",
+                ));
             }
             Some(self.reach(d2.end, &d2.depth, &d2.target, &start, -u1, boss, &profiles, st)?)
         } else {
             None
         };
-        let taper = |draft: &Option<Draft>, s: f64| -> Result<f64, String> {
+        let taper = |draft: &Option<Draft>, s: f64| -> Result<f64, crate::failure::Cause> {
             match draft {
                 None => Ok(0.0),
                 Some(d) => {
                     let a = num(&d.angle, "draft angle")?;
                     if !(0.0..90.0).contains(&a) {
-                        return Err("the draft angle must be between 0 and 90 degrees".into());
+                        return Err(crate::failure::Cause::told(
+                            "the draft angle must be between 0 and 90 degrees",
+                            "Give the draft an angle between 0 and 90 degrees, or turn off Draft.",
+                        ));
                     }
                     let t = a.to_radians().tan();
                     // Inward closes the section in going away from the start.
@@ -354,12 +402,15 @@ impl Document {
         let t1 = taper(&ef.draft, s1)?;
         let t2 = taper(&draft2, -s1)?;
 
-        let piece = |r: &Reach, s: f64, t: f64| -> Result<Piece, String> {
+        let piece = |r: &Reach, s: f64, t: f64| -> Result<Piece, crate::failure::Cause> {
             match *r {
                 Reach::Distance(d) => Ok(Piece { z0: 0.0, z1: s * d, taper: t, trim: None }),
                 Reach::Plane(trim, far) => {
                     if t != 0.0 {
-                        return Err("draft needs an end parallel to the sketch".into());
+                        return Err(crate::failure::Cause::told(
+                            "a drafted extrusion must end parallel to the sketch",
+                            "End it with Blind, Through All, or a plane parallel to the sketch, or turn off Draft.",
+                        ));
                     }
                     Ok(Piece { z0: 0.0, z1: s * far, taper: 0.0, trim: Some(trim) })
                 }
@@ -383,17 +434,26 @@ impl Document {
             }
         }
         if capped.is_some() && (pieces.len() > 1 || pieces[0].trim.is_some() || pieces[0].taper != 0.0) {
-            return Err("cap ends need a plain extrusion (no draft, one run, flat ends)".into());
+            return Err(crate::failure::Cause::told(
+                "Cap ends works only on a plain extrusion: one direction, no draft, and flat ends",
+                "Turn off Draft and Direction 2 and end it flat, or turn off Cap ends.",
+            ));
         }
         if ef.flip_side && boss {
-            return Err("flip side to cut is for cuts".into());
+            return Err(crate::failure::Cause::told(
+                "Flip side to cut applies only to cuts",
+                "Turn off Flip side to cut, or make the feature a cut.",
+            ));
         }
         if ef.flip_side
             && (pieces.len() > 1
                 || pieces.iter().any(|p| p.trim.is_some() || p.taper != 0.0)
                 || ef.thin.is_some())
         {
-            return Err("flip side to cut needs a solid profile with flat ends".into());
+            return Err(crate::failure::Cause::told(
+                "Flip side to cut needs a closed outline and flat ends",
+                "Close the sketch's outline and end the cut flat, or turn off Flip side to cut.",
+            ));
         }
         let b = st.body.bounds();
         let mut reach = if b.is_empty() { 0.0 } else { b.diagonal() + (b.center() - start.origin).length() };

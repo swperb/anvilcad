@@ -79,25 +79,43 @@ fn extended(segs: &[Seg2], natural: bool, reach: f64) -> (Vec<Seg2>, bool) {
 }
 
 impl Document {
-    pub(crate) fn rebuild_rib(&self, id: u32, rf: &RibFeature, st: &mut BuildState) -> Result<(), String> {
+    pub(crate) fn rebuild_rib(
+        &self,
+        id: u32,
+        rf: &RibFeature,
+        st: &mut BuildState,
+    ) -> Result<(), crate::failure::Cause> {
         let t = rf.thickness.eval(&st.variables).map_err(|e| format!("thickness: {e}"))?;
         if t <= 0.0 {
-            return Err("the rib thickness must be greater than zero".into());
+            return Err(crate::failure::Cause::told(
+                "the rib thickness must be greater than zero",
+                "Give the rib a thickness greater than 0.",
+            ));
         }
-        let sf = self.sketch(rf.sketch).ok_or("the rib's sketch is missing")?;
-        let frame = *st.frames.get(&rf.sketch).ok_or("the rib's sketch failed or is suppressed")?;
-        let bodies = st
-            .exact
-            .clone()
-            .ok_or("ribs need the exact kernel, and the part is faceted from an earlier feature on")?;
+        let sf = self.sketch(rf.sketch).ok_or_else(crate::failure::sketch_missing)?;
+        let frame = *st.frames.get(&rf.sketch).ok_or_else(crate::failure::sketch_failed)?;
+        let bodies = st.exact.clone().ok_or_else(|| {
+            let from = st.faceted_from.as_ref().and_then(|(f, _)| self.feature(*f)).map(|f| f.name.clone());
+            let from = from.unwrap_or_else(|| "an earlier feature".into());
+            crate::failure::Cause::told(
+                format!("ribs are built only on the exact kernel, and the part left it at {from}"),
+                format!("Fix or suppress {from}, or move the rib before it."),
+            )
+        })?;
         if bodies.is_empty() {
-            return Err("there is no part for the rib to meet".into());
+            return Err(crate::failure::Cause::told(
+                "there is no body yet for the rib to meet",
+                "Move the rib after the features that make the part it braces.",
+            ));
         }
         let b = st.body.bounds();
         let reach = 2.0 * (b.diagonal() + (b.center() - frame.origin).length()) + 10.0;
         let all = chains(&sf.sketch)?;
         if all.is_empty() {
-            return Err("the sketch has no contour for the rib".into());
+            return Err(crate::failure::Cause::told(
+                "its sketch has no curves for the rib",
+                "Add the rib's centre line to the sketch as normal (not construction) geometry.",
+            ));
         }
 
         let mut pieces_all: Vec<brep::Solid> = Vec::new();
@@ -207,7 +225,10 @@ impl Document {
             let auto = senses.iter().position(Option::is_some).unwrap_or(0);
             let pick = if rf.flip { 1 - auto } else { auto };
             let found = senses.get_mut(pick).and_then(Option::take);
-            pieces_all.extend(found.ok_or("the rib does not meet the part")?);
+            pieces_all.extend(found.ok_or_else(|| crate::failure::Cause::told(
+                "the rib does not meet the part",
+                "Move the rib's sketch so its line runs into the part's walls, or turn on Flip material side.",
+            ))?);
         }
         let ok = st.exact_step(id, |bodies| {
             let mut out = bodies.to_vec();
@@ -221,7 +242,8 @@ impl Document {
                 .faceted_from
                 .as_ref()
                 .map(|f| f.1.clone())
-                .unwrap_or_else(|| "the rib could not be joined".into()));
+                .unwrap_or_else(|| "the rib could not be joined to the part".into())
+                .into());
         }
         Ok(())
     }
