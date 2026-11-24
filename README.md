@@ -571,6 +571,9 @@ Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at 
 option. Unless you state otherwise, any contribution intentionally submitted for inclusion
 in AnvilCAD shall be dual licensed as above, without any additional terms or conditions.
 
+AnvilCAD will stay free and open source. [COMMERCIAL.md](COMMERCIAL.md) says what that
+covers and how the project may earn money without charging for the software.
+
 ## Trademarks
 
 SOLIDWORKS, CATIA, 3DEXPERIENCE and Dassault Systèmes are trademarks or registered
