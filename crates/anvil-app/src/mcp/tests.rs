@@ -96,6 +96,7 @@ fn handshake_and_tool_list() {
         "add_linear_pattern",
         "add_circular_pattern",
         "add_hole",
+        "add_plane",
         "add_draft",
         "add_rib",
         "combine_bodies",
@@ -586,4 +587,17 @@ fn bodies_and_drafts() {
     let d = call(&mut s, "add_draft", json!({ "neutral": "front", "faces": [[0, 10, 15]], "angle": 5 }));
     let want = 6000.0 - 0.5 * 900.0 * 5f64.to_radians().tan() * 20.0;
     assert!(close(&d["body"]["volume"], want), "{d} vs {want}");
+}
+
+/// Issue #71: a reference plane through MCP, sketched on.
+#[test]
+fn reference_plane() {
+    let mut s = server();
+    call(&mut s, "new_part", json!({}));
+    let p = call(&mut s, "add_plane", json!({ "from": "front", "offset": 25 }));
+    let sk = call(&mut s, "add_sketch", json!({ "on_feature": p["feature"], "rects": [[0, 0, 10, 10]] }));
+    let ex = call(&mut s, "add_extrude", json!({ "sketch": sk["sketch"], "depth": 5 }));
+    assert!(close(&ex["body"]["volume"], 500.0), "{ex}");
+    // It starts on the plane, 25 from the front plane.
+    assert!(close(&ex["body"]["bounds"]["min"][2], 25.0), "{ex}");
 }

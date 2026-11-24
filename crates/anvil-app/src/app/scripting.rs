@@ -6,8 +6,8 @@ use super::*;
 use crate::keymap::{Matcher, Step};
 use crate::script::{
     self, Action, BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, Engine,
-    ExtrudeSpec, HoleSpec, Host, MirrorSpec, PatternSpec, PlanePick, PlaneSpec, RevolveSpec, RibSpec,
-    ShellSpec, SketchSpec, SplitSpec,
+    ExtrudeSpec, HoleSpec, Host, MirrorSpec, PatternSpec, PlaneDef, PlanePick, PlaneSpec, RevolveSpec,
+    RibSpec, ShellSpec, SketchSpec, SplitSpec,
 };
 use std::time::SystemTime;
 
@@ -909,13 +909,15 @@ impl Host for AppHost<'_> {
             PlaneSpec::Front => PlaneRef::Front,
             PlaneSpec::Top => PlaneRef::Top,
             PlaneSpec::Right => PlaneRef::Right,
-            PlaneSpec::Face { feature, start } => {
-                if self.app.doc.feature(feature).is_none() {
-                    return Err(format!("anvil.sketch: there is no feature {feature}"));
+            PlaneSpec::Face { feature, start } => match self.app.doc.feature(feature).map(|f| &f.kind) {
+                None => return Err(format!("anvil.sketch: there is no feature {feature}")),
+                // A reference plane: sketch on the plane itself.
+                Some(FeatureKind::Plane(_)) => PlaneRef::Feature(feature),
+                Some(_) => {
+                    let index = if start { FaceId::START_CAP } else { FaceId::END_CAP };
+                    PlaneRef::Face(FaceId { feature, index })
                 }
-                let index = if start { FaceId::START_CAP } else { FaceId::END_CAP };
-                PlaneRef::Face(FaceId { feature, index })
-            }
+            },
         };
         let mut sf = SketchFeature::new(plane);
         for r in &spec.rects {
@@ -1268,6 +1270,18 @@ impl Host for AppHost<'_> {
         self.commit_feature(what, before, FeatureKind::Split(anvil_model::SplitFeature { planes, bodies }))
     }
 
+    fn add_plane(&mut self, spec: &PlaneDef) -> Result<u32, String> {
+        let what = "anvil.plane";
+        let kind = FeatureKind::Plane(PlaneFeature {
+            base: self.plane_of(&spec.from, what)?,
+            offset: dim_of(&spec.offset, what)?,
+            flip: spec.flip,
+            ..Default::default()
+        });
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, kind)
+    }
+
     fn set_status(&mut self, text: &str) {
         self.app.status = text.to_string();
         self.app.scripting.script_status = Some(text.to_string());
@@ -1318,6 +1332,13 @@ impl AppHost<'_> {
             PlanePick::Top => PlaneRef::Top,
             PlanePick::Right => PlaneRef::Right,
             PlanePick::Face(q) => PlaneRef::Face(self.face_at(*q, what)?),
+            PlanePick::Feature(n) => {
+                let f = self.feature_named(what, n)?;
+                match f.kind {
+                    FeatureKind::Plane(_) => PlaneRef::Feature(f.id),
+                    _ => return Err(format!("{what}: {} is not a reference plane", f.name)),
+                }
+            }
         })
     }
 
