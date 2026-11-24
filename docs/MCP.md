@@ -3,8 +3,8 @@
 `anvilcad-agent mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server.
 Claude Code, Cursor, Claude Desktop and other MCP clients use it to model parts with no
 window: create or open a part, add sketches, extrusions, revolves, fillets, chamfers,
-shells, holes, patterns and mirrors, change dimensions and variables, measure the body,
-export STEP or STL and look at screenshots.
+shells, holes, patterns, mirrors, drafts and ribs, combine and split bodies, change
+dimensions and variables, measure the body, export STEP or STL and look at screenshots.
 
 It is built on the [headless harness](AGENT_HARNESS.md), so it never opens a window, takes
 focus or touches your mouse and keyboard, and runs on macOS, Linux and Windows with no
@@ -59,7 +59,7 @@ server writes are created as needed.
 | `list_features` | | the feature tree: id, name, kind, rebuild error and settable dimensions (value and equation) of each feature, and the global variables |
 | `get_state` | | everything the harness's `state` command reports |
 | `add_sketch` | `plane` (`front`, `top`, `right`) or `on_feature` and `face` (`end`, `start`); `rects` `[[x0, y0, x1, y1], ...]`; `circles` `[[x, y, r], ...]`; `polylines` `[[[x, y], ...], ...]`; `arcs` `[[x_start, y_start, x_on, y_on, x_end, y_end], ...]`; `points` `[[x, y], ...]` (free points, for holes) | adds a sketch (lines and arcs whose ends meet are joined, so they can close a profile) and returns its id, or fails at once if the face cannot carry a sketch (a cut's faces cannot). Front is the XY plane, top XZ and right YZ. On a face, the sketch's x is world X (world Y on a face normal to X) and its origin is the world origin projected onto the face |
-| `add_extrude` | `sketch`, `depth` (mm, an equation, or `"through"`), `cut`, `reverse` | extrudes a boss, or a cut; returns its id and the body after the rebuild, with a `warning` if the body did not change. A boss goes along the plane's normal (+Z from front, +Y from top, +X from right, out of a face); a cut goes the other way (into a face); `reverse` flips either |
+| `add_extrude` | `sketch`, `depth` (mm, an equation, or `"through"`), `cut`, `reverse`, `separate` (a boss that stays a body of its own) | extrudes a boss, or a cut; returns its id and the body after the rebuild, with a `warning` if the body did not change. A boss goes along the plane's normal (+Z from front, +Y from top, +X from right, out of a face); a cut goes the other way (into a face); `reverse` flips either |
 | `add_revolve` | `sketch`, `axis` `[x0, y0, x1, y1]` in the sketch, `angle` (degrees or an equation; default 360), `cut` | revolves the sketch about the axis (a line of the sketch there, or a new centerline); returns its id and the body after the rebuild |
 | `add_fillet` | `edges` `[[x, y, z], ...]`, `radius` | rounds the edges through the points (model coordinates, one along each edge within 0.05 mm, away from its ends); a point at a corner or off every edge is refused with the nearest distance |
 | `add_chamfer` | `edges` `[[x, y, z], ...]`, `distance` | bevels the edges through the points by an equal distance |
@@ -68,6 +68,10 @@ server writes are created as needed.
 | `add_linear_pattern` | `features` (ids or names), `direction` (`"x"`, `"y"`, `"z"` or `[dx, dy, dz]`), `spacing`, `count`; `direction2`, `spacing2`, `count2` for a grid | copies features in a row; counts include the original |
 | `add_circular_pattern` | `features`, `axis` (`"x"`, `"y"`, `"z"` or `[dx, dy, dz]`), `through` `[x, y, z]` (default the origin), `count`, `angle` (default 360) | copies features round the axis through `through` |
 | `add_mirror` | `features`, `plane` (`"front"`, `"top"`, `"right"`, or `[x, y, z]` on a flat face) | mirrors features about the plane |
+| `add_draft` | `neutral` (`"front"`, `"top"`, `"right"` or `[x, y, z]` on a flat face), `faces` `[[x, y, z], ...]`, `angle` | tilts the faces by the angle about the neutral plane |
+| `add_rib` | `sketch`, `thickness`, `flip` | grows a wall from the sketch's line until it meets the part, centred on the sketch's plane |
+| `combine_bodies` | `op` (`add`, `subtract`, `common`), `main` (for subtract), `bodies` | combines bodies, named as `get_state`'s `bodies` lists them (`"Split1[2]"`) or by the id of the feature that made them |
+| `split_bodies` | `planes`, `bodies` (default all) | cuts bodies apart along the planes, each piece a body of its own |
 | `delete_feature` | `feature` (id or name) | deletes the feature and those that depend on it (a sketch takes its extrusion with it); returns the ids removed |
 | `set_variable` | `name`, `value` (number or equation) | sets or adds a global variable and rebuilds |
 | `set_dimension` | `feature` (id or name), `dimension`, `value` | sets `depth`, `angle`, `offset`, `spacing`, `count`, `radius`, `distance`, `chamfer angle` or `thickness`; if the rebuild fails, the old value is kept and the error returned |

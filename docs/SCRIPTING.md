@@ -153,7 +153,7 @@ made before the error, which Undo reverses.
 | `anvil.delete(feature)` | deletes a feature (by id or name) and the features that depend on it, and returns their ids |
 | `anvil.material(name)` | sets a library material |
 | `anvil.sketch{ plane, rects, circles, polylines, arcs }` | adds a sketch and returns its id; `plane` is `"front"`, `"top"`, `"right"` or `{ on = feature_id, face = "end" \| "start" }`; `rects` are `{x0, y0, x1, y1}` corners and `circles` are `{x, y, radius}`; `polylines` are chains of lines, `{ {x, y}, {x, y}, ... }` (repeat the first point to close one); `arcs` pass through three points, `{x_start, y_start, x_on, y_on, x_end, y_end}`. `points` are free points, `{x, y}`, such as where `anvil.hole` drills. All in the sketch's coordinates (mm). Lines and arcs whose ends meet are joined, so they can close a profile together |
-| `anvil.extrude{ sketch, depth, cut, reverse }` | extrudes a sketch and returns the feature id; `depth` is mm, an equation, or `"through"` |
+| `anvil.extrude{ sketch, depth, cut, reverse, separate }` | extrudes a sketch and returns the feature id; `depth` is mm, an equation, or `"through"`; `separate = true` keeps a boss as a body of its own (for `anvil.combine`) |
 | `anvil.revolve{ sketch, axis, angle, cut }` | revolves a sketch and returns the feature id; `axis` is a line `{x0, y0, x1, y1}` in the sketch's coordinates (a line of the sketch there is used, or a centerline is added); `angle` is degrees or an equation, 360 if left out |
 | `anvil.fillet{ edges, radius }` | rounds the edges through the given points and returns the feature id; `edges` are `{ {x, y, z}, ... }` in model coordinates (mm), one point along each edge, within 0.05 mm of it and away from its ends; `radius` is mm or an equation |
 | `anvil.chamfer{ edges, distance }` | bevels the edges through the given points by an equal distance; `edges` as for `anvil.fillet` |
@@ -162,7 +162,15 @@ made before the error, which Undo reverses.
 | `anvil.pattern{ features, direction, spacing, count, direction2 }` | copies features in a row and returns the feature id; `features` are ids or names; `direction` is `"x"`, `"y"`, `"z"` or `{dx, dy, dz}`; `count` includes the original; `direction2 = { direction, spacing, count }` makes a grid |
 | `anvil.circular_pattern{ features, axis, count, angle }` | copies features round an axis, spread evenly over `angle` (360 if left out); `axis` is `"x"`, `"y"`, `"z"` (through the origin) or `{x, y, z, dx, dy, dz}` (through a point) |
 | `anvil.mirror{ features, plane }` | mirrors features about `plane`: `"front"`, `"top"`, `"right"`, or `{x, y, z}`, a point on a flat face of the part |
+| `anvil.draft{ neutral, faces, angle }` | tilts the faces through the points in `faces` (`{ {x, y, z}, ... }`) by `angle` degrees about the `neutral` plane (`"front"`, `"top"`, `"right"` or `{x, y, z}` on a flat face), which keeps its size |
+| `anvil.rib{ sketch, thickness, flip }` | grows a wall of `thickness` from the sketch's line until it meets the part, centred on the sketch's plane (which should pass through the part) |
+| `anvil.combine{ op, main, bodies }` | adds (the default), subtracts or keeps what is common to bodies; `op` is `"add"`, `"subtract"` or `"common"`; a subtraction takes `bodies` from `main` |
+| `anvil.split{ planes, bodies }` | cuts bodies apart along `planes` (each `"front"`, `"top"`, `"right"` or `{x, y, z}` on a flat face), each piece a body of its own; every body when `bodies` is left out |
 | `anvil.status(text)` | shows text in the status bar |
+
+Bodies are named as `anvil.state().bodies` lists them: by the feature that last changed each
+body, with `[n]` when that feature left several (`"Split1[2]"`). `combine` and `split` take
+those names, or a feature's id for the body it made.
 
 `anvil.new` and `anvil.open` refuse to throw away unsaved changes unless you pass
 `{ force = true }`. A script that runs for more than 10 seconds is stopped, so a mistake such as

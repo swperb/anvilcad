@@ -96,6 +96,10 @@ fn handshake_and_tool_list() {
         "add_linear_pattern",
         "add_circular_pattern",
         "add_hole",
+        "add_draft",
+        "add_rib",
+        "combine_bodies",
+        "split_bodies",
         "set_variable",
         "set_dimension",
         "rebuild",
@@ -555,4 +559,31 @@ fn holes_patterns_and_mirrors() {
         json!({ "features": [hole["feature"]], "axis": "z", "through": [5, 10, 0], "count": 2 }),
     );
     assert!((v(&c) - (6000.0 - 3.0 * one)).abs() < 1.5e-2 * one, "{c}");
+}
+
+/// Issue #71: separate bodies, combine, split and draft through MCP.
+#[test]
+fn bodies_and_drafts() {
+    let mut s = server();
+    call(&mut s, "new_part", json!({}));
+    let a = call(&mut s, "add_sketch", json!({ "rects": [[0, 0, 20, 20]] }));
+    let a = call(&mut s, "add_extrude", json!({ "sketch": a["sketch"], "depth": 10 }));
+    let b = call(&mut s, "add_sketch", json!({ "rects": [[10, 0, 30, 20]] }));
+    let b = call(&mut s, "add_extrude", json!({ "sketch": b["sketch"], "depth": 10, "separate": true }));
+    assert!(close(&b["body"]["volume"], 8000.0), "{b}");
+    let c = call(
+        &mut s,
+        "combine_bodies",
+        json!({ "op": "subtract", "main": a["feature"], "bodies": [b["feature"]] }),
+    );
+    assert!(close(&c["body"]["volume"], 2000.0), "{c}");
+    // What is left, 10 x 20 x 10, split across the middle of its height.
+    let sp = call(&mut s, "split_bodies", json!({ "planes": ["top"] }));
+    assert!(close(&sp["body"]["volume"], 2000.0), "{sp}");
+    // The block's 20 mm high side at x = 0 drafted 5 degrees about its base (the front
+    // plane, z = 0): a wedge of 10² tan 5° / 2 x 20 comes off.
+    block(&mut s);
+    let d = call(&mut s, "add_draft", json!({ "neutral": "front", "faces": [[0, 10, 15]], "angle": 5 }));
+    let want = 6000.0 - 0.5 * 900.0 * 5f64.to_radians().tan() * 20.0;
+    assert!(close(&d["body"]["volume"], want), "{d} vs {want}");
 }
