@@ -104,6 +104,7 @@ p { margin: 0; }
 .cta-col { display: grid; gap: 12px; margin-top: 34px; max-width: 420px; }
 .cta-col .text-link { margin-top: 8px; }
 .cta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; justify-content: center; }
+.cta-row.cta-left { justify-content: flex-start; }
 
 .player { margin: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.7); }
 .player-screen { position: relative; aspect-ratio: 1440 / 900; background: #e9ecf0; }
