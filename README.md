@@ -1,5 +1,7 @@
 # AnvilCAD
 
+[![Discord](https://img.shields.io/badge/Discord-join%20the%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/CEG4GcVASJ)
+
 Free and open source parametric 3D CAD, written in Rust, with its own geometry kernels.
 If you know SOLIDWORKS, the workflow will feel familiar: a feature tree, sketches on planes
 or faces, fully defined sketches, extrudes and revolves, equations, custom properties and
