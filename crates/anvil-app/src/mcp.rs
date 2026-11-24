@@ -9,7 +9,10 @@
 //! session.
 
 use crate::headless::Headless;
-use crate::script::{BlendSpec, Depth, ExtrudeSpec, Host, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec};
+use crate::script::{
+    BlendSpec, CircularSpec, Depth, DirPick, ExtrudeSpec, HoleSpec, Host, MirrorSpec, PatternRun,
+    PatternSpec, PlanePick, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec,
+};
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -267,6 +270,107 @@ impl Server {
                 s["feature"] = json!(id);
                 s
             }
+            "add_mirror" => {
+                let plane = match a.get("plane") {
+                    Some(Value::String(p)) => match p.to_ascii_lowercase().as_str() {
+                        "front" => PlanePick::Front,
+                        "top" => PlanePick::Top,
+                        "right" => PlanePick::Right,
+                        other => return Err(format!("plane is front, top or right, not \"{other}\"")),
+                    },
+                    Some(Value::Array(r)) => {
+                        let n: Option<Vec<f64>> = r.iter().map(Value::as_f64).collect();
+                        PlanePick::Face(
+                            n.and_then(|n| <[f64; 3]>::try_from(n).ok())
+                                .ok_or("plane: [x, y, z], a point on a flat face")?,
+                        )
+                    }
+                    _ => {
+                        return Err(
+                            "plane is \"front\", \"top\", \"right\" or [x, y, z] on a flat face".into()
+                        )
+                    }
+                };
+                let spec = MirrorSpec { features: feature_list(a)?, plane };
+                let id = self.host(|h| h.add_mirror(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "add_linear_pattern" => {
+                let first = PatternRun {
+                    direction: dir_pick(a.get("direction"), "direction")?,
+                    spacing: size(a, "spacing")?,
+                    count: size(a, "count")?,
+                };
+                let second = match a.get("direction2") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(PatternRun {
+                        direction: dir_pick(a.get("direction2"), "direction2")?,
+                        spacing: size(a, "spacing2")?,
+                        count: size(a, "count2")?,
+                    }),
+                };
+                let spec = PatternSpec { features: feature_list(a)?, first, second };
+                let id = self.host(|h| h.add_pattern(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "add_circular_pattern" => {
+                let through = match a.get("through") {
+                    None | Some(Value::Null) => [0.0; 3],
+                    Some(v) => {
+                        let n: Option<Vec<f64>> =
+                            v.as_array().and_then(|r| r.iter().map(Value::as_f64).collect());
+                        n.and_then(|n| <[f64; 3]>::try_from(n).ok()).ok_or("through: [x, y, z]")?
+                    }
+                };
+                let angle = match a.get("angle") {
+                    None => Depth::Value(360.0),
+                    Some(_) => size(a, "angle")?,
+                };
+                let spec = CircularSpec {
+                    features: feature_list(a)?,
+                    axis: dir_pick(a.get("axis"), "axis")?,
+                    through,
+                    count: size(a, "count")?,
+                    angle,
+                };
+                let id = self.host(|h| h.add_circular_pattern(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "add_hole" => {
+                let depth = match a.get("depth") {
+                    None | Some(Value::Null) => Depth::ThroughAll,
+                    Some(Value::String(t)) if t.eq_ignore_ascii_case("through") => Depth::ThroughAll,
+                    Some(_) => size(a, "depth")?,
+                };
+                let pair = |x: &str, y: &str| -> Result<Option<(Depth, Depth)>, String> {
+                    match (a.get(x), a.get(y)) {
+                        (None, None) => Ok(None),
+                        _ => Ok(Some((size(a, x)?, size(a, y)?))),
+                    }
+                };
+                let counterbore = pair("counterbore_diameter", "counterbore_depth")?;
+                let countersink = pair("countersink_diameter", "countersink_angle")?;
+                if counterbore.is_some() && countersink.is_some() {
+                    return Err("give a counterbore or a countersink, not both".into());
+                }
+                let spec = HoleSpec {
+                    sketch: a.id("sketch")?,
+                    diameter: size(a, "diameter")?,
+                    depth,
+                    counterbore,
+                    countersink,
+                };
+                let id = self.host(|h| h.add_hole(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
             "set_variable" => {
                 let name = a.req_str("name")?;
                 let value = a.number_or_text("value")?;
@@ -430,6 +534,42 @@ fn size(a: &Args, k: &str) -> Result<Depth, String> {
     }
 }
 
+/// Feature ids or names: `[3, "Boss-Extrude1"]`.
+fn feature_list(a: &Args) -> Result<Vec<String>, String> {
+    let usage = "features: [id or name, ...]";
+    let list = a.get("features").and_then(Value::as_array).ok_or(usage)?;
+    let out: Vec<String> = list
+        .iter()
+        .map(|v| match v {
+            Value::Number(n) => Ok(n.to_string()),
+            Value::String(s) => Ok(s.clone()),
+            _ => Err(usage.to_string()),
+        })
+        .collect::<Result<_, _>>()?;
+    if out.is_empty() {
+        return Err(usage.into());
+    }
+    Ok(out)
+}
+
+/// `"x"`, `"y"`, `"z"` or `[dx, dy, dz]`.
+fn dir_pick(v: Option<&Value>, what: &str) -> Result<DirPick, String> {
+    let usage = || format!("{what} is \"x\", \"y\", \"z\" or [dx, dy, dz]");
+    match v {
+        Some(Value::String(s)) => match s.to_ascii_lowercase().as_str() {
+            "x" => Ok(DirPick::X),
+            "y" => Ok(DirPick::Y),
+            "z" => Ok(DirPick::Z),
+            _ => Err(usage()),
+        },
+        Some(Value::Array(r)) => {
+            let n: Option<Vec<f64>> = r.iter().map(Value::as_f64).collect();
+            n.and_then(|n| <[f64; 3]>::try_from(n).ok()).map(DirPick::Vector).ok_or_else(usage)
+        }
+        _ => Err(usage()),
+    }
+}
+
 fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
     let plane = match (a.get("on_feature"), a.str("plane")?) {
         (Some(_), Some(_)) => return Err("give plane or on_feature, not both".into()),
@@ -473,10 +613,12 @@ fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
                 .collect::<Result<Vec<_>, _>>()?
         }
     };
-    if rects.is_empty() && circles.is_empty() && polylines.is_empty() && arcs.is_empty() {
-        return Err("give rects, circles, polylines or arcs".into());
+    let points = a.number_lists::<2>("points", "points: [[x, y], ...]")?;
+    if rects.is_empty() && circles.is_empty() && polylines.is_empty() && arcs.is_empty() && points.is_empty()
+    {
+        return Err("give rects, circles, polylines, arcs or points".into());
     }
-    Ok(SketchSpec { plane, rects, circles, polylines, arcs })
+    Ok(SketchSpec { plane, rects, circles, polylines, arcs, points })
 }
 
 /// A tool's arguments, with readers that say what was wrong.
@@ -627,7 +769,8 @@ const TOOLS: &[Tool] = &[
             "rects": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "description": "Rectangles by opposite corners: [[x0, y0, x1, y1], ...]" },
             "circles": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "Circles: [[x, y, radius], ...]" },
             "polylines": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } }, "description": "Chains of lines: [[[x, y], [x, y], ...], ...]; repeat the first point to close one" },
-            "arcs": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 6, "maxItems": 6 }, "description": "Arcs through three points: [[x_start, y_start, x_on, y_on, x_end, y_end], ...]" }
+            "arcs": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 6, "maxItems": 6 }, "description": "Arcs through three points: [[x_start, y_start, x_on, y_on, x_end, y_end], ...]" },
+            "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "Free points, such as where add_hole puts holes: [[x, y], ...]" }
         }"#,
         required: &[],
         read_only: false,
@@ -689,6 +832,63 @@ const TOOLS: &[Tool] = &[
             "thickness": { "type": ["number", "string"], "description": "Wall thickness: mm or an equation" }
         }"#,
         required: &["thickness"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_mirror",
+        title: "Add mirror",
+        description: "Mirror features (such as a boss, cut or hole) about a plane: a standard plane, or the flat face of the part through a point. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "features": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "The features to copy, by id or name" },
+            "plane": { "type": ["string", "array"], "items": { "type": "number" }, "description": "\"front\", \"top\", \"right\" or [x, y, z], a point on a flat face" }
+        }"#,
+        required: &["features", "plane"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_linear_pattern",
+        title: "Add linear pattern",
+        description: "Copy features in a row (and, with direction2, a grid). count includes the original. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "features": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "The features to copy, by id or name" },
+            "direction": { "type": ["string", "array"], "items": { "type": "number" }, "description": "\"x\", \"y\", \"z\" or [dx, dy, dz]" },
+            "spacing": { "type": ["number", "string"], "description": "mm between instances, or an equation" },
+            "count": { "type": ["number", "string"], "description": "Instances, the original included" },
+            "direction2": { "type": ["string", "array"], "items": { "type": "number" }, "description": "\"x\", \"y\", \"z\" or [dx, dy, dz]" },
+            "spacing2": { "type": ["number", "string"] },
+            "count2": { "type": ["number", "string"] }
+        }"#,
+        required: &["features", "direction", "spacing", "count"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_circular_pattern",
+        title: "Add circular pattern",
+        description: "Copy features round an axis, spread evenly over angle (360 by default). The axis is a model axis through the origin, or a direction through the point given as through. count includes the original. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "features": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "The features to copy, by id or name" },
+            "axis": { "type": ["string", "array"], "items": { "type": "number" }, "description": "\"x\", \"y\", \"z\" or [dx, dy, dz]" },
+            "through": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "A point on the axis; default the origin" },
+            "count": { "type": ["number", "string"], "description": "Instances, the original included" },
+            "angle": { "type": ["number", "string"], "description": "Degrees the instances spread over; default 360" }
+        }"#,
+        required: &["features", "axis", "count"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_hole",
+        title: "Add hole",
+        description: "Drill a hole at each free point of a sketch (add_sketch points), square to the sketch's plane and into the part. Plain, or counterbored, or countersunk. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "sketch": { "type": "integer", "description": "A sketch holding the hole positions as points" },
+            "diameter": { "type": ["number", "string"], "description": "mm or an equation" },
+            "depth": { "type": ["number", "string"], "description": "mm, an equation, or \"through\" (the default)" },
+            "counterbore_diameter": { "type": ["number", "string"] },
+            "counterbore_depth": { "type": ["number", "string"] },
+            "countersink_diameter": { "type": ["number", "string"] },
+            "countersink_angle": { "type": ["number", "string"], "description": "Degrees, such as 90" }
+        }"#,
+        required: &["sketch", "diameter"],
         read_only: false,
     },
     Tool {
