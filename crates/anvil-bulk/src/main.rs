@@ -14,6 +14,7 @@ Usage:
   anvil-bulk status --project <DIR> [--workers <N>]
   anvil-bulk export --project <DIR> --out <DIR> [--overwrite]
   anvil-bulk report --project <DIR>
+  anvil-bulk --version | --help
 
 Migrates an organisation's SOLIDWORKS files to AnvilCAD. The original files are only read.
 
@@ -144,6 +145,10 @@ fn hms(secs: f64) -> String {
 }
 
 fn main() {
+    if matches!(std::env::args().nth(1).as_deref(), Some("-V" | "--version")) {
+        println!("anvil-bulk {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let mut a = match parse() {
         Ok(a) => a,
         Err(e) => {
