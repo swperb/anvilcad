@@ -38,10 +38,17 @@ anvil.opt.open = "sample"             -- or a path: what opens when no file is g
 anvil.opt.view = "isometric"          -- front, back, left, right, top, bottom, isometric
 anvil.opt.edges = true                -- Shaded with edges
 anvil.opt.snap_px = 10                -- sketch snap and pick radius, 2 to 40 pixels
+anvil.opt.autosave = 2                -- minutes between autosaves, 0.5 to 60; 0 turns it off
 anvil.opt.mouse_3d = true             -- navigate with a 3D mouse; false leaves it alone
 anvil.opt.mouse_3d_speed = 1          -- 3D mouse speed, 0.1 to 10
 anvil.opt.mouse_3d_invert = { "tz" }  -- 3D mouse axes to reverse: tx ty tz rx ry rz
 ```
+
+`autosave` copies unsaved work to a recovery folder, never to your own file: `%LOCALAPPDATA%\AnvilCAD\Recovery`
+on Windows, `~/Library/Application Support/AnvilCAD/Recovery` on macOS and
+`~/.local/share/anvilcad/recovery` (or `$XDG_DATA_HOME/anvilcad/recovery`) on Linux, or
+`$ANVILCAD_RECOVERY_DIR`. A save, or closing without saving, removes the copy. If AnvilCAD
+does not close normally, the next start offers Restore or Discard for each copy it finds.
 
 A misspelled option, or a value of the wrong kind, is an error that lists the valid ones.
 There is no units option yet: AnvilCAD models in millimetres throughout (the status bar's

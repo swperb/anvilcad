@@ -60,6 +60,10 @@ pub const OPTIONS: &[(&str, &str)] = &[
     ("view", "the starting view: front, back, left, right, top, bottom or isometric"),
     ("edges", "true to draw model edges (Shaded with edges), false for shaded only"),
     ("snap_px", "the sketch snap and pick radius in pixels, 2 to 40"),
+    (
+        "autosave",
+        "minutes between autosaves of unsaved work, 0.5 to 60, or 0 to turn autosave off (2 is the default)",
+    ),
     ("mouse_3d", "true to navigate with a 3D mouse (the default), false to leave the device alone"),
     ("mouse_3d_speed", "the 3D mouse speed, 0.1 to 10 (1 is the default)"),
     (
@@ -108,6 +112,8 @@ pub struct Options {
     pub view: Option<String>,
     pub edges: Option<bool>,
     pub snap_px: Option<f64>,
+    /// Minutes between autosaves; 0 turns autosave off.
+    pub autosave: Option<f64>,
     pub mouse_3d: Option<bool>,
     pub mouse_3d_speed: Option<f64>,
     /// Reversed axes, in [`MOUSE_3D_AXES`] order.
@@ -693,6 +699,13 @@ fn read_options(opt: &Table) -> Result<Options, String> {
                 o.snap_px =
                     Some(number(&value).filter(|s| (2.0..=40.0).contains(s)).ok_or_else(|| bad(help))?)
             }
+            "autosave" => {
+                o.autosave = Some(
+                    number(&value)
+                        .filter(|m| *m == 0.0 || (0.5..=60.0).contains(m))
+                        .ok_or_else(|| bad(help))?,
+                )
+            }
             "mouse_3d" => match value {
                 Value::Boolean(b) => o.mouse_3d = Some(b),
                 _ => return Err(bad(help)),
@@ -879,6 +892,17 @@ mod tests {
     }
 
     #[test]
+    fn autosave_takes_minutes_or_zero_for_off() {
+        let opt = |v: &str| {
+            Engine::load(&format!("anvil.opt.autosave = {v}"), "init.lua", None)
+                .map(|e| e.config.options.autosave)
+        };
+        assert_eq!(opt("0").ok(), Some(Some(0.0)));
+        assert_eq!(opt("0.5").ok(), Some(Some(0.5)));
+        assert!(opt("0.1").is_err() && opt("61").is_err() && opt("\"often\"").is_err());
+    }
+
+    #[test]
     fn reads_options_theme_keys_and_commands() {
         let e = Engine::load(
             r##"
@@ -888,6 +912,7 @@ mod tests {
             anvil.opt.view = "Top"
             anvil.opt.edges = false
             anvil.opt.snap_px = 12
+            anvil.opt.autosave = 5
             anvil.theme.dark.accent = "#112233"
             anvil.theme.light.view_top = "#fff"
             anvil.theme.body = "#ff0000"
@@ -908,6 +933,7 @@ mod tests {
         assert_eq!(c.options.view.as_deref(), Some("top"));
         assert_eq!(c.options.edges, Some(false));
         assert_eq!(c.options.snap_px, Some(12.0));
+        assert_eq!(c.options.autosave, Some(5.0));
         assert_eq!(c.theme.dark, vec![("accent".to_string(), Color32::from_rgb(0x11, 0x22, 0x33))]);
         assert_eq!(c.theme.light, vec![("view_top".to_string(), Color32::WHITE)]);
         assert_eq!(c.theme.model, vec![("body".to_string(), [1.0, 0.0, 0.0])]);

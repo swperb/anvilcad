@@ -512,6 +512,11 @@ impl AnvilApp {
             self.show_edges = e;
         }
         self.sync_3d_mouse(ctx);
+        self.autosave.every = match o.autosave {
+            Some(0.0) => None,
+            Some(m) => Some(std::time::Duration::from_secs_f64(m * 60.0)),
+            None => Some(crate::recovery::DEFAULT_INTERVAL),
+        };
         let px = o.snap_px.unwrap_or(sketcher::PICK_PX);
         if let Some(s) = &mut self.sketch {
             s.pick_px = px;

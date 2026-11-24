@@ -7,6 +7,7 @@ pub mod headless;
 pub mod keymap;
 pub mod mcp;
 mod mouse3d;
+pub mod recovery;
 pub mod render;
 mod sample;
 pub mod script;
