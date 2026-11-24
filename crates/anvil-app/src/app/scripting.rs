@@ -4,7 +4,9 @@
 
 use super::*;
 use crate::keymap::{Matcher, Step};
-use crate::script::{self, Action, Depth, Engine, ExtrudeSpec, Host, PlaneSpec, SketchSpec};
+use crate::script::{
+    self, Action, BlendSpec, Depth, Engine, ExtrudeSpec, Host, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec,
+};
 use std::time::SystemTime;
 
 /// Every built-in command a key binding, script (`anvil.run`) or the command palette can run,
@@ -930,6 +932,32 @@ impl Host for AppHost<'_> {
             let p = sf.sketch.add_point(anvil_kernel::v2(c[0], c[1]));
             sf.sketch.add_circle(p, c[2]);
         }
+        for line in &spec.polylines {
+            if line.len() < 2 {
+                return Err("anvil.sketch: a polyline needs at least two points".into());
+            }
+            for w in line.windows(2) {
+                let (a, b) = (anvil_kernel::v2(w[0][0], w[0][1]), anvil_kernel::v2(w[1][0], w[1][1]));
+                if a.distance(b) < 1e-9 {
+                    return Err(format!(
+                        "anvil.sketch: a polyline repeats the point {{{}, {}}}",
+                        w[0][0], w[0][1]
+                    ));
+                }
+                let (pa, pb) = (sf.sketch.add_point(a), sf.sketch.add_point(b));
+                sf.sketch.add_line(pa, pb);
+            }
+        }
+        for a in &spec.arcs {
+            let v = |i: usize| anvil_kernel::v2(a[i], a[i + 1]);
+            sf.sketch.add_3pt_arc(v(0), v(4), v(2)).map_err(|_| {
+                format!(
+                    "anvil.sketch: the arc {{{}, {}, {}, {}, {}, {}}} has its three points in a line or two of them the same",
+                    a[0], a[1], a[2], a[3], a[4], a[5]
+                )
+            })?;
+        }
+        join_coincident_ends(&mut sf.sketch);
         let before = self.app.doc.clone();
         let id = self.app.doc.add_feature(FeatureKind::Sketch(sf));
         // Rebuild now, so a face that cannot carry a sketch fails here rather than at the
@@ -981,9 +1009,221 @@ impl Host for AppHost<'_> {
         Ok(id)
     }
 
+    fn add_revolve(&mut self, spec: &RevolveSpec) -> Result<u32, String> {
+        let what = "anvil.revolve";
+        let sk = &self
+            .app
+            .doc
+            .sketch(spec.sketch)
+            .ok_or_else(|| format!("{what}: feature {} is not a sketch", spec.sketch))?
+            .sketch;
+        let (a, b) =
+            (anvil_kernel::v2(spec.axis[0], spec.axis[1]), anvil_kernel::v2(spec.axis[2], spec.axis[3]));
+        if a.distance(b) < 1e-9 {
+            return Err(format!(
+                "{what}: the axis {{{}, {}, {}, {}}} has no length",
+                spec.axis[0], spec.axis[1], spec.axis[2], spec.axis[3]
+            ));
+        }
+        // A line of the sketch along the axis, either way round; else a new centerline.
+        let near = |p: anvil_sketch::PointId, q: anvil_kernel::Vec2| sk.pos(p).distance(q) < 1e-6;
+        let found = sk.entities.iter().position(|e| match e.geom {
+            anvil_sketch::Geom::Line { a: pa, b: pb } => {
+                (near(pa, a) && near(pb, b)) || (near(pa, b) && near(pb, a))
+            }
+            _ => false,
+        });
+        let before = self.app.doc.clone();
+        let axis = match found {
+            Some(e) => e,
+            None => {
+                let sk = &mut self
+                    .app
+                    .doc
+                    .sketch_mut(spec.sketch)
+                    .ok_or_else(|| format!("{what}: no sketch {}", spec.sketch))?
+                    .sketch;
+                let (pa, pb) = (sk.add_point(a), sk.add_point(b));
+                let e = sk.add_line(pa, pb);
+                sk.entities[e].construction = true;
+                e
+            }
+        };
+        let angle = match &spec.angle {
+            Depth::Value(v) => Dim::Value(*v),
+            Depth::Expr(e) => Dim::Expr(e.clone()),
+            Depth::ThroughAll => return Err(format!("{what}: angle is a number of degrees or an equation")),
+        };
+        let kind = FeatureKind::Revolve(RevolveFeature {
+            sketch: spec.sketch,
+            axis,
+            angle,
+            op: if spec.cut { BodyOp::Cut } else { BodyOp::Boss },
+            kind: RevolveKind::OneDirection,
+            reverse: false,
+            thin: None,
+            flip_side: false,
+        });
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_blend(&mut self, spec: &BlendSpec) -> Result<u32, String> {
+        let what = if spec.chamfer { "anvil.chamfer" } else { "anvil.fillet" };
+        let edges = spec.edges.iter().map(|p| self.edge_at(*p, what)).collect::<Result<Vec<_>, _>>()?;
+        let size = match &spec.size {
+            Depth::Value(v) => Dim::Value(*v),
+            Depth::Expr(e) => Dim::Expr(e.clone()),
+            Depth::ThroughAll => return Err(format!("{what}: the size is a number or an equation")),
+        };
+        let kind = if spec.chamfer {
+            FeatureKind::Chamfer(ChamferFeature {
+                edges,
+                distance: size,
+                kind: ChamferKind::EqualDistance,
+                tangent_propagation: false,
+            })
+        } else {
+            FeatureKind::Fillet(FilletFeature {
+                edges,
+                radius: size,
+                profile: FilletProfile::Circular,
+                tangent_propagation: false,
+            })
+        };
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_shell(&mut self, spec: &ShellSpec) -> Result<u32, String> {
+        let what = "anvil.shell";
+        let remove = spec.remove.iter().map(|p| self.face_at(*p, what)).collect::<Result<Vec<_>, _>>()?;
+        let thickness = match &spec.thickness {
+            Depth::Value(v) => Dim::Value(*v),
+            Depth::Expr(e) => Dim::Expr(e.clone()),
+            Depth::ThroughAll => return Err(format!("{what}: thickness is a number or an equation")),
+        };
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, FeatureKind::Shell(ShellFeature { remove, thickness }))
+    }
+
     fn set_status(&mut self, text: &str) {
         self.app.status = text.to_string();
         self.app.scripting.script_status = Some(text.to_string());
+    }
+}
+
+/// How far a picked point may be from the edge or face it names, in mm.
+const PICK_TOLERANCE: f64 = 0.05;
+
+impl AppHost<'_> {
+    /// Adds `kind` and rebuilds; if the feature fails, puts the part back as it was
+    /// (`before`) and says why, so a failed call leaves nothing behind.
+    fn commit_feature(&mut self, what: &str, before: Document, kind: FeatureKind) -> Result<u32, String> {
+        let id = self.app.doc.add_feature(kind);
+        self.app.rebuild();
+        if let Some(e) = self.app.state.errors.get(&id).cloned() {
+            self.app.doc = before;
+            self.app.rebuild();
+            return Err(format!("{what}: {e}"));
+        }
+        Ok(id)
+    }
+
+    /// The model edge through point `p`: the one within [`PICK_TOLERANCE`] of it, refusing
+    /// a point near two edges (a corner).
+    fn edge_at(&self, p: [f64; 3], what: &str) -> Result<anvil_kernel::EdgeRef, String> {
+        let q = anvil_kernel::Vec3 { x: p[0], y: p[1], z: p[2] };
+        let body = &self.app.state.body;
+        let mut near: Vec<anvil_kernel::EdgeRef> = Vec::new();
+        let mut nearest = f64::INFINITY;
+        for (seg, i, j) in body.shared_segments() {
+            let (a, b) = (body.polygons[i].tag.id, body.polygons[j].tag.id);
+            if a == b {
+                continue; // Inside one face: not a model edge.
+            }
+            let d = point_segment_distance(q, seg);
+            nearest = nearest.min(d);
+            let e = anvil_kernel::EdgeRef::new(a, b);
+            if d <= PICK_TOLERANCE && !near.contains(&e) {
+                near.push(e);
+            }
+        }
+        match near.as_slice() {
+            [e] => Ok(*e),
+            [] if nearest.is_finite() => Err(format!(
+                "{what}: no edge passes through {{{}, {}, {}}}; the nearest is {:.3} mm away (give a point on the edge, within {PICK_TOLERANCE} mm)",
+                p[0], p[1], p[2], nearest
+            )),
+            [] => Err(format!("{what}: there is no body yet to pick edges on")),
+            _ => Err(format!(
+                "{what}: {{{}, {}, {}}} is on {} edges (a corner?); give a point along one edge, away from its ends",
+                p[0], p[1], p[2], near.len()
+            )),
+        }
+    }
+
+    /// The face through point `p`, within [`PICK_TOLERANCE`], refusing a point on an edge.
+    fn face_at(&self, p: [f64; 3], what: &str) -> Result<anvil_kernel::FaceId, String> {
+        let q = anvil_kernel::Vec3 { x: p[0], y: p[1], z: p[2] };
+        let body = &self.app.state.body;
+        let mut found: Vec<anvil_kernel::FaceId> = Vec::new();
+        for poly in &body.polygons {
+            if (poly.normal.dot(q) - poly.w).abs() > PICK_TOLERANCE || found.contains(&poly.tag.id) {
+                continue;
+            }
+            let u = poly.normal.any_perpendicular();
+            let v = poly.normal.cross(u);
+            let flat = |x: anvil_kernel::Vec3| anvil_kernel::v2(x.dot(u), x.dot(v));
+            let pts: Vec<anvil_kernel::Vec2> = poly.verts.iter().map(|&x| flat(x)).collect();
+            if anvil_kernel::profile::point_in_polygon(flat(q), &pts) {
+                found.push(poly.tag.id);
+            }
+        }
+        match found.as_slice() {
+            [f] => Ok(*f),
+            [] => Err(format!("{what}: no face of the part passes through {{{}, {}, {}}}", p[0], p[1], p[2])),
+            _ => Err(format!(
+                "{what}: {{{}, {}, {}}} is on {} faces (an edge?); give a point inside one face",
+                p[0],
+                p[1],
+                p[2],
+                found.len()
+            )),
+        }
+    }
+}
+
+fn point_segment_distance(p: anvil_kernel::Vec3, s: [anvil_kernel::Vec3; 2]) -> f64 {
+    let d = s[1] - s[0];
+    let t = ((p - s[0]).dot(d) / d.dot(d).max(1e-300)).clamp(0.0, 1.0);
+    (s[0] + d * t - p).length()
+}
+
+/// Merges sketch points that sit at the same place, so lines and arcs given end to end
+/// share their ends and close into profiles. Arc and circle centres are left alone.
+fn join_coincident_ends(sk: &mut anvil_sketch::Sketch) {
+    loop {
+        let centres: Vec<anvil_sketch::PointId> = sk
+            .entities
+            .iter()
+            .filter_map(|e| match e.geom {
+                anvil_sketch::Geom::Arc { c, .. } | anvil_sketch::Geom::Circle { c, .. } => Some(c),
+                _ => None,
+            })
+            .collect();
+        let ends: Vec<anvil_sketch::PointId> =
+            (0..sk.points.len()).filter(|p| !centres.contains(p) && *p != anvil_sketch::ORIGIN).collect();
+        let pair = ends.iter().enumerate().find_map(|(k, &a)| {
+            ends[k + 1..].iter().find(|&&b| sk.pos(a).distance(sk.pos(b)) < 1e-9).map(|&b| (a, b))
+        });
+        match pair {
+            Some((a, b)) => {
+                if sk.merge_points(a, b).is_err() {
+                    return;
+                }
+            }
+            None => return,
+        }
     }
 }
 

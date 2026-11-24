@@ -228,6 +228,12 @@ pub trait Host {
     fn add_sketch(&mut self, spec: &SketchSpec) -> Result<u32, String>;
     /// Adds an extrusion and returns its feature id.
     fn add_extrude(&mut self, spec: &ExtrudeSpec) -> Result<u32, String>;
+    /// Adds a revolve and returns its feature id.
+    fn add_revolve(&mut self, spec: &RevolveSpec) -> Result<u32, String>;
+    /// Adds a fillet or chamfer on the edges through the given points; returns its id.
+    fn add_blend(&mut self, spec: &BlendSpec) -> Result<u32, String>;
+    /// Adds a shell, opening the faces through the given points; returns its id.
+    fn add_shell(&mut self, spec: &ShellSpec) -> Result<u32, String>;
     fn set_status(&mut self, text: &str);
 }
 
@@ -240,6 +246,10 @@ pub struct SketchSpec {
     pub rects: Vec<[f64; 4]>,
     /// Circles: centre x, centre y, radius.
     pub circles: Vec<[f64; 3]>,
+    /// Chains of straight lines through these points; repeat the first point to close one.
+    pub polylines: Vec<Vec<[f64; 2]>>,
+    /// Arcs through three points: start x, y, a point on the arc x, y, end x, y.
+    pub arcs: Vec<[f64; 6]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -262,6 +272,36 @@ pub struct ExtrudeSpec {
     pub depth: Depth,
     pub cut: bool,
     pub reverse: bool,
+}
+
+/// A revolve from `anvil.revolve{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RevolveSpec {
+    pub sketch: u32,
+    /// The axis as a line in the sketch's coordinates: x0, y0, x1, y1. A line of the
+    /// sketch there is used, or a centerline is added.
+    pub axis: [f64; 4],
+    /// Degrees: a number or an equation. Never `ThroughAll`.
+    pub angle: Depth,
+    pub cut: bool,
+}
+
+/// A fillet or chamfer from `anvil.fillet{...}` or `anvil.chamfer{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlendSpec {
+    /// A point on each edge, in model coordinates (mm).
+    pub edges: Vec<[f64; 3]>,
+    /// The radius, or the chamfer's distance: a number or an equation.
+    pub size: Depth,
+    pub chamfer: bool,
+}
+
+/// A shell from `anvil.shell{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShellSpec {
+    /// A point on each face to open, in model coordinates (mm). None makes a closed hollow.
+    pub remove: Vec<[f64; 3]>,
+    pub thickness: Depth,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -513,7 +553,7 @@ impl Engine {
         let anvil = self.anvil()?;
         let names = [
             "run", "state", "new", "open", "save", "export", "var", "dim", "delete", "material", "sketch",
-            "extrude", "status",
+            "extrude", "revolve", "fillet", "chamfer", "shell", "status",
         ];
         let result = self.guarded(|lua| {
             lua.scope(|scope| {
@@ -617,6 +657,29 @@ impl Engine {
                     scope.create_function(move |_, t: Table| {
                         let spec = read_extrude(&t).map_err(fail)?;
                         h.borrow_mut().add_extrude(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "revolve",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_revolve(&t).map_err(fail)?;
+                        h.borrow_mut().add_revolve(&spec).map_err(fail)
+                    })?,
+                )?;
+                for (name, chamfer) in [("fillet", false), ("chamfer", true)] {
+                    anvil.set(
+                        name,
+                        scope.create_function(move |_, t: Table| {
+                            let spec = read_blend(&t, chamfer).map_err(fail)?;
+                            h.borrow_mut().add_blend(&spec).map_err(fail)
+                        })?,
+                    )?;
+                }
+                anvil.set(
+                    "shell",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_shell(&t).map_err(fail)?;
+                        h.borrow_mut().add_shell(&spec).map_err(fail)
                     })?,
                 )?;
                 anvil.set(
@@ -841,10 +904,74 @@ fn read_sketch(t: &Table) -> Result<SketchSpec, String> {
             s.circles.push(numbers(&c.map_err(lua_err)?, "anvil.sketch circles: {x, y, radius}")?);
         }
     }
-    if s.rects.is_empty() && s.circles.is_empty() {
-        return Err("anvil.sketch: give rects = {{x0, y0, x1, y1}, ...} or circles = {{x, y, r}, ...}".into());
+    if let Some(lines) = t.get::<Option<Table>>("polylines").map_err(lua_err)? {
+        for l in lines.sequence_values::<Table>() {
+            let mut pts = Vec::new();
+            for p in l.map_err(lua_err)?.sequence_values::<Table>() {
+                pts.push(numbers(&p.map_err(lua_err)?, "anvil.sketch polylines: {{x, y}, {x, y}, ...}")?);
+            }
+            s.polylines.push(pts);
+        }
+    }
+    if let Some(arcs) = t.get::<Option<Table>>("arcs").map_err(lua_err)? {
+        for a in arcs.sequence_values::<Table>() {
+            s.arcs.push(numbers(&a.map_err(lua_err)?, "anvil.sketch arcs: {x0, y0, x_on, y_on, x1, y1}")?);
+        }
+    }
+    if s.rects.is_empty() && s.circles.is_empty() && s.polylines.is_empty() && s.arcs.is_empty() {
+        return Err("anvil.sketch: give rects, circles, polylines or arcs (see docs/SCRIPTING.md)".into());
     }
     Ok(s)
+}
+
+/// A number of mm or degrees, or an equation; `what` names the call and key for errors.
+fn size(t: &Table, key: &str, what: &str, default: Option<f64>) -> Result<Depth, String> {
+    match t.get::<Value>(key).map_err(lua_err)? {
+        Value::Integer(i) => Ok(Depth::Value(i as f64)),
+        Value::Number(n) => Ok(Depth::Value(n)),
+        Value::String(s) => Ok(Depth::Expr(s.to_string_lossy())),
+        Value::Nil => {
+            default.map(Depth::Value).ok_or_else(|| format!("{what}: {key} = <number or equation>"))
+        }
+        _ => Err(format!("{what}: {key} is a number or an equation")),
+    }
+}
+
+/// A list of points in model coordinates: `{{x, y, z}, ...}`.
+fn points3(t: &Table, key: &str, what: &str) -> Result<Vec<[f64; 3]>, String> {
+    let mut out = Vec::new();
+    if let Some(list) = t.get::<Option<Table>>(key).map_err(lua_err)? {
+        for p in list.sequence_values::<Table>() {
+            out.push(numbers(&p.map_err(lua_err)?, &format!("{what}: {key} = {{{{x, y, z}}, ...}}"))?);
+        }
+    }
+    Ok(out)
+}
+
+fn read_revolve(t: &Table) -> Result<RevolveSpec, String> {
+    let sketch: u32 = t.get("sketch").map_err(|_| "anvil.revolve: sketch = <sketch id>".to_string())?;
+    let axis: Table =
+        t.get("axis").map_err(|_| "anvil.revolve: axis = {x0, y0, x1, y1} in the sketch".to_string())?;
+    let axis = numbers(&axis, "anvil.revolve: axis = {x0, y0, x1, y1} in the sketch")?;
+    let angle = size(t, "angle", "anvil.revolve", Some(360.0))?;
+    let cut = t.get::<Option<bool>>("cut").map_err(lua_err)?.unwrap_or(false);
+    Ok(RevolveSpec { sketch, axis, angle, cut })
+}
+
+fn read_blend(t: &Table, chamfer: bool) -> Result<BlendSpec, String> {
+    let (what, key) = if chamfer { ("anvil.chamfer", "distance") } else { ("anvil.fillet", "radius") };
+    let edges = points3(t, "edges", what)?;
+    if edges.is_empty() {
+        return Err(format!("{what}: edges = {{{{x, y, z}}, ...}}, a point on each edge"));
+    }
+    Ok(BlendSpec { edges, size: size(t, key, what, None)?, chamfer })
+}
+
+fn read_shell(t: &Table) -> Result<ShellSpec, String> {
+    Ok(ShellSpec {
+        remove: points3(t, "remove", "anvil.shell")?,
+        thickness: size(t, "thickness", "anvil.shell", None)?,
+    })
 }
 
 fn read_extrude(t: &Table) -> Result<ExtrudeSpec, String> {

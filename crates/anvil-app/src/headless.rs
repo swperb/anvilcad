@@ -1226,6 +1226,72 @@ mod tests {
         run(h, json!({"cmd": "state"}))["state"]["body"].clone()
     }
 
+    /// Issue #71: scripts build with lines and arcs, revolves, fillets, chamfers and shells,
+    /// picking edges and faces by a point on them.
+    #[test]
+    fn lua_revolves_rounds_bevels_and_shells() {
+        let mut h = Headless::new();
+        let vol = |h: &mut Headless| {
+            run(h, json!({"cmd": "state"}))["state"]["body"]["volume"].as_f64().unwrap_or(f64::NAN)
+        };
+        let feats = |h: &mut Headless| {
+            run(h, json!({"cmd": "state"}))["state"]["features"].as_array().map_or(0, Vec::len)
+        };
+        // A stepped profile closed by repeating its first point, turned about the Y axis:
+        // pi (10² 5 + 6² 15) = 1040 pi, to the mesh's accuracy.
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "front", polylines = { { {0,0}, {10,0}, {10,5}, {6,5}, {6,20}, {0,20}, {0,0} } } }
+            anvil.revolve{ sketch = s, axis = {0, 0, 0, 20} }
+        "#}),
+        );
+        let turned = vol(&mut h);
+        assert!((turned - 1040.0 * std::f64::consts::PI).abs() < 2e-3 * turned, "{turned}");
+        // Rounding the flange's rim (the circle of radius 10 at y = 5) takes a little off.
+        run(&mut h, json!({"cmd": "lua", "code": "anvil.fillet{ edges = { {10, 5, 0} }, radius = 1 }"}));
+        let rounded = vol(&mut h);
+        assert!(rounded < turned - 10.0 && rounded > turned - 16.0, "{turned} -> {rounded}");
+
+        // A 40 x 30 x 20 block: a 2 mm chamfer on a 40 mm top edge removes exactly 80 mm³.
+        run(&mut h, json!({"cmd": "new"}));
+        let block = r#"local s = anvil.sketch{ plane = "top", rects = { { 0, 0, 40, 30 } } }
+            anvil.extrude{ sketch = s, depth = 20 }"#;
+        run(&mut h, json!({"cmd": "lua", "code": block}));
+        run(&mut h, json!({"cmd": "lua", "code": "anvil.chamfer{ edges = { {20, 20, 0} }, distance = 2 }"}));
+        assert!((vol(&mut h) - 23920.0).abs() < 1e-6, "{}", vol(&mut h));
+        // A point at a corner, or off every edge, is refused and adds nothing.
+        let n = feats(&mut h);
+        let r =
+            h.command(&json!({"cmd": "lua", "code": "anvil.fillet{ edges = { {0, 20, -30} }, radius = 1 }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("is on 3 edges (a corner?)")), "{r}");
+        let r = h
+            .command(&json!({"cmd": "lua", "code": "anvil.fillet{ edges = { {20, 21, -30} }, radius = 1 }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("the nearest is 1.000 mm away")), "{r}");
+        assert_eq!(feats(&mut h), n);
+
+        // Open the top (y = 20) with 2 mm walls: 24000 - 36 x 26 x 18 = 7152 mm³.
+        run(&mut h, json!({"cmd": "new"}));
+        run(&mut h, json!({"cmd": "lua", "code": block}));
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": "anvil.shell{ remove = { {20, 20, -15} }, thickness = 2 }"}),
+        );
+        assert!((vol(&mut h) - 7152.0).abs() < 1e-6, "{}", vol(&mut h));
+
+        // A half disc of radius 10 from a line and a three-point arc, 5 thick: 250 pi.
+        run(&mut h, json!({"cmd": "new"}));
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "front", polylines = { { {-10, 0}, {10, 0} } }, arcs = { { 10, 0, 0, 10, -10, 0 } } }
+            anvil.extrude{ sketch = s, depth = 5 }
+        "#}),
+        );
+        let disc = vol(&mut h);
+        assert!((disc - 250.0 * std::f64::consts::PI).abs() < 2e-3 * disc, "{disc}");
+    }
+
     const PLATE: &str = r#"
         anvil.var("t", 10)
         local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }
