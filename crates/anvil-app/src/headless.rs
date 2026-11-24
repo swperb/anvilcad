@@ -985,6 +985,53 @@ mod tests {
     }
 
     #[test]
+    fn an_overflowing_command_bar_shows_and_scrolls_to_what_is_past_its_edges() {
+        let mut h = Headless::new();
+        let edges = |h: &mut Headless| {
+            let w = run(h, json!({"cmd": "widgets", "role": "Button"}))["widgets"].clone();
+            let has = |l: &str| w.as_array().is_some_and(|w| w.iter().any(|b| b["label"] == l));
+            (has("Scroll commands left"), has("Scroll commands right"))
+        };
+        let left_of = |h: &mut Headless, label: &str| {
+            let w = run(h, json!({"cmd": "widgets", "role": "Button"}))["widgets"].clone();
+            w.as_array()
+                .and_then(|w| w.iter().find(|b| b["label"] == label))
+                .map(|b| b["rect"][0].as_f64().unwrap_or(f64::NAN))
+        };
+        // Everything fits: no edge buttons (issue #149).
+        run(&mut h, json!({"cmd": "resize", "width": 1700, "height": 900}));
+        assert_eq!(edges(&mut h), (false, false));
+        // Too narrow even for icons: only the right side has more.
+        run(&mut h, json!({"cmd": "resize", "width": 800, "height": 600}));
+        assert_eq!(edges(&mut h), (false, true));
+        let before = left_of(&mut h, "Fillet").expect("Fillet button");
+        // A click scrolls right by a page, or to the end if that is nearer; then the left
+        // side has more.
+        run(&mut h, json!({"cmd": "click", "label": "Scroll commands right"}));
+        let after = left_of(&mut h, "Fillet").expect("Fillet button");
+        assert!(before - after > 50.0, "scrolled {before} -> {after}");
+        assert!(edges(&mut h).0);
+        // Scrolling to the end leaves nothing under where the right chevron was.
+        while edges(&mut h).1 {
+            run(&mut h, json!({"cmd": "click", "label": "Scroll commands right"}));
+        }
+        let reference = run(&mut h, json!({"cmd": "widgets", "role": "Button"}))["widgets"]
+            .as_array()
+            .and_then(|w| {
+                w.iter()
+                    .find(|b| b["label"] == "Reference")
+                    .map(|b| b["rect"][2].as_f64().unwrap_or(f64::NAN))
+            })
+            .expect("Reference button");
+        assert!(reference <= 800.0 - 8.0 - 24.0, "Reference ends at {reference}");
+        // And back to the start.
+        while edges(&mut h).0 {
+            run(&mut h, json!({"cmd": "click", "label": "Scroll commands left"}));
+        }
+        assert_eq!(left_of(&mut h, "Fillet"), Some(before));
+    }
+
+    #[test]
     fn sketch_and_extrude_by_clicking_labels() {
         let mut h = Headless::new();
         run(&mut h, json!({"cmd": "click", "label": "Front Plane"}));

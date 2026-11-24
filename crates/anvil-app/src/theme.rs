@@ -1067,19 +1067,56 @@ pub fn command_bar(ui: &mut Ui, key: impl std::hash::Hash, add: impl FnOnce(&mut
         d.insert_temp(bar_mode_id(), mode);
         d.insert_temp(bar_delta_id(), [0.0f32; 3]);
     });
-    let width = egui::ScrollArea::horizontal()
+    // A page scroll asked for by an edge button last frame.
+    let page_id = id.with("page-to");
+    let page_to: Option<f32> = ui.data_mut(|d| d.remove_temp(page_id));
+    let mut area = egui::ScrollArea::horizontal()
         .id_salt(id)
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.set_min_height(62.0);
-                add(ui);
-            })
-            .response
-            .rect
-            .width()
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded);
+    if let Some(x) = page_to {
+        area = area.horizontal_scroll_offset(x);
+    }
+    // When the row overflowed last frame, leave room for the edge buttons at both ends, so
+    // at either end of the scroll no command sits under one: clicking a chevron again after
+    // it has gone must not run the command that slid under the pointer.
+    let overflow_id = id.with("overflows");
+    let pad = mode == BarMode::Icons && ui.data(|d| d.get_temp::<bool>(overflow_id)).unwrap_or(false);
+    let out = area.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.set_min_height(62.0);
+            if pad {
+                ui.add_space(EDGE_BUTTON);
+            }
+            let start = ui.cursor().min.x;
+            add(ui);
+            let end = ui.min_rect().max.x;
+            if pad {
+                ui.add_space(EDGE_BUTTON);
+            }
+            end - start
         })
-        .inner;
+        .inner
+    });
+    let width = out.inner;
+    let overflows = mode == BarMode::Icons && width > out.inner_rect.width() + 0.5;
+    if overflows != pad {
+        ui.data_mut(|d| d.insert_temp(overflow_id, overflows));
+        ui.ctx().request_repaint();
+    }
+    // Show which side has more commands past the edge (issue #149). egui's own scroll bar
+    // floats and appears only on hover, so nothing else says the row goes on.
+    let view = out.inner_rect;
+    let offset = out.state.offset.x;
+    let max = (out.content_size.x - view.width()).max(0.0);
+    let page = (view.width() * 0.8).max(40.0);
+    if offset > 0.5 && bar_edge(ui, view, false) {
+        ui.data_mut(|d| d.insert_temp(page_id, (offset - page).max(0.0)));
+        ui.ctx().request_repaint();
+    }
+    if offset < max - 0.5 && bar_edge(ui, view, true) {
+        ui.data_mut(|d| d.insert_temp(page_id, (offset + page).min(max)));
+        ui.ctx().request_repaint();
+    }
     let delta: [f32; 3] = ui.data(|d| d.get_temp(bar_delta_id())).unwrap_or_default();
     ui.data_mut(|d| d.insert_temp(bar_mode_id(), BarMode::Full));
     let mut next = known;
@@ -1095,6 +1132,59 @@ pub fn command_bar(ui: &mut Ui, key: impl std::hash::Hash, add: impl FnOnce(&mut
         // Drawn too wide for this mode: draw again in the next one before anyone sees it.
         ui.ctx().request_discard("the command bar is too wide for its labels");
     }
+}
+
+/// The width of a command bar's edge button, and of the space left for it at each end.
+const EDGE_BUTTON: f32 = 24.0;
+
+/// One edge of a command bar that has more commands past it: a fade into the bar's
+/// background and a chevron that scrolls a page that way. Returns true when clicked.
+fn bar_edge(ui: &mut Ui, view: Rect, right: bool) -> bool {
+    const BUTTON: f32 = EDGE_BUTTON;
+    const FADE: f32 = 20.0;
+    let p = Palette::of(ui);
+    let (edge, inward) = if right { (view.right(), -1.0) } else { (view.left(), 1.0) };
+    let button = Rect::from_x_y_ranges(
+        if right { edge - BUTTON..=edge } else { edge..=edge + BUTTON },
+        view.top()..=view.bottom(),
+    );
+    // The scrolled row shows through the panel's margin too; cover it out to the clip edge.
+    let clip = ui.clip_rect();
+    let cover = Rect::from_x_y_ranges(
+        if right { button.left()..=clip.right().max(edge) } else { clip.left().min(edge)..=button.right() },
+        view.top()..=view.bottom(),
+    );
+    let label = if right { "Scroll commands right" } else { "Scroll commands left" };
+    let resp = ui.interact(button, ui.id().with(("command-bar-edge", right)), Sense::click());
+    button_info(&resp, label, None);
+    if ui.is_rect_visible(button) {
+        let painter = ui.painter();
+        painter.rect_filled(cover, CornerRadius::ZERO, p.chrome);
+        // From the solid button to clear, over FADE points into the bar.
+        let inner = edge + inward * BUTTON;
+        let outer = inner + inward * FADE;
+        let clear = p.chrome.gamma_multiply(0.0);
+        let mut mesh = egui::epaint::Mesh::default();
+        mesh.colored_vertex(Pos2::new(inner, view.top()), p.chrome);
+        mesh.colored_vertex(Pos2::new(inner, view.bottom()), p.chrome);
+        mesh.colored_vertex(Pos2::new(outer, view.top()), clear);
+        mesh.colored_vertex(Pos2::new(outer, view.bottom()), clear);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(1, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+        // The chevron sits level with the command icons, not the captions under them.
+        let c = Pos2::new(button.center().x, view.top() + 26.0);
+        if resp.hovered() {
+            painter.rect_filled(Rect::from_center_size(c, Vec2::splat(22.0)), CornerRadius::same(6), p.hover);
+        }
+        let ink = if resp.hovered() { p.accent } else { p.text_weak };
+        let d = -inward * 3.5;
+        painter.line(
+            vec![Pos2::new(c.x - d, c.y - 6.0), Pos2::new(c.x + d, c.y), Pos2::new(c.x - d, c.y + 6.0)],
+            Stroke::new(1.75_f32, ink),
+        );
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(label).clicked()
 }
 
 /// A compact icon-only button with a tooltip, for the view toolbar and header.
