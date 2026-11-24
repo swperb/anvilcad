@@ -51,6 +51,12 @@ pub struct BuildState {
     pub points: HashMap<u32, Vec3>,
     /// The name of each exact body, in the same order as `exact`.
     pub body_names: Vec<crate::bodies::BodyRef>,
+    /// The exact bodies set aside while feature `.0`, which the exact kernel refused, is
+    /// tried on the faceted kernel. If that fails too, the part goes back to them, so one
+    /// failed feature does not move every later one to the faceted kernel.
+    /// The faceted body from then is kept too, in case the faceted attempt changed it
+    /// before failing.
+    parked: Option<(u32, Vec<ExactBody>, Solid)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -214,7 +220,10 @@ impl BuildState {
                 true
             }
             Err(reason) => {
-                self.leave_exact(id, reason);
+                if let Some(bodies) = self.exact.take() {
+                    self.parked = Some((id, bodies, self.body.clone()));
+                    self.faceted_from = Some((id, reason));
+                }
                 false
             }
         }
@@ -284,7 +293,16 @@ impl Document {
                 continue;
             }
             let id = self.features[i].id;
-            if let Err(cause) = self.rebuild_feature(i, &mut st) {
+            let result = self.rebuild_feature(i, &mut st);
+            let parked = st.parked.take();
+            if let Err(cause) = result {
+                // Refused by the exact kernel and failed on the faceted one as well: the
+                // feature adds nothing, so the part stays exact.
+                if let Some((_, bodies, body)) = parked.filter(|(pid, ..)| *pid == id) {
+                    st.exact = Some(bodies);
+                    st.body = body;
+                    st.faceted_from = None;
+                }
                 let f = &self.features[i];
                 st.errors.insert(id, crate::failure::explain(&f.name, &f.kind, cause));
             }
