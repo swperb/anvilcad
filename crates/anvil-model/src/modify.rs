@@ -220,12 +220,13 @@ fn faceted_dome(
     use anvil_kernel::{v2, Frame, Loop2, Profile};
     let gone =
         || Cause::told("the face to dome is no longer on the part", "Edit it and pick the face again.");
-    let frame = body.planar_face_frame(f).ok_or_else(|| {
-        Cause::told(
-            "the face to dome is not flat, or is no longer on the part",
-            "Edit it and pick a flat round face.",
-        )
-    })?;
+    // Whether the face is still there, before whether it is flat, so the two are told apart.
+    if body.face_polygons(f).next().is_none() {
+        return Err(gone());
+    }
+    let frame = body
+        .planar_face_frame(f)
+        .ok_or_else(|| Cause::told("the face to dome is not flat", "Edit it and pick a flat round face."))?;
     let (mut area, mut c) = (0.0, anvil_kernel::Vec3::ZERO);
     let mut verts = Vec::new();
     for p in body.face_polygons(f) {
@@ -241,6 +242,21 @@ fn faceted_dome(
     let r = verts.iter().map(|v| (*v - c).length()).fold(0.0, f64::max);
     if r <= 0.0 {
         return Err(gone());
+    }
+    // Only a plain circle: docs/re/rib-draft-dome.md leaves the shape of a dome on any
+    // other outline unknown, and says not to guess it (issue #182). A faceted circle has
+    // every vertex on its rim (or at its centre, in a fan) and, at 36 chords or more (see
+    // anvil_kernel::profile::arc_segments), at least 99.49% of the circle's area; a square
+    // has 64%, and a hole puts vertices inside the rim and takes area away.
+    let on_rim_or_centre = |v: &anvil_kernel::Vec3| {
+        let d = (*v - c).length();
+        d >= r * (1.0 - 1e-6) || d <= r * 1e-6
+    };
+    if !verts.iter().all(on_rim_or_centre) || area < 0.994 * std::f64::consts::PI * r * r {
+        return Err(Cause::told(
+            "the face is not one plain circle (it has another outline, or a hole in it), and the shape of a dome on such a face is not defined yet",
+            "Pick a flat round face without holes, such as the end of a cylinder or of a round boss.",
+        ));
     }
     // Height 0 is the dome tangent to the cylinder below: a hemisphere.
     let h = if h == 0.0 { r } else { h };
@@ -517,6 +533,52 @@ mod tests {
         );
     }
 
+    /// Issue #182: docs/re/rib-draft-dome.md leaves a dome on any face but a plain circle
+    /// unknown. The exact kernel refused these, and the faceted kernel used to dome them
+    /// anyway, round over a square. Now they fail, and the part is left exact and as it was.
+    #[test]
+    fn a_dome_on_a_square_or_ringed_face_is_refused() {
+        let not_round = told(
+            "the face is not one plain circle (it has another outline, or a hole in it), and the shape of a dome on such a face is not defined yet",
+            "Pick a flat round face without holes, such as the end of a cylinder or of a round boss.",
+        );
+        // A 20 mm square block, and a ring: radius 10 with a 4 mm hole, both 10 mm high.
+        let block = |sk: &mut anvil_sketch::Sketch| {
+            sk.add_rectangle(v2(-10.0, -10.0), v2(10.0, 10.0));
+            4000.0
+        };
+        let ring = |sk: &mut anvil_sketch::Sketch| {
+            let c = sk.add_point(v2(0.0, 0.0));
+            sk.add_circle(c, 10.0);
+            let c2 = sk.add_point(v2(0.0, 0.0));
+            sk.add_circle(c2, 2.0);
+            std::f64::consts::PI * (100.0 - 4.0) * 10.0
+        };
+        let shapes: [&dyn Fn(&mut anvil_sketch::Sketch) -> f64; 2] = [&block, &ring];
+        for (shape, elliptical) in shapes.iter().flat_map(|s| [(s, false), (s, true)]) {
+            let mut doc = Document::new();
+            let mut sf = SketchFeature::new(PlaneRef::Front);
+            let want = shape(&mut sf.sketch);
+            let s = doc.add_feature(FeatureKind::Sketch(sf));
+            let e = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+                sketch: s,
+                depth: Dim::Value(10.0),
+                ..Default::default()
+            }));
+            let id = doc.add_feature(FeatureKind::Dome(DomeFeature {
+                faces: vec![FaceId { feature: e, index: FaceId::END_CAP }],
+                height: Dim::Value(5.0),
+                reverse: false,
+                elliptical,
+            }));
+            assert_eq!(crate::refgeom::failure_of(&mut doc, id), not_round);
+            let st = doc.rebuild();
+            assert!(st.exact.is_some() && st.faceted_from.is_none(), "a failed dome leaves the part exact");
+            let v = exact_volume(&st);
+            assert!((v - want).abs() < 2e-5 * want, "{v} vs {want}");
+        }
+    }
+
     #[test]
     fn dome_failures_say_what_to_change() {
         let dome = |faces: Vec<FaceId>, h: Dim| {
@@ -539,10 +601,14 @@ mod tests {
             (
                 // The cylinder's round side.
                 Box::new(move |e| dome(vec![FaceId::side(e, 0)], Dim::Value(5.0))),
-                told(
-                    "the face to dome is not flat, or is no longer on the part",
-                    "Edit it and pick a flat round face.",
-                ),
+                told("the face to dome is not flat", "Edit it and pick a flat round face."),
+            ),
+            (
+                // A face of a feature that is not in the part.
+                Box::new(move |_| {
+                    dome(vec![FaceId { feature: 999, index: FaceId::END_CAP }], Dim::Value(5.0))
+                }),
+                told("the face to dome is no longer on the part", "Edit it and pick the face again."),
             ),
         ];
         for (make, want) in cases {
