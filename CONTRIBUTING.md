@@ -5,7 +5,7 @@ Apache-2.0, and everything in it should be something anyone may use, study, chan
 share.
 
 To ask a question or talk an idea through before you write code, join the
-[AnvilCAD Discord](https://discord.gg/CEG4GcVASJ). Bugs and feature requests belong in
+[AnvilCAD Discord](https://discord.gg/B3tnQ7e9bx). Bugs and feature requests belong in
 [GitHub issues](https://github.com/swperb/anvilcad/issues), so they are tracked; decisions
 made on Discord are written up in an issue or pull request.
 
@@ -46,7 +46,7 @@ use than the paid tools it replaces, so no one has a reason to go back to them.
 - **Small, reviewable changes.** Each pull request does one thing and says why. Do not mix
   refactors with features, and do not rewrite working code without a stated reason.
 - **When unsure, ask.** If a requirement, design choice or SOLIDWORKS behaviour is unclear,
-  open an issue, ask in the pull request or on the [Discord](https://discord.gg/CEG4GcVASJ), or record the open
+  open an issue, ask in the pull request or on the [Discord](https://discord.gg/B3tnQ7e9bx), or record the open
   question, rather than guessing and moving on.
 
 ## Developer Certificate of Origin
