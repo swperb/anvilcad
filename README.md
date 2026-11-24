@@ -11,7 +11,7 @@ The goal is a complete, free engineering stack: CAD now, then CAM, PDM and PLM (
 
 ![AnvilCAD showing the sample part](docs/screenshot.png)
 
-Status: early (0.1). The core modelling loop works end to end. Large parts of a full CAD
+Status: early (0.2). The core modelling loop works end to end. Large parts of a full CAD
 system are still ahead; see the roadmap.
 
 Questions, ideas and show-and-tell: join the [AnvilCAD Discord](https://discord.gg/CEG4GcVASJ). Bugs and feature
