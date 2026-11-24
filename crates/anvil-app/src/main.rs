@@ -83,9 +83,11 @@ fn main() -> eframe::Result<()> {
             if let Some(path) = config {
                 app.load_config(&cc.egui_ctx, path);
             }
-            // Only the window reads a 3D mouse (not the headless harness or a screenshot run).
+            // Only the window reads a 3D mouse and autosaves (not the headless harness or a
+            // screenshot run).
             if screenshot_run.is_none() {
                 app.enable_3d_mouse(&cc.egui_ctx);
+                app.enable_default_recovery();
             }
             if startup {
                 app.open_startup();

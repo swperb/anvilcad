@@ -91,6 +91,8 @@ sketch tool on the command bar and in the sketch panel, count as one.
 | `type` | `text`, typed into the focused field | |
 | `screenshot` | `path`, and `label` or `region` `[x0,y0,x1,y1]` to crop | `path`, `width`, `height`, `adapter` |
 | `resize` | `width`, `height` (points), `scale` | |
+| `recovery` | `dir` | `found`: turns autosave on with its recovery files in `dir` (never the user's data folder unless you name it) and lists work a crash left there; the app's Recover window shows it |
+| `autosave` | | `path`, `written`: writes a copy of unsaved work now |
 | `file_dialog` | `path`, or `null` to cancel; answers the next dialog | |
 | `open` | `path` (part, template, assembly or STEP file) | |
 | `sample`, `new` | | |

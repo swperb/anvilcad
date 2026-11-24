@@ -694,6 +694,22 @@ impl Headless {
                 self.resize(vec2(w.max(200.0), h.max(200.0)), scale.clamp(0.5, 4.0));
                 Ok(json!({}))
             }
+            "recovery" => {
+                let dir =
+                    PathBuf::from(s("dir").ok_or("recovery needs \"dir\": a folder for recovery files")?);
+                self.app.enable_recovery(&dir)?;
+                self.settle();
+                Ok(json!({ "found": self.app.recovery_found() }))
+            }
+            "autosave" => {
+                let file = self
+                    .app
+                    .recovery_file()
+                    .map(Path::to_path_buf)
+                    .ok_or("autosave is off: send recovery first")?;
+                self.app.autosave_now();
+                Ok(json!({ "path": file.display().to_string(), "written": file.exists() }))
+            }
             "file_dialog" => {
                 let answer = match cmd.get("path") {
                     Some(Value::String(p)) => Some(PathBuf::from(p)),
@@ -915,6 +931,8 @@ const COMMANDS: &[&str] = &[
     "type text                  into the focused field",
     "screenshot path [label|region]",
     "resize width height [scale]",
+    "recovery dir               turn autosave on in dir and list work a crash left there",
+    "autosave                   write a copy of unsaved work now (needs recovery first)",
     "file_dialog path|null      answer for the next Open/Save/Export dialog",
     "open path | sample | new",
     "lua code                   run a Lua chunk with the anvil API (docs/SCRIPTING.md)",

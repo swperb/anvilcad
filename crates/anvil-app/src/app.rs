@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 mod assembly;
+mod autosave;
 mod configs;
 use configs::{ConfigUi, Manager};
 mod navigation;
@@ -135,6 +136,8 @@ pub struct AnvilApp {
     status: String,
     last_title: String,
     allow_close: bool,
+    /// Autosave and crash recovery; see `app/autosave.rs`.
+    autosave: autosave::Autosave,
     dragging: bool,
     new_var: String,
     new_prop: String,
@@ -227,6 +230,7 @@ impl AnvilApp {
             status: "Ready".into(),
             last_title: String::new(),
             allow_close: false,
+            autosave: Default::default(),
             dragging: false,
             new_var: String::new(),
             new_prop: String::new(),
@@ -3959,6 +3963,7 @@ impl AnvilApp {
         self.windows.about = open;
 
         self.file_props_window(ctx);
+        self.recovery_window(ctx);
 
         if let Some((title, body)) = self.message.clone() {
             egui::Window::new(title)
@@ -5027,6 +5032,8 @@ impl AnvilApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
+        self.autosave_tick(ctx);
+
         let title = self.title();
         if title != self.last_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
@@ -5124,7 +5131,10 @@ impl eframe::App for AnvilApp {
         self.frame(ctx);
     }
 
-    fn on_exit(&mut self) {}
+    /// Only a clean exit gets here: the user saved, or chose not to.
+    fn on_exit(&mut self) {
+        self.finish_recovery();
+    }
 }
 
 /// End-to-end UI tests: real egui frames driven by synthetic mouse input (no window or GPU).

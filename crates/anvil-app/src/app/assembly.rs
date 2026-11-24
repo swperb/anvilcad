@@ -326,6 +326,15 @@ impl AnvilApp {
         }
     }
 
+    /// Opens recovered assembly work, compared with the user's file so it shows as unsaved.
+    pub(super) fn restore_assembly(&mut self, asm: Assembly, path: Option<PathBuf>) {
+        let on_disk = path.as_ref().and_then(|p| Assembly::load(p).ok());
+        self.enter_assembly(AsmSession::new(asm, path));
+        if let Some(s) = &mut self.asm {
+            s.saved = on_disk.unwrap_or_default();
+        }
+    }
+
     fn enter_assembly(&mut self, s: AsmSession) {
         self.sketch = None;
         self.editor = None;
