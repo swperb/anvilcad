@@ -1,0 +1,62 @@
+{
+  "active_configuration": "Long",
+  "configurations": [
+    {
+      "bbox_max": [
+        30.0,
+        15.0,
+        10.0
+      ],
+      "bbox_min": [
+        -30.0,
+        -15.0,
+        0.0
+      ],
+      "bodies": 1,
+      "faces": 7,
+      "name": "Default",
+      "surface_area": 5550.844255579668,
+      "volume": 17497.982921773164
+    },
+    {
+      "bbox_max": [
+        45.0,
+        15.0,
+        10.0
+      ],
+      "bbox_min": [
+        -45.0,
+        -15.0,
+        0.0
+      ],
+      "bodies": 1,
+      "faces": 6,
+      "name": "Long",
+      "surface_area": 7800.0,
+      "volume": 27000.0
+    },
+    {
+      "bbox_max": [
+        45.0,
+        15.0,
+        4.0
+      ],
+      "bbox_min": [
+        -45.0,
+        -15.0,
+        0.0
+      ],
+      "bodies": 1,
+      "faces": 6,
+      "name": "Long-Thin",
+      "surface_area": 6360.0,
+      "volume": 10800.0
+    }
+  ],
+  "format": "anvil-part",
+  "format_version": 2,
+  "recorded_by": "AnvilCAD 0.2.0: main at 5889659 with the changes that added these fixtures (#87)",
+  "resaves_unchanged": true,
+  "saved_by": "AnvilCAD v0.1.0 (tag v0.1.0, commit 82e35f131c15): crates/anvil-model/tests/fixture_generator.rs and tests/common/ copied into that release tree and run there with its own crates",
+  "notes": "v0.1.0 did not reread every saved number exactly (serde_json without float_roundtrip), so it could not resave this file unchanged; this build does."
+}

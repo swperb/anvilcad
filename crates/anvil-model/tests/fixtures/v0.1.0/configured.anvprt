@@ -1,0 +1,394 @@
+{
+  "format": "anvil-part",
+  "format_version": 2,
+  "material": {
+    "name": "6061 Alloy",
+    "density": 2.7,
+    "class": "Metal",
+    "yield_strength": 276.0,
+    "tensile_strength": 310.0,
+    "elastic_modulus": 68.9,
+    "thermal_conductivity": 167.0,
+    "min_wall": 0.8,
+    "min_bend_ratio": 2.5
+  },
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": "Fixture: configured plate"
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Finish",
+      "kind": "Text",
+      "value": ""
+    }
+  ],
+  "variables": [
+    {
+      "name": "len",
+      "expr": "90",
+      "comment": ""
+    }
+  ],
+  "features": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 2.9999987932726195e-18,
+                "y": 5.921192266198372e-38
+              },
+              {
+                "x": -45.0,
+                "y": -15.0
+              },
+              {
+                "x": 45.0,
+                "y": -15.0
+              },
+              {
+                "x": 45.0,
+                "y": 15.0
+              },
+              {
+                "x": -45.0,
+                "y": 15.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 3
+                  }
+                },
+                "construction": true
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              },
+              {
+                "Midpoint": {
+                  "p": 0,
+                  "line": 4
+                }
+              },
+              {
+                "Length": {
+                  "line": 0,
+                  "value": 90.0
+                }
+              },
+              {
+                "Length": {
+                  "line": 1,
+                  "value": 30.0
+                }
+              }
+            ]
+          },
+          "driven": [
+            {
+              "constraint": 6,
+              "expr": "len"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Boss-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 1,
+          "end": "Blind",
+          "depth": {
+            "Value": 10.0
+          },
+          "reverse": false,
+          "op": "Boss",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": true
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Sketch2",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": {
+            "Face": {
+              "feature": 2,
+              "index": 1
+            }
+          },
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Circle": {
+                    "c": 1,
+                    "r": 4.0
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Diameter": {
+                  "entity": 0,
+                  "value": 8.0
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Cut-Extrude1",
+      "suppressed": true,
+      "kind": {
+        "Extrude": {
+          "sketch": 3,
+          "end": "ThroughAll",
+          "depth": {
+            "Value": 0.0
+          },
+          "reverse": false,
+          "op": "Cut",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": true
+        }
+      }
+    }
+  ],
+  "next_id": 5,
+  "rollback": null,
+  "configurations": [
+    {
+      "id": 1,
+      "name": "Default",
+      "suppress_new_features": false
+    },
+    {
+      "id": 2,
+      "name": "Long",
+      "description": "Long plate, no bore",
+      "suppress_new_features": false,
+      "properties": [
+        {
+          "name": "PartNo",
+          "kind": "Text",
+          "value": "FX-0002-L"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Long-Thin",
+      "parent": 2,
+      "suppress_new_features": false
+    }
+  ],
+  "active_configuration": 2,
+  "configured": [
+    {
+      "param": {
+        "Variable": {
+          "name": "len"
+        }
+      },
+      "values": {
+        "1": {
+          "Expr": "60"
+        },
+        "2": {
+          "Expr": "90"
+        }
+      }
+    },
+    {
+      "param": {
+        "Dimension": {
+          "feature": 2,
+          "slot": "Depth"
+        }
+      },
+      "values": {
+        "1": {
+          "Dim": {
+            "Value": 10.0
+          }
+        },
+        "2": {
+          "Dim": {
+            "Value": 10.0
+          }
+        },
+        "3": {
+          "Dim": {
+            "Value": 4.0
+          }
+        }
+      }
+    },
+    {
+      "param": {
+        "Suppression": {
+          "feature": 4
+        }
+      },
+      "values": {
+        "1": {
+          "Suppressed": false
+        },
+        "2": {
+          "Suppressed": true
+        }
+      }
+    },
+    {
+      "param": "Material",
+      "values": {
+        "1": {
+          "Material": {
+            "name": "AISI 304",
+            "density": 8.0,
+            "class": "Metal",
+            "yield_strength": 215.0,
+            "tensile_strength": 505.0,
+            "elastic_modulus": 193.0,
+            "thermal_conductivity": 16.2,
+            "min_wall": 0.8,
+            "min_bend_ratio": 1.0
+          }
+        },
+        "2": {
+          "Material": {
+            "name": "6061 Alloy",
+            "density": 2.7,
+            "class": "Metal",
+            "yield_strength": 276.0,
+            "tensile_strength": 310.0,
+            "elastic_modulus": 68.9,
+            "thermal_conductivity": 167.0,
+            "min_wall": 0.8,
+            "min_bend_ratio": 2.5
+          }
+        }
+      }
+    }
+  ]
+}

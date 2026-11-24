@@ -1,0 +1,526 @@
+{
+  "format": "anvil-part",
+  "format_version": 1,
+  "material": {
+    "name": "6061 Alloy",
+    "density": 2.7
+  },
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": "Fixture: pre-configuration plate"
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Finish",
+      "kind": "Text",
+      "value": ""
+    }
+  ],
+  "variables": [
+    {
+      "name": "width",
+      "expr": "60",
+      "comment": ""
+    }
+  ],
+  "features": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": -30.0,
+                "y": -20.0
+              },
+              {
+                "x": 30.0,
+                "y": -20.0
+              },
+              {
+                "x": 30.0,
+                "y": 20.0
+              },
+              {
+                "x": -30.0,
+                "y": 20.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 3
+                  }
+                },
+                "construction": true
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              },
+              {
+                "Midpoint": {
+                  "p": 0,
+                  "line": 4
+                }
+              },
+              {
+                "Length": {
+                  "line": 0,
+                  "value": 60.0
+                }
+              },
+              {
+                "Length": {
+                  "line": 1,
+                  "value": 40.0
+                }
+              }
+            ]
+          },
+          "driven": [
+            {
+              "constraint": 6,
+              "expr": "width"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Boss-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 1,
+          "end": "Blind",
+          "depth": {
+            "Value": 10.0
+          },
+          "reverse": false,
+          "op": "Boss"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Plane1",
+      "suppressed": false,
+      "kind": {
+        "Plane": {
+          "base": "Front",
+          "offset": {
+            "Value": 10.0
+          },
+          "flip": false
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Sketch2",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": {
+            "Feature": 3
+          },
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": -10.0,
+                "y": -10.0
+              },
+              {
+                "x": 10.0,
+                "y": -10.0
+              },
+              {
+                "x": 10.0,
+                "y": 10.0
+              },
+              {
+                "x": -10.0,
+                "y": 10.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Boss-Extrude2",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 4,
+          "end": "Blind",
+          "depth": {
+            "Value": 15.0
+          },
+          "reverse": false,
+          "op": "Boss"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Chamfer1",
+      "suppressed": false,
+      "kind": {
+        "Chamfer": {
+          "edges": [
+            {
+              "a": {
+                "feature": 5,
+                "index": 1
+              },
+              "b": {
+                "feature": 5,
+                "index": 2
+              }
+            },
+            {
+              "a": {
+                "feature": 5,
+                "index": 1
+              },
+              "b": {
+                "feature": 5,
+                "index": 3
+              }
+            },
+            {
+              "a": {
+                "feature": 5,
+                "index": 1
+              },
+              "b": {
+                "feature": 5,
+                "index": 4
+              }
+            },
+            {
+              "a": {
+                "feature": 5,
+                "index": 1
+              },
+              "b": {
+                "feature": 5,
+                "index": 5
+              }
+            }
+          ],
+          "distance": {
+            "Value": 2.0
+          }
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Sketch3",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": {
+            "Face": {
+              "feature": 2,
+              "index": 1
+            }
+          },
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": -26.0,
+                "y": -16.0
+              },
+              {
+                "x": -20.0,
+                "y": -16.0
+              },
+              {
+                "x": -20.0,
+                "y": -10.0
+              },
+              {
+                "x": -26.0,
+                "y": -10.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Cut-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 7,
+          "end": "ThroughAll",
+          "depth": {
+            "Value": 0.0
+          },
+          "reverse": false,
+          "op": "Cut"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "LPattern1",
+      "suppressed": false,
+      "kind": {
+        "LinearPattern": {
+          "features": [
+            8
+          ],
+          "direction": "X",
+          "spacing": {
+            "Value": 12.0
+          },
+          "count": {
+            "Value": 4.0
+          }
+        }
+      }
+    }
+  ],
+  "next_id": 10,
+  "rollback": null
+}

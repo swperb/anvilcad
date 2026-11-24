@@ -1,0 +1,27 @@
+{
+  "active_configuration": "Default",
+  "configurations": [
+    {
+      "bbox_max": [
+        30.0,
+        20.0,
+        25.0
+      ],
+      "bbox_min": [
+        -30.0,
+        -20.0,
+        0.0
+      ],
+      "bodies": 1,
+      "faces": 19,
+      "name": "Default",
+      "surface_area": 8571.646752981727,
+      "volume": 28410.66666666666
+    }
+  ],
+  "format": "ferrocad-part",
+  "format_version": 1,
+  "recorded_by": "AnvilCAD 0.2.0: main at 5889659 with the changes that added these fixtures (#87)",
+  "resaves_unchanged": false,
+  "saved_by": "plate.anvprt from commit cdde15902f61 with only its format id changed, by hand, to the legacy id \"ferrocad-part\" that this build still reads. No build in this repository's history writes that id, so no file saved under it was available."
+}

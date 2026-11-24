@@ -1,0 +1,694 @@
+{
+  "format": "anvil-part",
+  "format_version": 1,
+  "material": {
+    "name": "6061 Alloy",
+    "density": 2.7,
+    "class": "Metal",
+    "yield_strength": 276.0,
+    "tensile_strength": 310.0,
+    "elastic_modulus": 68.9,
+    "thermal_conductivity": 167.0,
+    "min_wall": 0.8,
+    "min_bend_ratio": 2.5
+  },
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": "Fixture: prismatic block"
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": "FX-0001"
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Finish",
+      "kind": "Text",
+      "value": ""
+    }
+  ],
+  "variables": [
+    {
+      "name": "width",
+      "expr": "80",
+      "comment": ""
+    },
+    {
+      "name": "thickness",
+      "expr": "12",
+      "comment": ""
+    }
+  ],
+  "features": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": -40.0,
+                "y": -25.0
+              },
+              {
+                "x": 40.0,
+                "y": -25.0
+              },
+              {
+                "x": 40.0,
+                "y": 25.0
+              },
+              {
+                "x": -40.0,
+                "y": 25.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 3
+                  }
+                },
+                "construction": true
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              },
+              {
+                "Midpoint": {
+                  "p": 0,
+                  "line": 4
+                }
+              },
+              {
+                "Length": {
+                  "line": 0,
+                  "value": 80.0
+                }
+              },
+              {
+                "Length": {
+                  "line": 1,
+                  "value": 50.0
+                }
+              }
+            ]
+          },
+          "driven": [
+            {
+              "constraint": 6,
+              "expr": "width"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Boss-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 1,
+          "end": "Blind",
+          "depth": {
+            "Expr": "thickness"
+          },
+          "reverse": false,
+          "op": "Boss",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": true
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Chamfer1",
+      "suppressed": false,
+      "kind": {
+        "Chamfer": {
+          "edges": [
+            {
+              "a": {
+                "feature": 2,
+                "index": 1
+              },
+              "b": {
+                "feature": 2,
+                "index": 5
+              }
+            }
+          ],
+          "distance": {
+            "Value": 1.5
+          },
+          "kind": "EqualDistance",
+          "tangent_propagation": false
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Fillet1",
+      "suppressed": false,
+      "kind": {
+        "Fillet": {
+          "edges": [
+            {
+              "a": {
+                "feature": 2,
+                "index": 2
+              },
+              "b": {
+                "feature": 2,
+                "index": 3
+              }
+            },
+            {
+              "a": {
+                "feature": 2,
+                "index": 3
+              },
+              "b": {
+                "feature": 2,
+                "index": 4
+              }
+            }
+          ],
+          "radius": {
+            "Value": 4.0
+          },
+          "profile": "Circular",
+          "tangent_propagation": false
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Sketch2",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": {
+            "Face": {
+              "feature": 2,
+              "index": 1
+            }
+          },
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": -25.0,
+                "y": 15.0
+              }
+            ],
+            "entities": [],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Hole1",
+      "suppressed": false,
+      "kind": {
+        "Hole": {
+          "sketch": 5,
+          "kind": "Simple",
+          "diameter": {
+            "Value": 6.0
+          },
+          "end": "ThroughAll",
+          "depth": {
+            "Value": 0.0
+          },
+          "reverse": false
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "LPattern1",
+      "suppressed": false,
+      "kind": {
+        "LinearPattern": {
+          "features": [
+            6
+          ],
+          "direction": "X",
+          "spacing": {
+            "Value": 10.0
+          },
+          "count": {
+            "Value": 3.0
+          },
+          "reverse": false,
+          "seed_only": false
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Sketch3",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": {
+            "Face": {
+              "feature": 2,
+              "index": 1
+            }
+          },
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 12.0,
+                "y": -10.0
+              },
+              {
+                "x": 26.0,
+                "y": -10.0
+              },
+              {
+                "x": 26.0,
+                "y": 6.0
+              },
+              {
+                "x": 12.0,
+                "y": 6.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Cut-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 8,
+          "end": "Blind",
+          "depth": {
+            "Value": 4.0
+          },
+          "reverse": false,
+          "op": "Cut",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": true
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Plane1",
+      "suppressed": false,
+      "kind": {
+        "Plane": {
+          "base": "Right",
+          "offset": {
+            "Value": 5.0
+          },
+          "flip": false,
+          "kind": "Offset",
+          "flip_normal": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Mirror1",
+      "suppressed": false,
+      "kind": {
+        "Mirror": {
+          "plane": {
+            "Feature": 10
+          },
+          "features": [
+            9
+          ],
+          "bodies": false,
+          "seed_only": false
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Sketch4",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": {
+            "Face": {
+              "feature": 2,
+              "index": 1
+            }
+          },
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 28.0,
+                "y": 12.0
+              },
+              {
+                "x": 32.0,
+                "y": 12.0
+              },
+              {
+                "x": 32.0,
+                "y": 16.0
+              },
+              {
+                "x": 28.0,
+                "y": 16.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Cut-Extrude2",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 12,
+          "end": "ThroughAll",
+          "depth": {
+            "Value": 0.0
+          },
+          "reverse": false,
+          "op": "Cut",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": true
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Sketch5",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 30.0,
+                "y": -16.0
+              },
+              {
+                "x": -30.0,
+                "y": -16.0
+              }
+            ],
+            "entities": [],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Sketch-Pattern1",
+      "suppressed": false,
+      "kind": {
+        "SketchPattern": {
+          "features": [
+            13
+          ],
+          "sketch": 14
+        }
+      }
+    }
+  ],
+  "next_id": 16,
+  "rollback": null,
+  "configurations": [
+    {
+      "id": 1,
+      "name": "Default",
+      "suppress_new_features": false
+    }
+  ],
+  "active_configuration": 1
+}
