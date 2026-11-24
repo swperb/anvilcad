@@ -965,6 +965,16 @@ impl Sketch {
         Ok(res)
     }
 
+    /// Multiplies the stored radius of each circle among `ids` by `factor`. Other
+    /// entities' sizes follow from their points.
+    fn scale_radii(&mut self, ids: &[EntityId], factor: f64) {
+        for &e in ids {
+            if let Geom::Circle { r, .. } = &mut self.entities[e].geom {
+                *r *= factor;
+            }
+        }
+    }
+
     /// Move, Copy, Rotate or Scale entities (sketch-tools.md, "Move, Copy, Rotate, Scale
     /// and Stretch"). The points move first; the caller solves afterwards.
     ///
@@ -997,6 +1007,8 @@ impl Sketch {
             for k in 1..=opts.copies.max(1) {
                 let place = |q: Vec2| (0..k).fold(q, |q, _| xf.apply(q));
                 let (new, pmap) = self.copy_entities(&ids, &place, &|_| false, false);
+                // A circle's radius is stored, not given by points: scale it too.
+                self.scale_radii(&new, xf.length_factor().powi(k as i32));
                 let emap: HashMap<EntityId, EntityId> =
                     ids.iter().copied().zip(new.iter().copied()).collect();
                 let copies: Vec<Constraint> = self
@@ -1035,6 +1047,7 @@ impl Sketch {
             self.points[p].x = at.x;
             self.points[p].y = at.y;
         }
+        self.scale_radii(&ids, xf.length_factor());
         let inside = |c: &Constraint| {
             c.points().iter().all(|p| moved.contains(p)) && c.entities().iter().all(|e| ids.contains(e))
         };

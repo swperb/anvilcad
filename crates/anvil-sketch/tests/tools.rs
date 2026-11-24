@@ -711,6 +711,29 @@ fn s41_scale() {
     assert_eq!(s.constraints[d[1]].value(), Some(10.0));
 }
 
+// Issue #166: a circle's radius is stored, not given by its points, and must scale too.
+#[test]
+fn s41_scale_circles_moved_and_copied() {
+    let radius = |s: &Sketch, e: EntityId| match s.entities[e].geom {
+        Geom::Circle { r, .. } => r,
+        _ => f64::NAN,
+    };
+    let mut s = Sketch::new();
+    let c = s.add_point(v2(10.0, 3.0));
+    let e = s.add_circle(c, 3.0);
+    let about = Transform2::Scale { about: v2(0.0, 0.0), factor: 2.0 };
+    s.transform_entities(&[e], about, TransformOptions::default()).unwrap();
+    assert!(close(s.pos(c), v2(20.0, 6.0)));
+    assert_eq!(radius(&s, e), 6.0);
+
+    // Two copies, each scaled once more than the last: radii 12 and 24.
+    let opts = TransformOptions { copy: true, copies: 2, ..Default::default() };
+    let (new, _) = s.transform_entities(&[e], about, opts).unwrap();
+    assert_eq!(radius(&s, e), 6.0, "the original stays");
+    assert_eq!(new.iter().map(|&n| radius(&s, n)).collect::<Vec<_>>(), vec![12.0, 24.0]);
+    assert!(s.solve().converged);
+}
+
 #[test]
 fn moving_breaks_relations_to_the_rest_unless_kept() {
     let (mut s, l, c) = rect();
