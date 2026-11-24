@@ -16,6 +16,18 @@
 use anvil_app::{app, render};
 use std::path::PathBuf;
 
+const USAGE: &str = "\
+Usage: anvilcad [FILE.anvprt | --sample] [--screenshot OUT.png] [--edit-sketch FEATURE_ID]
+                [--window properties|mass|dfm] [--material NAME]
+                [--config INIT.lua | --no-config] [--script SCRIPT.lua]
+       anvilcad --version | --help
+
+The configuration (options, theme, key bindings, user commands) is read from
+~/.config/anvilcad/init.lua (%APPDATA%\\AnvilCAD\\init.lua on Windows) unless --config or
+--no-config says otherwise; see docs/SCRIPTING.md.
+
+To drive AnvilCAD from scripts or agents without opening a window, use anvilcad-agent.";
+
 fn main() -> eframe::Result<()> {
     let mut open = None;
     let mut screenshot = None;
@@ -34,6 +46,15 @@ fn main() -> eframe::Result<()> {
             "--config" => config = Some(args.next().map(PathBuf::from)),
             "--no-config" => config = None,
             "--script" => script = args.next().map(PathBuf::from),
+            // Answered before any window opens.
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return Ok(());
+            }
+            "-V" | "--version" => {
+                println!("anvilcad {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
             _ => open = Some(PathBuf::from(a)),
         }
     }

@@ -20,6 +20,7 @@ Usage: anvilcad-agent mcp
        anvilcad-agent [--open FILE | --sample] [--size WxH] [--scale S]
                       [--config INIT.lua] [--lua SCRIPT.lua]
                       [--script FILE.jsonl] [--keep-going] [--screenshot OUT.png]
+       anvilcad-agent --version | --help
 
 `mcp` serves the Model Context Protocol over stdio, for AI agents such as Claude Code:
   claude mcp add anvilcad -- anvilcad-agent mcp
@@ -72,6 +73,10 @@ fn main() {
             }
             "-h" | "--help" => {
                 println!("{USAGE}");
+                return;
+            }
+            "-V" | "--version" => {
+                println!("anvilcad-agent {}", env!("CARGO_PKG_VERSION"));
                 return;
             }
             other => fail(&format!("unknown argument {other:?} (try --help)")),
