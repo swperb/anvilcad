@@ -9,7 +9,7 @@
 //! session.
 
 use crate::headless::Headless;
-use crate::script::{Depth, ExtrudeSpec, Host, PlaneSpec, SketchSpec};
+use crate::script::{BlendSpec, Depth, ExtrudeSpec, Host, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec};
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -227,6 +227,46 @@ impl Server {
                 }
                 s
             }
+            "add_revolve" => {
+                let nums: Option<Vec<f64>> = a
+                    .get("axis")
+                    .and_then(Value::as_array)
+                    .and_then(|r| r.iter().map(Value::as_f64).collect());
+                let axis = nums
+                    .and_then(|n| <[f64; 4]>::try_from(n).ok())
+                    .ok_or("axis: [x0, y0, x1, y1], a line in the sketch's coordinates")?;
+                let angle = match a.get("angle") {
+                    None => Depth::Value(360.0),
+                    Some(_) => size(a, "angle")?,
+                };
+                let spec = RevolveSpec { sketch: a.id("sketch")?, axis, angle, cut: a.bool("cut")? };
+                let id = self.host(|h| h.add_revolve(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "add_fillet" | "add_chamfer" => {
+                let chamfer = name == "add_chamfer";
+                let key = if chamfer { "distance" } else { "radius" };
+                let edges = a.number_lists::<3>("edges", "edges: [[x, y, z], ...], a point on each edge")?;
+                if edges.is_empty() {
+                    return Err("edges: [[x, y, z], ...], a point on each edge".into());
+                }
+                let spec = BlendSpec { edges, size: size(a, key)?, chamfer };
+                let id = self.host(|h| h.add_blend(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "add_shell" => {
+                let remove =
+                    a.number_lists::<3>("remove", "remove: [[x, y, z], ...], a point on each face to open")?;
+                let spec = ShellSpec { remove, thickness: size(a, "thickness")? };
+                let id = self.host(|h| h.add_shell(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
             "set_variable" => {
                 let name = a.req_str("name")?;
                 let value = a.number_or_text("value")?;
@@ -377,6 +417,19 @@ fn errors(snapshot: &Value) -> Value {
     json!(list)
 }
 
+/// A size in mm or degrees: a number, or an equation such as "wall * 2".
+fn size(a: &Args, k: &str) -> Result<Depth, String> {
+    match a.get(k) {
+        Some(Value::Number(n)) => Ok(Depth::Value(n.as_f64().unwrap_or(f64::NAN))),
+        Some(Value::String(s)) => match s.trim().parse::<f64>() {
+            Ok(v) => Ok(Depth::Value(v)),
+            Err(_) if !s.trim().is_empty() => Ok(Depth::Expr(s.clone())),
+            Err(_) => Err(format!("{k} is a number or an equation")),
+        },
+        _ => Err(format!("{k} is a number or an equation")),
+    }
+}
+
 fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
     let plane = match (a.get("on_feature"), a.str("plane")?) {
         (Some(_), Some(_)) => return Err("give plane or on_feature, not both".into()),
@@ -397,10 +450,33 @@ fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
     };
     let rects = a.number_lists::<4>("rects", "rects: [[x0, y0, x1, y1], ...]")?;
     let circles = a.number_lists::<3>("circles", "circles: [[x, y, radius], ...]")?;
-    if rects.is_empty() && circles.is_empty() {
-        return Err("give rects: [[x0, y0, x1, y1], ...] or circles: [[x, y, radius], ...]".into());
+    let arcs = a.number_lists::<6>("arcs", "arcs: [[x0, y0, x_on, y_on, x1, y1], ...]")?;
+    let polylines = match a.get("polylines") {
+        None => Vec::new(),
+        Some(v) => {
+            let usage = "polylines: [[[x, y], [x, y], ...], ...]";
+            let lines = v.as_array().ok_or(usage)?;
+            lines
+                .iter()
+                .map(|l| {
+                    let pts = l.as_array().ok_or(usage)?;
+                    pts.iter()
+                        .map(|p| {
+                            let n: Option<Vec<f64>> =
+                                p.as_array().and_then(|r| r.iter().map(Value::as_f64).collect());
+                            n.and_then(|n| <[f64; 2]>::try_from(n).ok())
+                                .filter(|n| n.iter().all(|x| x.is_finite()))
+                                .ok_or(usage)
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        }
+    };
+    if rects.is_empty() && circles.is_empty() && polylines.is_empty() && arcs.is_empty() {
+        return Err("give rects, circles, polylines or arcs".into());
     }
-    Ok(SketchSpec { plane, rects, circles })
+    Ok(SketchSpec { plane, rects, circles, polylines, arcs })
 }
 
 /// A tool's arguments, with readers that say what was wrong.
@@ -543,13 +619,15 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "add_sketch",
         title: "Add sketch",
-        description: "Add a sketch of rectangles and circles and return its feature id. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on a boss extrusion's end (or start) face instead, with the sketch's x along world X (world Y on a face normal to X) and its origin at the world origin projected onto the face. A cut's faces cannot be sketched on; use the boss's face or a plane.",
+        description: "Add a sketch of rectangles, circles, polylines and three-point arcs, and return its feature id. Lines and arcs whose ends meet are joined, so a polyline whose last point repeats its first, or polylines and arcs end to end, make a closed profile. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on a boss extrusion's end (or start) face instead, with the sketch's x along world X (world Y on a face normal to X) and its origin at the world origin projected onto the face. A cut's faces cannot be sketched on; use the boss's face or a plane.",
         properties: r#"{
             "plane": { "type": "string", "enum": ["front", "top", "right"], "description": "Default front" },
             "on_feature": { "type": "integer", "description": "Sketch on this extrusion's face instead of a plane" },
             "face": { "type": "string", "enum": ["end", "start"], "description": "Which face of on_feature; default end" },
             "rects": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 }, "description": "Rectangles by opposite corners: [[x0, y0, x1, y1], ...]" },
-            "circles": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "Circles: [[x, y, radius], ...]" }
+            "circles": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "Circles: [[x, y, radius], ...]" },
+            "polylines": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } }, "description": "Chains of lines: [[[x, y], [x, y], ...], ...]; repeat the first point to close one" },
+            "arcs": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 6, "maxItems": 6 }, "description": "Arcs through three points: [[x_start, y_start, x_on, y_on, x_end, y_end], ...]" }
         }"#,
         required: &[],
         read_only: false,
@@ -565,6 +643,52 @@ const TOOLS: &[Tool] = &[
             "reverse": { "type": "boolean", "description": "Extrude the other way" }
         }"#,
         required: &["sketch", "depth"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_revolve",
+        title: "Add revolve",
+        description: "Revolve a sketch about an axis in its plane, adding material (or cutting with cut=true). The axis is a line in the sketch's own coordinates: a line of the sketch there is used, or a centerline is added. The profile may touch the axis but not cross it. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "sketch": { "type": "integer", "description": "The sketch's feature id" },
+            "axis": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4, "description": "[x0, y0, x1, y1] in the sketch, mm" },
+            "angle": { "type": ["number", "string"], "description": "Degrees or an equation; default 360" },
+            "cut": { "type": "boolean", "description": "Remove material instead of adding it" }
+        }"#,
+        required: &["sketch", "axis"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_fillet",
+        title: "Add fillet",
+        description: "Round the edges through the given points (model coordinates, mm). Give one point along each edge, within 0.05 mm of it and away from its ends; get_state's body bounds help find them. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "edges": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "A point on each edge: [[x, y, z], ...]" },
+            "radius": { "type": ["number", "string"], "description": "mm or an equation" }
+        }"#,
+        required: &["edges", "radius"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_chamfer",
+        title: "Add chamfer",
+        description: "Bevel the edges through the given points (model coordinates, mm) by an equal distance on both faces. Give one point along each edge, within 0.05 mm of it and away from its ends. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "edges": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "A point on each edge: [[x, y, z], ...]" },
+            "distance": { "type": ["number", "string"], "description": "mm or an equation" }
+        }"#,
+        required: &["edges", "distance"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_shell",
+        title: "Add shell",
+        description: "Hollow the part to walls of the given thickness, opening the faces through the given points (model coordinates, mm; a point inside each face, within 0.05 mm of it). With no faces it makes a closed hollow. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "remove": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "A point on each face to open: [[x, y, z], ...]" },
+            "thickness": { "type": ["number", "string"], "description": "Wall thickness: mm or an equation" }
+        }"#,
+        required: &["thickness"],
         read_only: false,
     },
     Tool {

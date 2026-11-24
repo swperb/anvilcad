@@ -88,6 +88,10 @@ fn handshake_and_tool_list() {
         "list_features",
         "add_sketch",
         "add_extrude",
+        "add_revolve",
+        "add_fillet",
+        "add_chamfer",
+        "add_shell",
         "set_variable",
         "set_dimension",
         "rebuild",
@@ -486,4 +490,32 @@ fn a_sketch_on_a_face_that_is_not_there_fails_at_once() {
     let e = call_err(&mut s, "add_sketch", json!({ "on_feature": cut["feature"], "circles": [[5, 5, 1]] }));
     assert!(e.contains("no planar end face"), "{e}");
     assert_eq!(call(&mut s, "list_features", json!({}))["features"].as_array().unwrap().len(), 4);
+}
+
+/// Issue #71: revolve, chamfer and shell through MCP, picking edges and faces by points.
+#[test]
+fn revolve_chamfer_and_shell() {
+    let mut s = server();
+    // The 10 x 20 x 30 block: a 1 mm chamfer on the 10 mm edge at y = 20, z = 30
+    // removes 0.5 x 1 x 1 x 10 = 5 mm³.
+    block(&mut s);
+    let c = call(&mut s, "add_chamfer", json!({ "edges": [[5, 20, 30]], "distance": 1 }));
+    assert!(close(&c["body"]["volume"], 5995.0), "{c}");
+    // Opening the end face (z = 30) with 1 mm walls leaves 6000 - 8 x 18 x 29.
+    block(&mut s);
+    let sh = call(&mut s, "add_shell", json!({ "remove": [[5, 10, 30]], "thickness": 1 }));
+    assert!(close(&sh["body"]["volume"], 6000.0 - 8.0 * 18.0 * 29.0), "{sh}");
+    // A 10 x 10 square against the Y axis, turned a quarter turn: a quarter of a cylinder
+    // of radius 10 and height 10, pi 10² 10 / 4.
+    call(&mut s, "new_part", json!({}));
+    let sk = call(
+        &mut s,
+        "add_sketch",
+        json!({ "plane": "front", "polylines": [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] }),
+    );
+    let r =
+        call(&mut s, "add_revolve", json!({ "sketch": sk["sketch"], "axis": [0, 0, 0, 10], "angle": 90 }));
+    let v = r["body"]["volume"].as_f64().unwrap_or(f64::NAN);
+    let want = std::f64::consts::PI * 100.0 * 10.0 / 4.0;
+    assert!((v - want).abs() < 2e-3 * want, "{r}");
 }
