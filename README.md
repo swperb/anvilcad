@@ -71,10 +71,17 @@ macOS the command-line tools are also inside the app, in
 ## What works today
 
 **Sketching**
-- Line (chained), centerline, rectangle, circle, centerpoint arc
+- Line (chained), centerline, point
+- Rectangles: corner, center, 3 point corner and 3 point center, and parallelograms
+- Slots: straight, centerpoint straight, 3 point arc and centerpoint arc
+- Polygon, circle and perimeter circle
+- Arcs: centerpoint, tangent and 3 point ([spec](docs/re/sketch-entities.md))
+- Sketch Fillet and Sketch Chamfer at a corner; Trim, Extend and Split; Offset;
+  Mirror about a line; Linear and Circular Sketch Patterns; Move, Copy and Rotate
+  ([spec](docs/re/sketch-tools.md))
 - Snapping to existing points and the origin, automatic horizontal/vertical relations
-- Relations: coincident, horizontal, vertical, parallel, perpendicular, equal, tangent,
-  concentric, midpoint, point on line/circle, fix
+- Relations: coincident, horizontal, vertical, collinear, parallel, perpendicular, equal,
+  tangent, concentric, symmetric, midpoint, point on line/circle, fix
 - Dimension tool that infers the dimension from the picks and where its value is placed:
   length, horizontal/vertical/aligned distance, point-to-line and parallel-line distance,
   diameter, radius, arc length, angle in the chosen sector, and diameter about a
