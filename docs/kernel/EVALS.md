@@ -79,9 +79,17 @@ cargo run -p anvil-evals -- --images target/evals/img --report target/evals/corp
 # 1000 random cases of up to four primitives from seed 7; only problems are printed.
 cargo run -p anvil-evals -- --fuzz 1000 --seed 7 --prims 4 --quiet --failed-images --images target/evals/fuzz
 
+# Write the published results page (RESULTS.md) from the whole corpus.
+cargo run --release -p anvil-evals -- --publish docs/kernel/RESULTS.md
+
 # Show a case's tree and how its reference volume converges.
 cargo run -p anvil-evals -- --fuzz 300 --seed 1 --filter 1-136 --probe
 ```
+
+[RESULTS.md](RESULTS.md) is the published page: every corpus case, its reference volume and
+where it comes from, its result and expectation, and the timings of the committed reference
+run (live timings vary too much to publish). It comes out byte for byte the same from the same
+commit; regenerate it with `--publish` whenever the corpus or the kernel changes.
 
 An image has one row per view: the reference, the kernel's mesh, and their difference with bad
 pixels red (coverage), blue (depth) or green (normal). Depth is not judged where the surface is

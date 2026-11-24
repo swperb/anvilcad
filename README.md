@@ -395,6 +395,10 @@ crates/
 ```
 
 Kernel design notes:
+- The exact kernel is checked case by case against an independent reference (topology,
+  volume, inside and outside, STEP round trip, images); the results are published in
+  [docs/kernel/RESULTS.md](docs/kernel/RESULTS.md), and how it works is in
+  [docs/kernel/EVALS.md](docs/kernel/EVALS.md).
 - Two kernels work together. `anvil-brep` builds parts exactly: its surfaces are
   analytic, and its booleans intersect them exactly. Where the answer is a line, circle
   or ellipse it is computed in closed form; anything else between cylinders, cones and

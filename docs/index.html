@@ -260,6 +260,7 @@ housing.sldprt,Hybrid,true,0.0870,22,1,0,11.4,housing.anvprt,"Sweep1: sweeps are
             <li><strong>Never panics on bad input.</strong> The kernel and STEP crates forbid <code>unsafe</code> and deny <code>unwrap</code>; malformed files return errors.</li>
             <li><strong>Every solid is checked.</strong> Closed, consistently oriented, valid Euler characteristic, before it is used.</li>
             <li><strong>Never built worse.</strong> A faceted kernel takes over at the first feature the exact one cannot build, and is never worse than building faceted alone.</li>
+            <li><strong>Checked in public.</strong> Every case in the kernel's test corpus is built and checked against an independent reference, and <a href="https://github.com/swperb/anvilcad/blob/main/docs/kernel/RESULTS.md">the results are published</a>.</li>
           </ul>
         </div>
       </div>
