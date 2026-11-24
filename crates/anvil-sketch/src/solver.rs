@@ -14,6 +14,9 @@ const MAX_ITERS: usize = 200;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SolveResult {
+    /// True once the solver has run. A default result has not, and says so rather than
+    /// reading as a failure.
+    pub solved: bool,
     pub converged: bool,
     pub iterations: usize,
     pub max_residual: f64,
@@ -24,9 +27,25 @@ pub struct SolveResult {
 }
 
 impl SolveResult {
+    /// The solver ran and could not satisfy every constraint.
+    pub fn failed(&self) -> bool {
+        self.solved && !self.converged
+    }
+
+    /// The solver ran, satisfied every constraint and left no freedom.
+    pub fn fully_defined(&self) -> bool {
+        self.solved && self.converged && self.dof == 0
+    }
+
     pub fn status_text(&self) -> String {
-        if !self.converged {
+        if !self.solved {
+            "Not solved yet".to_string()
+        } else if !self.converged && !self.unsatisfied.is_empty() {
             format!("Over defined / unsolvable ({} conflicting)", self.unsatisfied.len())
+        } else if !self.converged {
+            // Every constraint's own residual is within tolerance, but the whole system
+            // still is not: no single constraint to point at.
+            "Unsolvable: the solver did not converge".to_string()
         } else if self.dof == 0 {
             "Fully defined".to_string()
         } else {
@@ -471,6 +490,7 @@ impl Sketch {
             }
         }
         SolveResult {
+            solved: true,
             converged,
             iterations: iters,
             max_residual: max_abs(&r),
