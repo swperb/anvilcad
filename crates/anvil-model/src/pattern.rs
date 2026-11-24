@@ -112,8 +112,10 @@ impl BuildState {
         if seeds.is_empty() {
             return Err(no_seeds());
         }
-        if places.len() > MAX_INSTANCES {
-            return Err(too_many(places.len()));
+        // Instances count the seed, as the user does and as the linear pattern's check does.
+        let instances = places.len() + 1;
+        if instances > MAX_INSTANCES {
+            return Err(too_many(instances));
         }
         let faceted: Vec<(Solid, BodyOp)> = seeds
             .iter()
@@ -453,6 +455,48 @@ mod tests {
             x.direction2 = None;
         });
         assert!((volume(&mut doc).0 - 59000.0).abs() < 1e-6);
+    }
+
+    /// Issue #183: a circular pattern past the limit, 10 000 instances each way, is
+    /// refused before a single copy is built (the whole rebuild takes a few milliseconds),
+    /// counting its instances the way the user and the linear pattern do: seed included.
+    #[test]
+    fn a_circular_pattern_past_the_limit_is_refused_before_building() {
+        let mut doc = Document::new();
+        let s = sketch(&mut doc, PlaneRef::Front, |s| {
+            s.add_rectangle(v2(0.0, 0.0), v2(100.0, 60.0));
+        });
+        let base = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature { sketch: s, ..Default::default() }));
+        let top =
+            PlaneRef::Face(anvil_kernel::FaceId { feature: base, index: anvil_kernel::FaceId::END_CAP });
+        let c = sketch(&mut doc, top, |s| {
+            s.add_rectangle(v2(65.0, 25.0), v2(75.0, 35.0));
+        });
+        let cut = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: c,
+            end: EndCondition::ThroughAll,
+            op: BodyOp::Cut,
+            ..Default::default()
+        }));
+        let p = doc.add_feature(FeatureKind::CircularPattern(CircularPatternFeature {
+            features: vec![cut],
+            axis: Axis::Line { origin: Vec3 { x: 50.0, y: 30.0, z: 0.0 }, dir: Vec3::Z },
+            total_angle: Dim::Value(360.0),
+            count: Dim::Value(10_000.0),
+            direction2: Some(CircularDirection2 {
+                symmetric: true,
+                angle: Dim::Value(0.0),
+                count: Dim::Value(1.0),
+                equal_spacing: true,
+            }),
+            ..Default::default()
+        }));
+        let st = doc.rebuild();
+        let e = st.errors.get(&p).expect("refused");
+        // 10 000 one way and 9 999 more the other, the seed counted once.
+        assert_eq!(e.cause, "it would make 19999 instances, more than the 10000 one pattern may make");
+        // The plate with its one cut: no copy was made.
+        assert!((st.body.mass_properties().volume - 59000.0).abs() < 1e-6);
     }
 
     #[test]
