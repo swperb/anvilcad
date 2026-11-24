@@ -8,6 +8,10 @@ name: Release
 #   packaging build them as a dry run: the packages are kept as workflow artifacts for a
 #   week and nothing is published.
 #
+# - Each release also gets the kernel evaluation results (docs/kernel/EVALS.md), made
+#   fresh from the tagged commit with anvil-evals --publish, as
+#   AnvilCAD-<version>-kernel-results.md.
+#
 # Cost: nothing. It uses only the standard GitHub-hosted runners (ubuntu-latest,
 # windows-latest, macos-latest), which are free for public repositories, and free tools
 # (WiX Toolset 5, squashfs-tools), and calls no paid service. It runs only for a tag, a
@@ -161,9 +165,36 @@ jobs:
           path: dist/*
           retention-days: 7
 
+  # The kernel evaluation results for exactly this commit, built on the free ubuntu-latest
+  # runner. A case that breaks its expectation fails the job, so no release goes out with a
+  # kernel regression; the gate in cargo test should have caught it first.
+  kernel-results:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run the corpus and write the results page
+        run: |
+          version="${VERSION#v}"
+          if [ -z "$version" ]; then
+            version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' Cargo.toml)"
+          fi
+          mkdir -p dist
+          out="dist/AnvilCAD-$version-kernel-results.md"
+          cargo run --release --locked -p anvil-evals -- --publish "$out"
+          # The committed page should match; say so if it has gone stale.
+          if ! cmp -s "$out" docs/kernel/RESULTS.md; then
+            echo "::warning::docs/kernel/RESULTS.md differs from this commit's results; regenerate it with anvil-evals --publish."
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-results
+          path: dist/*
+          retention-days: 7
+
   release:
     if: github.ref_type == 'tag'
-    needs: [macos, linux, windows]
+    needs: [macos, linux, windows, kernel-results]
     runs-on: ubuntu-latest
     permissions:
       contents: write
