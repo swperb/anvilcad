@@ -1,0 +1,27 @@
+{
+  "components": 3,
+  "format": "anvil-assembly",
+  "format_version": 1,
+  "geometry": {
+    "bbox_max": [
+      145.00000000000003,
+      25.0,
+      40.0
+    ],
+    "bbox_min": [
+      -40.0,
+      -25.0,
+      0.0
+    ],
+    "bodies": 3,
+    "faces": 30,
+    "surface_area": 25886.618061046454,
+    "volume": 86286.5515953973
+  },
+  "mates": 4,
+  "mates_satisfied": true,
+  "recorded_by": "AnvilCAD 0.2.0: main at 5889659 with the changes that added these fixtures (#87)",
+  "resaves_unchanged": true,
+  "saved_by": "AnvilCAD v0.1.0 (tag v0.1.0, commit 82e35f131c15): crates/anvil-model/tests/fixture_generator.rs and tests/common/ copied into that release tree and run there with its own crates",
+  "notes": "v0.1.0 itself measured volume 86286.45607416877, surface_area 25886.614856305343, bbox_max [145.00000000000006, 25.0, 40.0] when it saved this file. The faceted approximation of curved faces has been refined since, most likely by commits 2f37484 and bae4738; the values above are this build's and the file is unchanged. v0.1.0 did not reread every saved number exactly (serde_json without float_roundtrip), so it could not resave this file unchanged; this build does."
+}

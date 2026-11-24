@@ -1,0 +1,27 @@
+{
+  "active_configuration": "Default",
+  "configurations": [
+    {
+      "bbox_max": [
+        25.0,
+        25.0,
+        3.0
+      ],
+      "bbox_min": [
+        -25.0,
+        -25.0,
+        0.0
+      ],
+      "bodies": 1,
+      "faces": 6,
+      "name": "Default",
+      "surface_area": 5600.0,
+      "volume": 7500.0
+    }
+  ],
+  "format": "anvil-part",
+  "format_version": 1,
+  "recorded_by": "AnvilCAD 0.2.0: main at 5889659 with the changes that added these fixtures (#87)",
+  "resaves_unchanged": true,
+  "saved_by": "AnvilCAD v0.1.0 (tag v0.1.0, commit 82e35f131c15): crates/anvil-model/tests/fixture_generator.rs and tests/common/ copied into that release tree and run there with its own crates"
+}

@@ -1,0 +1,28 @@
+{
+  "active_configuration": "Default",
+  "configurations": [
+    {
+      "bbox_max": [
+        15.0,
+        30.0,
+        15.0
+      ],
+      "bbox_min": [
+        -15.0,
+        0.0,
+        -15.0
+      ],
+      "bodies": 1,
+      "faces": 5,
+      "name": "Default",
+      "surface_area": 5598.913784901474,
+      "volume": 14810.17593186828
+    }
+  ],
+  "format": "anvil-part",
+  "format_version": 1,
+  "recorded_by": "AnvilCAD 0.2.0: main at 5889659 with the changes that added these fixtures (#87)",
+  "resaves_unchanged": true,
+  "saved_by": "AnvilCAD v0.1.0 (tag v0.1.0, commit 82e35f131c15): crates/anvil-model/tests/fixture_generator.rs and tests/common/ copied into that release tree and run there with its own crates",
+  "notes": "v0.1.0 itself measured volume 14810.080410639739, surface_area 5598.910580160362 when it saved this file. The faceted approximation of curved faces has been refined since, most likely by commits 2f37484 and bae4738; the values above are this build's and the file is unchanged."
+}

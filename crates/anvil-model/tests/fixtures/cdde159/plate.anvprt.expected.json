@@ -1,0 +1,27 @@
+{
+  "active_configuration": "Default",
+  "configurations": [
+    {
+      "bbox_max": [
+        30.0,
+        20.0,
+        25.0
+      ],
+      "bbox_min": [
+        -30.0,
+        -20.0,
+        0.0
+      ],
+      "bodies": 1,
+      "faces": 19,
+      "name": "Default",
+      "surface_area": 8571.646752981727,
+      "volume": 28410.66666666666
+    }
+  ],
+  "format": "anvil-part",
+  "format_version": 1,
+  "recorded_by": "AnvilCAD 0.2.0: main at 5889659 with the changes that added these fixtures (#87)",
+  "resaves_unchanged": false,
+  "saved_by": "AnvilCAD commit cdde15902f61 (\"Import AnvilCAD 0.1\", the first commit in this repository, from before configurations and format version 2): a one-off test in that tree built this part through its API and saved it"
+}
