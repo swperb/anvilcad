@@ -469,6 +469,54 @@ mod tests {
         assert!(e.message().to_lowercase().contains("closed") || e.message().contains("outline"), "{e}");
     }
 
+    /// Issue #172: a fillet too large for its faces used to be refused by the exact kernel
+    /// and then built by the faceted one into a broken body (1198 mm³ from this 24000 mm³
+    /// block) with no error. Now it fails, the block is untouched, and the part stays exact.
+    #[test]
+    fn a_fillet_too_large_fails_and_leaves_the_part_exact() {
+        for (blend, what) in [(100.0, "fillet"), (35.0, "chamfer")] {
+            let (mut doc, base) = block();
+            let side = |e: u32| FaceId::side(base, e);
+            let edge = vec![EdgeRef::new(side(0), side(1))];
+            let kind = if what == "fillet" {
+                FeatureKind::Fillet(FilletFeature {
+                    edges: edge,
+                    radius: Dim::Value(blend),
+                    profile: FilletProfile::Circular,
+                    tangent_propagation: false,
+                })
+            } else {
+                FeatureKind::Chamfer(ChamferFeature {
+                    edges: edge,
+                    distance: Dim::Value(blend),
+                    kind: ChamferKind::EqualDistance,
+                    tangent_propagation: false,
+                })
+            };
+            let id = doc.add_feature(kind);
+            // A later fillet that fits is still built, and on the exact kernel.
+            let later = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+                edges: vec![EdgeRef::new(side(2), side(3))],
+                radius: Dim::Value(2.0),
+                profile: FilletProfile::Circular,
+                tangent_propagation: false,
+            }));
+            let e = failed(&mut doc, id);
+            assert_eq!(e.cause, format!("a {what} of {blend} does not fit on the faces next to this edge"));
+            let size = if what == "fillet" { "radius" } else { "distance" };
+            assert_eq!(e.suggestion, format!("Try a smaller {size}, or fewer edges at once."));
+            let st = doc.rebuild();
+            assert_eq!(st.errors.len(), 1, "{:?}", st.errors);
+            assert_eq!(st.faceted_from, None);
+            assert!(st.exact_features.contains(&later));
+            // The block less the later 2 mm round on its 20 mm upright edge.
+            let want = 24000.0 - (4.0 - std::f64::consts::PI) * 20.0;
+            let v = st.body.mass_properties().volume;
+            // Within 0.1 mm³ (the mesh of the round), well under the 17.2 mm³ it removes.
+            assert!((v - want).abs() < 0.1, "{what}: {v} vs {want}");
+        }
+    }
+
     #[test]
     fn a_shell_thicker_than_the_part_says_try_a_thinner_wall() {
         let (mut doc, base) = block();

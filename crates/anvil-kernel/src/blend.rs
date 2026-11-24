@@ -14,8 +14,8 @@
 
 use crate::build::{extrude, revolve, CHORD_TOL};
 use crate::math::{v2, Frame, Vec2, Vec3};
-use crate::profile::{Loop2, Profile, Seg2};
-use crate::solid::{EdgeRef, Polygon, Solid, SurfaceKind};
+use crate::profile::{point_in_polygon, Loop2, Profile, Seg2};
+use crate::solid::{EdgeRef, FaceId, Polygon, Solid, SurfaceKind};
 use std::f64::consts::{PI, TAU};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -240,6 +240,24 @@ fn linear_regions(
         }
     }
 
+    // The blend must fit on both faces, as on the exact kernel: the point it sets back
+    // to, from the middle of each run, has to lie on the face. Without this a blend wider
+    // than a face cuts or adds material far from the edge (issue #172).
+    let (setback, name, size) = match t {
+        EdgeTreatment::Fillet { radius } => (radius / (theta / 2.0).tan(), "fillet", radius),
+        EdgeTreatment::Chamfer { distance } => (distance, "chamfer", distance),
+    };
+    for &(lo, hi) in &runs {
+        let mid = p0 + e * ((lo + hi) / 2.0);
+        for (face, n, u) in [(pa.tag.id, na, ua), (pb.tag.id, nb, ub)] {
+            if !face_contains(solid, face, n, e, mid + u * (setback * 0.999)) {
+                return Err(BlendError::TooLarge(format!(
+                    "a {name} of {size} does not fit on the faces next to this edge"
+                )));
+            }
+        }
+    }
+
     // Cross-section frame: x along face a, z along the edge.
     let to2 = |v: Vec3, x: Vec3, y: Vec3| v2(v.dot(x), v.dot(y));
     let mut out = Vec::new();
@@ -264,6 +282,29 @@ fn linear_regions(
         out.push((region, convex));
     }
     Ok(out)
+}
+
+/// Whether point `p`, on the plane of face `face` (outward normal `n`), lies on that face:
+/// inside, or within a hair of the edge of, one of its polygons. `along` is any direction
+/// in the plane, used to lay the polygons flat.
+fn face_contains(solid: &Solid, face: FaceId, n: Vec3, along: Vec3, p: Vec3) -> bool {
+    const TOL: f64 = 1e-7;
+    let (x, y) = (along, n.cross(along));
+    let flat = |v: Vec3| v2(v.dot(x), v.dot(y));
+    let q = flat(p);
+    solid.polygons.iter().filter(|poly| poly.tag.id == face && poly.normal.dot(n) > 1.0 - 1e-6).any(|poly| {
+        let pts: Vec<Vec2> = poly.verts.iter().map(|&v| flat(v)).collect();
+        if point_in_polygon(q, &pts) {
+            return true;
+        }
+        // On the polygon's boundary: closer than TOL to one of its sides.
+        (0..pts.len()).any(|i| {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            let ab = b - a;
+            let t = ((q - a).dot(ab) / ab.dot(ab).max(1e-300)).clamp(0.0, 1.0);
+            (a + ab * t - q).length() < TOL
+        })
+    })
 }
 
 /// Circular edge between a plane (first polygon of each pair) and a cylinder (second).
@@ -389,6 +430,30 @@ mod tests {
     /// edges: 2 (y=min), 3 (x=max), 4 (y=max), 5 (x=min).
     fn face(feature: u32, index: u32) -> FaceId {
         FaceId { feature, index }
+    }
+
+    /// Issue #172: a blend wider than a face next to its edge is refused, not built into a
+    /// broken body. The 20 x 10 x 10 box's edge between its top and its x = max side is
+    /// 10 mm long, with 20 mm of top and 10 mm of side next to it.
+    #[test]
+    fn a_blend_that_does_not_fit_its_faces_is_refused() {
+        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1).unwrap();
+        let edge = EdgeRef::new(face(1, 1), face(1, 3));
+        let blend = |t| blend_edges(&b, &[edge], t, 9);
+        assert_eq!(
+            blend(EdgeTreatment::Fillet { radius: 100.0 }).err(),
+            Some(BlendError::TooLarge("a fillet of 100 does not fit on the faces next to this edge".into()))
+        );
+        assert_eq!(
+            blend(EdgeTreatment::Chamfer { distance: 10.5 }).err(),
+            Some(BlendError::TooLarge(
+                "a chamfer of 10.5 does not fit on the faces next to this edge".into()
+            ))
+        );
+        // Just inside the 10 mm side still fits, and removes what it should.
+        let out = blend(EdgeTreatment::Fillet { radius: 9.9 }).expect("fits");
+        let removed = (1.0 - PI / 4.0) * 9.9 * 9.9 * 10.0;
+        assert!(rel(out.mass_properties().volume, 2000.0 - removed) < 1e-3);
     }
 
     #[test]
