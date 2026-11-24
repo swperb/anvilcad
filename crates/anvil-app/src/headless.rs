@@ -1292,6 +1292,73 @@ mod tests {
         assert!((disc - 250.0 * std::f64::consts::PI).abs() < 2e-3 * disc, "{disc}");
     }
 
+    /// Issue #71: holes at sketch points, linear and circular patterns, and mirrors from a
+    /// script. Each hole's volume is checked to within half a percent of the hole (the
+    /// mesh of a round hole is a little smaller than the circle).
+    #[test]
+    fn lua_holes_patterns_and_mirrors() {
+        let mut h = Headless::new();
+        let vol = |h: &mut Headless| {
+            run(h, json!({"cmd": "state"}))["state"]["body"]["volume"].as_f64().unwrap_or(f64::NAN)
+        };
+        let pi = std::f64::consts::PI;
+        let hole = 25.0 * pi * 10.0; // a 10 mm through hole in 10 mm of plate
+        let near = |v: f64, want: f64, holes: f64| (v - want).abs() < 5e-3 * hole * holes;
+        // A 100 x 60 x 10 plate with one hole, patterned three along X, then mirrored.
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }
+            local base = anvil.extrude{ sketch = s, depth = 10 }
+            local pts = anvil.sketch{ plane = { on = base }, points = { {10, 10} } }
+            hole = anvil.hole{ sketch = pts, diameter = 10 }
+        "#}),
+        );
+        let v = vol(&mut h);
+        assert!(near(v, 60000.0 - hole, 1.0), "{v}");
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": "row = anvil.pattern{ features = { hole }, direction = 'x', spacing = 15, count = 3 }"}),
+        );
+        let v = vol(&mut h);
+        assert!(near(v, 60000.0 - 3.0 * hole, 3.0), "{v}");
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": "anvil.mirror{ features = { hole, row }, plane = 'right' }"}),
+        );
+        let v = vol(&mut h);
+        assert!(near(v, 60000.0 - 6.0 * hole, 6.0), "{v}");
+        // A sketch with no free points cannot place holes; an unknown feature is named.
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.hole{ sketch = 1, diameter = 5 }"}));
+        assert!(
+            r["error"].as_str().is_some_and(|e| e.contains("has no free points to place holes at")),
+            "{r}"
+        );
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.pattern{ features = { 'Nope' }, direction = 'x', spacing = 5, count = 2 }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("there is no feature \"Nope\"")), "{r}");
+
+        // A counterbored hole on a disc of radius 40, 5 thick, turned six times round Y.
+        run(&mut h, json!({"cmd": "new", "force": true}));
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "top", circles = { { 0, 0, 40 } } }
+            local disc = anvil.extrude{ sketch = s, depth = 5 }
+            local pts = anvil.sketch{ plane = { on = disc }, points = { {30, 0} } }
+            local h = anvil.hole{ sketch = pts, diameter = 6, counterbore = { diameter = 10, depth = 2 } }
+            anvil.circular_pattern{ features = { h }, axis = "y", count = 6 }
+        "#}),
+        );
+        let disc = 1600.0 * pi * 5.0;
+        let cbore = 9.0 * pi * 5.0 + (25.0 - 9.0) * pi * 2.0;
+        let v = vol(&mut h);
+        assert!(
+            (v - (disc - 6.0 * cbore)).abs() < 5e-3 * 6.0 * cbore + 1e-3 * disc,
+            "{v} vs {}",
+            disc - 6.0 * cbore
+        );
+    }
+
     const PLATE: &str = r#"
         anvil.var("t", 10)
         local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }

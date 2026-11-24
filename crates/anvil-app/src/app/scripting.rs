@@ -5,7 +5,8 @@
 use super::*;
 use crate::keymap::{Matcher, Step};
 use crate::script::{
-    self, Action, BlendSpec, Depth, Engine, ExtrudeSpec, Host, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec,
+    self, Action, BlendSpec, CircularSpec, Depth, DirPick, Engine, ExtrudeSpec, HoleSpec, Host, MirrorSpec,
+    PatternSpec, PlanePick, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec,
 };
 use std::time::SystemTime;
 
@@ -958,6 +959,10 @@ impl Host for AppHost<'_> {
             })?;
         }
         join_coincident_ends(&mut sf.sketch);
+        // Free points go in after the joining, so a point that lands on a line's end stays free.
+        for p in &spec.points {
+            sf.sketch.add_point(anvil_kernel::v2(p[0], p[1]));
+        }
         let before = self.app.doc.clone();
         let id = self.app.doc.add_feature(FeatureKind::Sketch(sf));
         // Rebuild now, so a face that cannot carry a sketch fails here rather than at the
@@ -1106,16 +1111,154 @@ impl Host for AppHost<'_> {
         self.commit_feature(what, before, FeatureKind::Shell(ShellFeature { remove, thickness }))
     }
 
+    fn add_mirror(&mut self, spec: &MirrorSpec) -> Result<u32, String> {
+        let what = "anvil.mirror";
+        let features = self.feature_ids(what, &spec.features)?;
+        let plane = match spec.plane {
+            PlanePick::Front => PlaneRef::Front,
+            PlanePick::Top => PlaneRef::Top,
+            PlanePick::Right => PlaneRef::Right,
+            PlanePick::Face(p) => PlaneRef::Face(self.face_at(p, what)?),
+        };
+        let before = self.app.doc.clone();
+        let kind = FeatureKind::Mirror(MirrorFeature {
+            plane,
+            features,
+            bodies: false,
+            plane2: None,
+            seed_only: false,
+        });
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_pattern(&mut self, spec: &PatternSpec) -> Result<u32, String> {
+        let what = "anvil.pattern";
+        let features = self.feature_ids(what, &spec.features)?;
+        let dim = |d: &Depth| dim_of(d, what);
+        let second = match &spec.second {
+            Some(r) => Some(PatternDirection {
+                direction: axis_of(&r.direction, [0.0; 3], what)?,
+                spacing: dim(&r.spacing)?,
+                count: dim(&r.count)?,
+                reverse: false,
+            }),
+            None => None,
+        };
+        let kind = FeatureKind::LinearPattern(LinearPatternFeature {
+            features,
+            direction: axis_of(&spec.first.direction, [0.0; 3], what)?,
+            spacing: dim(&spec.first.spacing)?,
+            count: dim(&spec.first.count)?,
+            direction2: second,
+            ..Default::default()
+        });
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_circular_pattern(&mut self, spec: &CircularSpec) -> Result<u32, String> {
+        let what = "anvil.circular_pattern";
+        let features = self.feature_ids(what, &spec.features)?;
+        let kind = FeatureKind::CircularPattern(CircularPatternFeature {
+            features,
+            axis: axis_of(&spec.axis, spec.through, what)?,
+            total_angle: dim_of(&spec.angle, what)?,
+            count: dim_of(&spec.count, what)?,
+            equal_spacing: true,
+            ..Default::default()
+        });
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_hole(&mut self, spec: &HoleSpec) -> Result<u32, String> {
+        let what = "anvil.hole";
+        let Some(sf) = self.app.doc.sketch(spec.sketch) else {
+            return Err(format!("{what}: feature {} is not a sketch", spec.sketch));
+        };
+        if anvil_model::hole::positions(&sf.sketch).is_empty() {
+            return Err(format!(
+                "{what}: sketch {} has no free points to place holes at; add them with points = {{{{x, y}}, ...}}",
+                spec.sketch
+            ));
+        }
+        let (end, depth) = match &spec.depth {
+            Depth::ThroughAll => (anvil_model::HoleEnd::ThroughAll, Dim::Value(0.0)),
+            d => (anvil_model::HoleEnd::Blind, dim_of(d, what)?),
+        };
+        let kind = match (&spec.counterbore, &spec.countersink) {
+            (Some((d, h)), _) => {
+                anvil_model::HoleKind::Counterbore { diameter: dim_of(d, what)?, depth: dim_of(h, what)? }
+            }
+            (None, Some((d, a))) => anvil_model::HoleKind::Countersink(anvil_model::Sink {
+                diameter: dim_of(d, what)?,
+                angle: dim_of(a, what)?,
+            }),
+            (None, None) => anvil_model::HoleKind::Simple,
+        };
+        let hole = anvil_model::HoleFeature {
+            sketch: spec.sketch,
+            kind,
+            diameter: dim_of(&spec.diameter, what)?,
+            end,
+            depth,
+            drill_angle: None,
+            near_sink: None,
+            reverse: false,
+            size: None,
+        };
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, FeatureKind::Hole(hole))
+    }
+
     fn set_status(&mut self, text: &str) {
         self.app.status = text.to_string();
         self.app.scripting.script_status = Some(text.to_string());
     }
 }
 
+/// A number or an equation as a feature dimension.
+fn dim_of(d: &Depth, what: &str) -> Result<Dim, String> {
+    match d {
+        Depth::Value(v) => Ok(Dim::Value(*v)),
+        Depth::Expr(e) => Ok(Dim::Expr(e.clone())),
+        Depth::ThroughAll => Err(format!("{what}: \"through\" is not a size here")),
+    }
+}
+
+/// A direction through the point `through`: a model axis's direction, or a vector. Through
+/// the origin, a model axis is that axis itself.
+fn axis_of(d: &DirPick, through: [f64; 3], what: &str) -> Result<Axis, String> {
+    let v = match d {
+        DirPick::X => [1.0, 0.0, 0.0],
+        DirPick::Y => [0.0, 1.0, 0.0],
+        DirPick::Z => [0.0, 0.0, 1.0],
+        DirPick::Vector(v) => *v,
+    };
+    if v.iter().all(|x| x.abs() < 1e-12) || v.iter().chain(&through).any(|x| !x.is_finite()) {
+        return Err(format!("{what}: the direction {{{}, {}, {}}} has no length", v[0], v[1], v[2]));
+    }
+    let at_origin = through.iter().all(|x| *x == 0.0);
+    Ok(match d {
+        DirPick::X if at_origin => Axis::X,
+        DirPick::Y if at_origin => Axis::Y,
+        DirPick::Z if at_origin => Axis::Z,
+        _ => {
+            let p = |a: [f64; 3]| anvil_kernel::Vec3 { x: a[0], y: a[1], z: a[2] };
+            Axis::Line { origin: p(through), dir: p(v) }
+        }
+    })
+}
+
 /// How far a picked point may be from the edge or face it names, in mm.
 const PICK_TOLERANCE: f64 = 0.05;
 
 impl AppHost<'_> {
+    /// The ids of the features named by id or name, in order.
+    fn feature_ids(&self, what: &str, names: &[String]) -> Result<Vec<u32>, String> {
+        names.iter().map(|n| self.feature_named(what, n).map(|f| f.id)).collect()
+    }
+
     /// Adds `kind` and rebuilds; if the feature fails, puts the part back as it was
     /// (`before`) and says why, so a failed call leaves nothing behind.
     fn commit_feature(&mut self, what: &str, before: Document, kind: FeatureKind) -> Result<u32, String> {

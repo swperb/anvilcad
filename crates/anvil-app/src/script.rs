@@ -234,6 +234,14 @@ pub trait Host {
     fn add_blend(&mut self, spec: &BlendSpec) -> Result<u32, String>;
     /// Adds a shell, opening the faces through the given points; returns its id.
     fn add_shell(&mut self, spec: &ShellSpec) -> Result<u32, String>;
+    /// Adds a mirror of features about a plane; returns its id.
+    fn add_mirror(&mut self, spec: &MirrorSpec) -> Result<u32, String>;
+    /// Adds a linear pattern of features; returns its id.
+    fn add_pattern(&mut self, spec: &PatternSpec) -> Result<u32, String>;
+    /// Adds a circular pattern of features; returns its id.
+    fn add_circular_pattern(&mut self, spec: &CircularSpec) -> Result<u32, String>;
+    /// Adds holes at a sketch's points; returns its id.
+    fn add_hole(&mut self, spec: &HoleSpec) -> Result<u32, String>;
     fn set_status(&mut self, text: &str);
 }
 
@@ -250,6 +258,8 @@ pub struct SketchSpec {
     pub polylines: Vec<Vec<[f64; 2]>>,
     /// Arcs through three points: start x, y, a point on the arc x, y, end x, y.
     pub arcs: Vec<[f64; 6]>,
+    /// Free points, such as where holes go: x, y.
+    pub points: Vec<[f64; 2]>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -302,6 +312,75 @@ pub struct ShellSpec {
     /// A point on each face to open, in model coordinates (mm). None makes a closed hollow.
     pub remove: Vec<[f64; 3]>,
     pub thickness: Depth,
+}
+
+/// A plane for a mirror: a standard plane, or the flat face through a point.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlanePick {
+    Front,
+    Top,
+    Right,
+    /// The flat face of the part through this point (model coordinates, mm).
+    Face([f64; 3]),
+}
+
+/// A direction: a model axis, or any vector.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DirPick {
+    X,
+    Y,
+    Z,
+    Vector([f64; 3]),
+}
+
+/// A mirror from `anvil.mirror{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MirrorSpec {
+    /// Feature ids or names.
+    pub features: Vec<String>,
+    pub plane: PlanePick,
+}
+
+/// One direction of a linear pattern.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PatternRun {
+    pub direction: DirPick,
+    pub spacing: Depth,
+    pub count: Depth,
+}
+
+/// A linear pattern from `anvil.pattern{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PatternSpec {
+    pub features: Vec<String>,
+    pub first: PatternRun,
+    pub second: Option<PatternRun>,
+}
+
+/// A circular pattern from `anvil.circular_pattern{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CircularSpec {
+    pub features: Vec<String>,
+    /// A model axis, or a line through `through` along a direction.
+    pub axis: DirPick,
+    /// The point the axis passes through.
+    pub through: [f64; 3],
+    pub count: Depth,
+    /// The total angle the instances spread over, degrees; 360 if not given.
+    pub angle: Depth,
+}
+
+/// Holes from `anvil.hole{...}`, one at each free point of a sketch.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HoleSpec {
+    pub sketch: u32,
+    pub diameter: Depth,
+    /// mm, an equation, or `ThroughAll`.
+    pub depth: Depth,
+    /// Counterbore diameter and depth.
+    pub counterbore: Option<(Depth, Depth)>,
+    /// Countersink diameter and angle (degrees).
+    pub countersink: Option<(Depth, Depth)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -552,8 +631,27 @@ impl Engine {
         let host = RefCell::new(host);
         let anvil = self.anvil()?;
         let names = [
-            "run", "state", "new", "open", "save", "export", "var", "dim", "delete", "material", "sketch",
-            "extrude", "revolve", "fillet", "chamfer", "shell", "status",
+            "run",
+            "state",
+            "new",
+            "open",
+            "save",
+            "export",
+            "var",
+            "dim",
+            "delete",
+            "material",
+            "sketch",
+            "extrude",
+            "revolve",
+            "fillet",
+            "chamfer",
+            "shell",
+            "mirror",
+            "pattern",
+            "circular_pattern",
+            "hole",
+            "status",
         ];
         let result = self.guarded(|lua| {
             lua.scope(|scope| {
@@ -680,6 +778,34 @@ impl Engine {
                     scope.create_function(move |_, t: Table| {
                         let spec = read_shell(&t).map_err(fail)?;
                         h.borrow_mut().add_shell(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "mirror",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_mirror(&t).map_err(fail)?;
+                        h.borrow_mut().add_mirror(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "pattern",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_pattern(&t).map_err(fail)?;
+                        h.borrow_mut().add_pattern(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "circular_pattern",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_circular(&t).map_err(fail)?;
+                        h.borrow_mut().add_circular_pattern(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "hole",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_hole(&t).map_err(fail)?;
+                        h.borrow_mut().add_hole(&spec).map_err(fail)
                     })?,
                 )?;
                 anvil.set(
@@ -918,8 +1044,20 @@ fn read_sketch(t: &Table) -> Result<SketchSpec, String> {
             s.arcs.push(numbers(&a.map_err(lua_err)?, "anvil.sketch arcs: {x0, y0, x_on, y_on, x1, y1}")?);
         }
     }
-    if s.rects.is_empty() && s.circles.is_empty() && s.polylines.is_empty() && s.arcs.is_empty() {
-        return Err("anvil.sketch: give rects, circles, polylines or arcs (see docs/SCRIPTING.md)".into());
+    if let Some(points) = t.get::<Option<Table>>("points").map_err(lua_err)? {
+        for p in points.sequence_values::<Table>() {
+            s.points.push(numbers(&p.map_err(lua_err)?, "anvil.sketch points: {{x, y}, ...}")?);
+        }
+    }
+    if s.rects.is_empty()
+        && s.circles.is_empty()
+        && s.polylines.is_empty()
+        && s.arcs.is_empty()
+        && s.points.is_empty()
+    {
+        return Err(
+            "anvil.sketch: give rects, circles, polylines, arcs or points (see docs/SCRIPTING.md)".into()
+        );
     }
     Ok(s)
 }
@@ -965,6 +1103,121 @@ fn read_blend(t: &Table, chamfer: bool) -> Result<BlendSpec, String> {
         return Err(format!("{what}: edges = {{{{x, y, z}}, ...}}, a point on each edge"));
     }
     Ok(BlendSpec { edges, size: size(t, key, what, None)?, chamfer })
+}
+
+/// Feature ids or names: `{3, "Boss-Extrude1"}`.
+fn features(t: &Table, what: &str) -> Result<Vec<String>, String> {
+    let usage = || format!("{what}: features = {{id or name, ...}}");
+    let list: Table = t.get("features").map_err(|_| usage())?;
+    let mut out = Vec::new();
+    for v in list.sequence_values::<Value>() {
+        out.push(match v.map_err(lua_err)? {
+            Value::Integer(i) => i.to_string(),
+            Value::String(s) => s.to_string_lossy(),
+            _ => return Err(usage()),
+        });
+    }
+    if out.is_empty() {
+        return Err(usage());
+    }
+    Ok(out)
+}
+
+/// `"x"`, `"y"`, `"z"` or `{dx, dy, dz}`.
+fn direction(v: Value, what: &str) -> Result<DirPick, String> {
+    let usage = || format!("{what} is \"x\", \"y\", \"z\" or {{dx, dy, dz}}");
+    match v {
+        Value::String(s) => match s.to_string_lossy().to_ascii_lowercase().as_str() {
+            "x" => Ok(DirPick::X),
+            "y" => Ok(DirPick::Y),
+            "z" => Ok(DirPick::Z),
+            _ => Err(usage()),
+        },
+        Value::Table(t) => Ok(DirPick::Vector(numbers(&t, &usage())?)),
+        _ => Err(usage()),
+    }
+}
+
+fn pattern_run(t: &Table, what: &str) -> Result<PatternRun, String> {
+    Ok(PatternRun {
+        direction: direction(t.get("direction").map_err(lua_err)?, &format!("{what}: direction"))?,
+        spacing: size(t, "spacing", what, None)?,
+        count: size(t, "count", what, None)?,
+    })
+}
+
+fn read_mirror(t: &Table) -> Result<MirrorSpec, String> {
+    let what = "anvil.mirror";
+    let plane = match t.get::<Value>("plane").map_err(lua_err)? {
+        Value::String(p) => match p.to_string_lossy().to_ascii_lowercase().as_str() {
+            "front" => PlanePick::Front,
+            "top" => PlanePick::Top,
+            "right" => PlanePick::Right,
+            other => return Err(format!("{what}: plane \"{other}\" is not front, top or right")),
+        },
+        Value::Table(p) => {
+            PlanePick::Face(numbers(&p, "anvil.mirror: plane = {x, y, z}, a point on a flat face")?)
+        }
+        _ => {
+            return Err(format!(
+                "{what}: plane is \"front\", \"top\", \"right\" or {{x, y, z}} on a flat face"
+            ))
+        }
+    };
+    Ok(MirrorSpec { features: features(t, what)?, plane })
+}
+
+fn read_pattern(t: &Table) -> Result<PatternSpec, String> {
+    let what = "anvil.pattern";
+    let second = match t.get::<Option<Table>>("direction2").map_err(lua_err)? {
+        Some(d2) => Some(pattern_run(&d2, "anvil.pattern direction2")?),
+        None => None,
+    };
+    Ok(PatternSpec { features: features(t, what)?, first: pattern_run(t, what)?, second })
+}
+
+fn read_circular(t: &Table) -> Result<CircularSpec, String> {
+    let what = "anvil.circular_pattern";
+    let (axis, through) = match t.get::<Value>("axis").map_err(lua_err)? {
+        Value::Table(a) if a.raw_len() == 6 => {
+            let n: [f64; 6] = numbers(&a, "anvil.circular_pattern: axis = {x, y, z, dx, dy, dz}")?;
+            (DirPick::Vector([n[3], n[4], n[5]]), [n[0], n[1], n[2]])
+        }
+        v => (direction(v, "anvil.circular_pattern: axis (or {x, y, z, dx, dy, dz})")?, [0.0; 3]),
+    };
+    Ok(CircularSpec {
+        features: features(t, what)?,
+        axis,
+        through,
+        count: size(t, "count", what, None)?,
+        angle: size(t, "angle", what, Some(360.0))?,
+    })
+}
+
+fn read_hole(t: &Table) -> Result<HoleSpec, String> {
+    let what = "anvil.hole";
+    let sketch: u32 =
+        t.get("sketch").map_err(|_| "anvil.hole: sketch = <id of a sketch of points>".to_string())?;
+    let depth = match t.get::<Value>("depth").map_err(lua_err)? {
+        Value::Nil => Depth::ThroughAll,
+        Value::String(s) if s.to_string_lossy() == "through" => Depth::ThroughAll,
+        _ => size(t, "depth", what, None)?,
+    };
+    let pair = |k: &str, a: &str, b: &str| -> Result<Option<(Depth, Depth)>, String> {
+        match t.get::<Option<Table>>(k).map_err(lua_err)? {
+            Some(p) => {
+                let w = format!("{what} {k}");
+                Ok(Some((size(&p, a, &w, None)?, size(&p, b, &w, None)?)))
+            }
+            None => Ok(None),
+        }
+    };
+    let counterbore = pair("counterbore", "diameter", "depth")?;
+    let countersink = pair("countersink", "diameter", "angle")?;
+    if counterbore.is_some() && countersink.is_some() {
+        return Err("anvil.hole: give counterbore or countersink, not both".into());
+    }
+    Ok(HoleSpec { sketch, diameter: size(t, "diameter", what, None)?, depth, counterbore, countersink })
 }
 
 fn read_shell(t: &Table) -> Result<ShellSpec, String> {

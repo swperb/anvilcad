@@ -92,6 +92,10 @@ fn handshake_and_tool_list() {
         "add_fillet",
         "add_chamfer",
         "add_shell",
+        "add_mirror",
+        "add_linear_pattern",
+        "add_circular_pattern",
+        "add_hole",
         "set_variable",
         "set_dimension",
         "rebuild",
@@ -518,4 +522,37 @@ fn revolve_chamfer_and_shell() {
     let v = r["body"]["volume"].as_f64().unwrap_or(f64::NAN);
     let want = std::f64::consts::PI * 100.0 * 10.0 / 4.0;
     assert!((v - want).abs() < 2e-3 * want, "{r}");
+}
+
+/// Issue #71: holes, patterns and mirrors through MCP.
+#[test]
+fn holes_patterns_and_mirrors() {
+    let mut s = server();
+    let pi = std::f64::consts::PI;
+    // The 10 x 20 x 30 block on the front plane (x 0..10, y 0..20, z 0..30): a 4 mm
+    // through hole along Z at (5, 5), patterned twice up Y and mirrored about y = 10.
+    let base = block(&mut s);
+    let pts = call(&mut s, "add_sketch", json!({ "on_feature": base, "points": [[5, 5]] }));
+    let hole = call(&mut s, "add_hole", json!({ "sketch": pts["sketch"], "diameter": 4 }));
+    let one = 4.0 * pi * 30.0;
+    let v = |r: &Value| r["body"]["volume"].as_f64().unwrap_or(f64::NAN);
+    assert!((v(&hole) - (6000.0 - one)).abs() < 5e-3 * one, "{hole}");
+    let row = call(
+        &mut s,
+        "add_linear_pattern",
+        json!({ "features": [hole["feature"]], "direction": "y", "spacing": 4, "count": 2 }),
+    );
+    assert!((v(&row) - (6000.0 - 2.0 * one)).abs() < 1e-2 * one, "{row}");
+    // A mirror about a face picked by a point (the top, y = 20) builds; its copy lands
+    // outside this small block, so the body is unchanged. This checks the face picking.
+    let m = call(&mut s, "add_mirror", json!({ "features": [hole["feature"]], "plane": [5, 20, 15] }));
+    assert!(m["feature"].is_u64() && (v(&m) - v(&row)).abs() < 1e-6, "{m}");
+    // Turned half a turn about the block's centre line (through (5, 10), along Z), the
+    // hole at y = 5 lands at y = 15: a third hole.
+    let c = call(
+        &mut s,
+        "add_circular_pattern",
+        json!({ "features": [hole["feature"]], "axis": "z", "through": [5, 10, 0], "count": 2 }),
+    );
+    assert!((v(&c) - (6000.0 - 3.0 * one)).abs() < 1.5e-2 * one, "{c}");
 }
