@@ -30,7 +30,11 @@ fn rotate(v: Vec3, k: Vec3, angle: f64) -> Vec3 {
 }
 
 impl Document {
-    pub(crate) fn plan_revolve(&self, rf: &RevolveFeature, st: &BuildState) -> Result<RevolvePlan, String> {
+    pub(crate) fn plan_revolve(
+        &self,
+        rf: &RevolveFeature,
+        st: &BuildState,
+    ) -> Result<RevolvePlan, crate::failure::Cause> {
         let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
         let sf = self.sketch(rf.sketch).ok_or("the sketch this feature uses is missing")?;
         let sk = &sf.sketch;
@@ -64,14 +68,13 @@ impl Document {
                 Ok(p) => p,
                 Err(e) => match crate::rebuild::close_along_axis(sk, a, b).map(|s| s.profiles()) {
                     Some(Ok(p)) => p,
-                    _ => {
-                        return Err(match e {
-                            anvil_sketch::ProfileError::OpenContour { .. } => {
-                                "open profile: close it along the axis, or use a thin feature".into()
-                            }
-                            e => e.to_string(),
-                        })
-                    }
+                    _ => return Err(match e {
+                        anvil_sketch::ProfileError::OpenContour { .. } => crate::failure::Cause::told(
+                            "its sketch's outline is open, and its ends are not both on the axis",
+                            "Close the outline, end it on the axis on both sides, or turn on Thin feature.",
+                        ),
+                        e => e.to_string().into(),
+                    }),
                 },
             },
         };
@@ -129,16 +132,15 @@ impl RevolvePlan {
         Frame { origin: o + turn(f.origin - o), x: turn(f.x), y: turn(f.y), z: turn(f.z) }
     }
 
-    pub(crate) fn faceted(&self, id: u32) -> Result<Solid, String> {
-        revolve(
+    pub(crate) fn faceted(&self, id: u32) -> Result<Solid, crate::failure::Cause> {
+        Ok(revolve(
             &self.profiles,
             &self.start_frame(),
             self.axis_point,
             self.axis_dir,
             self.sweep.clamp(-TAU, TAU),
             id,
-        )
-        .map_err(|e| e.to_string())
+        )?)
     }
 
     pub(crate) fn exact(&self, id: u32) -> Result<Vec<crate::rebuild::ExactBody>, String> {

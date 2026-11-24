@@ -321,7 +321,7 @@ impl Document {
 }
 
 impl SweepPlan {
-    pub(crate) fn faceted(&self, id: u32) -> Result<Solid, String> {
+    pub(crate) fn faceted(&self, id: u32) -> Result<Solid, crate::failure::Cause> {
         let mut out: Option<Solid> = None;
         for (frame, profiles, path) in &self.runs {
             let mut f = *frame;
@@ -329,8 +329,7 @@ impl SweepPlan {
                 let piece = match *seg {
                     PathSegment::Line { a, b } => {
                         let len = (b - a).length();
-                        let s = anvil_kernel::build::extrude(profiles, &f, 0.0, len, id)
-                            .map_err(|e| e.to_string())?;
+                        let s = anvil_kernel::build::extrude(profiles, &f, 0.0, len, id)?;
                         f = Frame { origin: f.origin + f.z * len, ..f };
                         s
                     }
@@ -339,8 +338,7 @@ impl SweepPlan {
                         let ax = k(axis);
                         let dir = v2(ax.dot(f.x), ax.dot(f.y));
                         let s =
-                            anvil_kernel::build::revolve(profiles, &f, v2(c.x, c.y), dir, angle.abs(), id)
-                                .map_err(|e| e.to_string())?;
+                            anvil_kernel::build::revolve(profiles, &f, v2(c.x, c.y), dir, angle.abs(), id)?;
                         let turn = |v: Vec3| k(brep::sweep::rotate(d(v), glam::DVec3::ZERO, axis, angle));
                         f = Frame {
                             origin: k(brep::sweep::rotate(d(f.origin), center, axis, angle)),

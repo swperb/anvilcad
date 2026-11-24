@@ -1835,7 +1835,7 @@ impl AnvilApp {
             };
             let r = theme::tree_row(ui, ic, &name, look);
             let r = match &err {
-                Some(e) => r.on_hover_text(e),
+                Some(e) => r.on_hover_text(e.message()),
                 None => r,
             };
             // Migration and provenance notes.
@@ -2633,8 +2633,8 @@ impl AnvilApp {
                         ui.weak("This feature has no options to edit here yet.");
                     }
                 }
-                if let Some(e) = self.state.errors.get(&id) {
-                    ui.colored_label(Palette::of(ui).error, e);
+                if let Some(e) = self.state.errors.get(&id).cloned() {
+                    feature_error(ui, &e);
                 }
                 ui.add_space(6.0);
                 ui.separator();
@@ -4204,7 +4204,8 @@ impl AnvilApp {
                     "kind": kind_name(&f.kind),
                     "suppressed": f.suppressed,
                     "rolled_back": self.doc.rollback.is_some_and(|r| i >= r),
-                    "error": self.state.errors.get(&f.id),
+                    "error": self.state.errors.get(&f.id).map(|e| e.message()),
+                    "error_info": self.state.errors.get(&f.id),
                     "sketch_status": self.state.sketch_status.get(&f.id).map(|s| s.status_text()),
                 })
             })
@@ -5134,6 +5135,20 @@ impl eframe::App for AnvilApp {
     /// Only a clean exit gets here: the user saved, or chose not to.
     fn on_exit(&mut self) {
         self.finish_recovery();
+    }
+}
+
+/// Why a feature failed, in a feature's editor: what went wrong and what to try, with any
+/// technical detail folded away under Details.
+fn feature_error(ui: &mut egui::Ui, e: &anvil_model::FeatureError) {
+    let pal = Palette::of(ui);
+    ui.add_space(4.0);
+    ui.colored_label(pal.error, format!("{} could not be built: {}.", e.feature, e.cause));
+    ui.label(&e.suggestion);
+    if let Some(d) = &e.details {
+        egui::CollapsingHeader::new("Details").id_salt("feature-error-details").show(ui, |ui| {
+            ui.label(egui::RichText::new(d).monospace().size(11.0).color(pal.text_weak));
+        });
     }
 }
 
