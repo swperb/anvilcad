@@ -231,10 +231,27 @@ impl BuildState {
 
     /// Why feature `id`, which only the exact kernel builds, failed: the exact kernel's
     /// own reason when it was this feature that left it, or that an earlier one did.
-    fn needs_exact(&self, id: u32, what: &str) -> String {
+    fn needs_exact(
+        &self,
+        id: u32,
+        what: &str,
+        plain: &str,
+        name_of: impl Fn(u32) -> String,
+    ) -> crate::failure::Cause {
         match &self.faceted_from {
-            Some((from, reason)) if *from == id => reason.clone(),
-            _ => format!("{what} need the exact kernel, and this part is faceted from an earlier feature on"),
+            // The exact kernel refused this very feature: its reason says why.
+            Some((from, reason)) if *from == id => crate::failure::Cause::told(
+                reason.clone(),
+                format!("Try a smaller size, or use {plain}, which the faceted kernel can also build."),
+            ),
+            Some((from, _)) => {
+                let from = name_of(*from);
+                crate::failure::Cause::told(
+                    format!("{what} are built only on the exact kernel, and the part left it at {from}"),
+                    format!("Fix or suppress {from}, move this feature before it, or use {plain}."),
+                )
+            }
+            None => format!("{what} need the exact kernel").into(),
         }
     }
 
@@ -334,7 +351,21 @@ impl Document {
                     s.sketch = sketch;
                 }
                 if !ok {
-                    return Err("sketch is over defined or cannot be solved".into());
+                    let n = st.sketch_status.get(&id).map_or(0, |r| r.unsatisfied.len());
+                    return Err(match n {
+                        0 => crate::failure::Cause::told(
+                            "its relations and dimensions cannot all be met",
+                            "Edit the sketch and remove or change a relation or dimension; undo the last change if it caused this.",
+                        ),
+                        n => crate::failure::Cause::told(
+                            if n == 1 {
+                                "it is over defined: 1 relation or dimension conflicts with the others".to_string()
+                            } else {
+                                format!("it is over defined: {n} relations or dimensions conflict")
+                            },
+                            "Edit the sketch: the conflicting relations and the geometry they hold are shown in red; delete one or turn a dimension into a reference dimension.",
+                        ),
+                    });
                 }
                 st.frames.insert(id, frame);
             }
@@ -470,9 +501,9 @@ impl Document {
                     return Ok(());
                 }
                 if f.profile != FilletProfile::Circular {
-                    return Err(st
-                        .needs_exact(id, &format!("{} fillets", f.profile.label().to_lowercase()))
-                        .into());
+                    let name_of = |f: u32| self.feature(f).map(|f| f.name.clone()).unwrap_or_default();
+                    let what = format!("{} fillets", f.profile.label().to_lowercase());
+                    return Err(st.needs_exact(id, &what, "a circular fillet", name_of));
                 }
                 st.body = blend_edges(&st.body, &f.edges, EdgeTreatment::Fillet { radius }, id)?;
             }
@@ -492,9 +523,9 @@ impl Document {
                     return Ok(());
                 }
                 if c.kind != ChamferKind::EqualDistance {
-                    return Err(st
-                        .needs_exact(id, &format!("{} chamfers", c.kind.label().to_lowercase()))
-                        .into());
+                    let name_of = |f: u32| self.feature(f).map(|f| f.name.clone()).unwrap_or_default();
+                    let what = format!("{} chamfers", c.kind.label().to_lowercase());
+                    return Err(st.needs_exact(id, &what, "an equal-distance chamfer", name_of));
                 }
                 st.body = blend_edges(&st.body, &c.edges, EdgeTreatment::Chamfer { distance }, id)?;
             }

@@ -166,13 +166,30 @@ pub(crate) struct SweepPlan {
 }
 
 impl Document {
-    pub(crate) fn plan_sweep(&self, sw: &SweepFeature, st: &BuildState) -> Result<SweepPlan, String> {
+    pub(crate) fn plan_sweep(
+        &self,
+        sw: &SweepFeature,
+        st: &BuildState,
+    ) -> Result<SweepPlan, crate::failure::Cause> {
         let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
-        let ps = self.sketch(sw.path).ok_or("the path's sketch is missing")?;
-        let pf = *st.frames.get(&sw.path).ok_or("the path's sketch failed or is suppressed")?;
+        let ps = self.sketch(sw.path).ok_or_else(|| {
+            crate::failure::Cause::told(
+                "the sketch holding its path has been deleted",
+                "Edit the feature and pick another path, or undo the deletion.",
+            )
+        })?;
+        let pf = *st.frames.get(&sw.path).ok_or_else(|| {
+            crate::failure::Cause::told(
+                "the sketch holding its path failed or is suppressed",
+                "Fix or unsuppress the path's sketch first; a failed one is marked in the tree.",
+            )
+        })?;
         let mut cs = chains(&ps.sketch)?;
         if cs.len() != 1 {
-            return Err("the path sketch must hold exactly one chain of curves".into());
+            return Err(crate::failure::Cause::told(
+                "its path sketch must hold exactly one chain of curves joined end to end",
+                "Edit the path's sketch: join its curves into one chain, and make any others construction geometry.",
+            ));
         }
         let chain = cs.remove(0);
         let path: Path = chain
@@ -195,16 +212,32 @@ impl Document {
             Some(dia) => {
                 let r = num(dia, "diameter")? / 2.0;
                 if r <= 0.0 {
-                    return Err("the diameter must be greater than zero".into());
+                    return Err(crate::failure::Cause::told(
+                        "the diameter must be greater than zero",
+                        "Give the round profile a diameter greater than 0.",
+                    ));
                 }
                 let t = k(first.tangent(false));
                 let f = Frame::from_normal(k(first.start()), t, t.any_perpendicular());
                 (f, vec![Profile::new(Loop2::circle(Vec2::ZERO, r, 0), vec![])])
             }
             None => {
-                let id = sw.profile.ok_or("choose the profile's sketch")?;
-                let sf = self.sketch(id).ok_or("the profile's sketch is missing")?;
-                let f = *st.frames.get(&id).ok_or("the profile's sketch failed or is suppressed")?;
+                let id = sw.profile.ok_or_else(|| crate::failure::Cause::told(
+                    "no profile is picked",
+                    "Edit the feature and pick the profile's sketch, or turn on Round profile and give it a diameter.",
+                ))?;
+                let sf = self.sketch(id).ok_or_else(|| {
+                    crate::failure::Cause::told(
+                        "the sketch holding its profile has been deleted",
+                        "Edit the feature and pick another profile, or undo the deletion.",
+                    )
+                })?;
+                let f = *st.frames.get(&id).ok_or_else(|| {
+                    crate::failure::Cause::told(
+                        "the sketch holding its profile failed or is suppressed",
+                        "Fix or unsuppress the profile's sketch first; a failed one is marked in the tree.",
+                    )
+                })?;
                 let p = match &sw.thin {
                     Some(w) => {
                         let fillet = w.fillet.as_ref().map(|f| num(f, "fillet radius")).transpose()?;
@@ -217,10 +250,11 @@ impl Document {
                         )?
                     }
                     None => sf.sketch.profiles().map_err(|e| match e {
-                        anvil_sketch::ProfileError::OpenContour { .. } => {
-                            "the profile must be closed".to_string()
-                        }
-                        e => e.to_string(),
+                        anvil_sketch::ProfileError::OpenContour { .. } => crate::failure::Cause::told(
+                            "its profile's outline is open",
+                            "Close the profile's outline so every end meets another, or turn on Thin feature.",
+                        ),
+                        e => e.to_string().into(),
                     })?,
                 };
                 (f, p)
@@ -257,7 +291,12 @@ impl Document {
                     }
                 }
             }
-            let (i, t) = found.ok_or("the path does not pass through the profile's plane")?;
+            let (i, t) = found.ok_or_else(|| {
+                crate::failure::Cause::told(
+                "its path does not pass through the profile's plane",
+                "Sketch the profile on a plane the path crosses, usually square to the path at its start.",
+            )
+            })?;
             let (a, b) = split(&path[i], t);
             let mut before: Path = path[..i].to_vec();
             before.push(a);
@@ -268,7 +307,10 @@ impl Document {
         let meet =
             after.first().map(|s| s.start()).or(before.last().map(|s| s.end())).ok_or("the path is empty")?;
         if (k(meet) - frame.origin).dot(frame.z).abs() > tol {
-            return Err("the path must meet the profile's plane".into());
+            return Err(crate::failure::Cause::told(
+                "its path does not meet the profile's plane",
+                "Sketch the profile on a plane the path crosses, usually square to the path at its start.",
+            ));
         }
         // The profile stays where it was drawn; the path only fixes where it starts.
         let start_frame = Frame { origin: k(meet), ..frame };
@@ -308,13 +350,19 @@ impl Document {
             }
             let t = k(run[0].tangent(false));
             if t.cross(frame.z).length() > 1e-6 {
-                return Err("the profile's plane is not square to the path where they meet".into());
+                return Err(crate::failure::Cause::told(
+                    "the profile's plane is not square to the path where they meet",
+                    "Sketch the profile on a plane square to the path there, for example a plane normal to the path's first curve.",
+                ));
             }
             let (f, p) = facing(&start_frame, &profiles, t);
             runs.push((f, p, run));
         }
         if runs.is_empty() {
-            return Err("the sweep has no length in the chosen direction".into());
+            return Err(crate::failure::Cause::told(
+                "the path has no length in the chosen direction",
+                "Pick the other Direction, or Bidirectional, or move the profile so the path runs on from it.",
+            ));
         }
         Ok(SweepPlan { runs })
     }
