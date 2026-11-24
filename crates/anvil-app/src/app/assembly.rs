@@ -1007,8 +1007,17 @@ mod tests {
         (ctx, app, dir)
     }
 
-    fn rand_tag() -> u128 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    /// A tag no other test in this process gets. The clock alone was not enough: on macOS
+    /// it moves in whole microseconds, so two tests starting together shared a folder and
+    /// one's save renamed the other's temporary file away.
+    fn rand_tag() -> String {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("{t}-{n}")
     }
 
     fn step(ctx: &egui::Context, app: &mut AnvilApp) {
