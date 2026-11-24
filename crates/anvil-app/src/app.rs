@@ -4190,6 +4190,30 @@ impl AnvilApp {
 
     /// A summary of what the user would see, as JSON: the feature tree, rebuild errors,
     /// the body's mass properties, the open sketch, editor, windows and dialogs.
+    /// The part's bodies by name, as scripts refer to them: the feature that last changed
+    /// each, with `[n]` when that feature left several (its place among them, from 1).
+    pub fn body_names(&self) -> Vec<String> {
+        let names = &self.state.body_names;
+        // In tree order, then by number, however the kernel happens to hold them.
+        let mut sorted = names.clone();
+        sorted.sort_by_key(|b| (self.doc.index_of(b.feature).unwrap_or(usize::MAX), b.index));
+        sorted
+            .iter()
+            .map(|b| {
+                let name = self
+                    .doc
+                    .feature(b.feature)
+                    .map(|f| f.name.clone())
+                    .unwrap_or_else(|| b.feature.to_string());
+                if names.iter().filter(|o| o.feature == b.feature).count() > 1 {
+                    format!("{name}[{}]", b.index)
+                } else {
+                    name
+                }
+            })
+            .collect()
+    }
+
     pub fn snapshot(&self) -> serde_json::Value {
         use serde_json::json;
         let features: Vec<_> = self
@@ -4296,6 +4320,7 @@ impl AnvilApp {
             "features": features,
             "errors": self.state.errors.len(),
             "body": body,
+            "bodies": self.body_names(),
             "material": self.doc.material.as_ref().map(|m| m.name.clone()),
             "variables": self.state.variables,
             "manager": format!("{:?}", self.cfg.manager),

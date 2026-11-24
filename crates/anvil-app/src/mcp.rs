@@ -10,8 +10,9 @@
 
 use crate::headless::Headless;
 use crate::script::{
-    BlendSpec, CircularSpec, Depth, DirPick, ExtrudeSpec, HoleSpec, Host, MirrorSpec, PatternRun,
-    PatternSpec, PlanePick, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec,
+    BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, ExtrudeSpec, HoleSpec, Host,
+    MirrorSpec, PatternRun, PatternSpec, PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec, SketchSpec,
+    SplitSpec,
 };
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
@@ -213,6 +214,7 @@ impl Server {
                     depth,
                     cut: a.bool("cut")?,
                     reverse: a.bool("reverse")?,
+                    separate: a.bool("separate")?,
                 };
                 let before = self.h.app.snapshot()["body"]["volume"].as_f64();
                 let id = self.host(|h| h.add_extrude(&spec))?;
@@ -367,6 +369,68 @@ impl Server {
                     countersink,
                 };
                 let id = self.host(|h| h.add_hole(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "add_draft" => {
+                let faces =
+                    a.number_lists::<3>("faces", "faces: [[x, y, z], ...], a point on each face to draft")?;
+                if faces.is_empty() {
+                    return Err("faces: [[x, y, z], ...], a point on each face to draft".into());
+                }
+                let spec = DraftSpec {
+                    neutral: plane_pick(a.get("neutral"), "neutral")?,
+                    faces,
+                    angle: size(a, "angle")?,
+                };
+                let id = self.host(|h| h.add_draft(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "add_rib" => {
+                let spec = RibSpec {
+                    sketch: a.id("sketch")?,
+                    thickness: size(a, "thickness")?,
+                    flip: a.bool("flip")?,
+                };
+                let id = self.host(|h| h.add_rib(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "combine_bodies" => {
+                let how = match a.str("op")?.map(str::to_ascii_lowercase).as_deref() {
+                    None | Some("add") => CombineHow::Add,
+                    Some("subtract") => CombineHow::Subtract,
+                    Some("common") => CombineHow::Common,
+                    Some(o) => return Err(format!("op is add, subtract or common, not \"{o}\"")),
+                };
+                let main = match a.get("main") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(a.number_or_text("main")?),
+                };
+                let bodies = name_list(a, "bodies")?;
+                if bodies.is_empty() {
+                    return Err("bodies: [id or name, ...], the features whose bodies to combine".into());
+                }
+                let spec = CombineSpec { how, main, bodies };
+                let id = self.host(|h| h.add_combine(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
+            "split_bodies" => {
+                let list =
+                    a.get("planes").and_then(Value::as_array).ok_or("planes: [\"front\", [x, y, z], ...]")?;
+                let planes =
+                    list.iter().map(|p| plane_pick(Some(p), "a plane")).collect::<Result<Vec<_>, _>>()?;
+                if planes.is_empty() {
+                    return Err("give at least one plane".into());
+                }
+                let spec = SplitSpec { planes, bodies: name_list(a, "bodies")? };
+                let id = self.host(|h| h.add_split(&spec))?;
                 let mut s = self.summary();
                 s["feature"] = json!(id);
                 s
@@ -568,6 +632,40 @@ fn dir_pick(v: Option<&Value>, what: &str) -> Result<DirPick, String> {
         }
         _ => Err(usage()),
     }
+}
+
+/// `"front"`, `"top"`, `"right"`, or `[x, y, z]` on a flat face.
+fn plane_pick(v: Option<&Value>, what: &str) -> Result<PlanePick, String> {
+    match v {
+        Some(Value::String(p)) => match p.to_ascii_lowercase().as_str() {
+            "front" => Ok(PlanePick::Front),
+            "top" => Ok(PlanePick::Top),
+            "right" => Ok(PlanePick::Right),
+            other => Err(format!("{what} is front, top or right, not \"{other}\"")),
+        },
+        Some(Value::Array(r)) => {
+            let n: Option<Vec<f64>> = r.iter().map(Value::as_f64).collect();
+            n.and_then(|n| <[f64; 3]>::try_from(n).ok())
+                .map(PlanePick::Face)
+                .ok_or_else(|| format!("{what}: [x, y, z], a point on a flat face"))
+        }
+        _ => Err(format!("{what} is \"front\", \"top\", \"right\" or [x, y, z] on a flat face")),
+    }
+}
+
+/// Ids or names under `k`, or none when it is missing.
+fn name_list(a: &Args, k: &str) -> Result<Vec<String>, String> {
+    let Some(v) = a.get(k) else { return Ok(Vec::new()) };
+    let usage = || format!("{k}: [id or name, ...]");
+    v.as_array()
+        .ok_or_else(usage)?
+        .iter()
+        .map(|v| match v {
+            Value::Number(n) => Ok(n.to_string()),
+            Value::String(s) => Ok(s.clone()),
+            _ => Err(usage()),
+        })
+        .collect()
 }
 
 fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
@@ -783,7 +881,8 @@ const TOOLS: &[Tool] = &[
             "sketch": { "type": "integer", "description": "The sketch's feature id" },
             "depth": { "type": ["number", "string"], "description": "mm, an equation such as \"thickness * 2\", or \"through\" (through all)" },
             "cut": { "type": "boolean", "description": "Remove material instead of adding it" },
-            "reverse": { "type": "boolean", "description": "Extrude the other way" }
+            "reverse": { "type": "boolean", "description": "Extrude the other way" },
+            "separate": { "type": "boolean", "description": "A boss that stays a body of its own instead of joining the part (for add_combine)" }
         }"#,
         required: &["sketch", "depth"],
         read_only: false,
@@ -889,6 +988,53 @@ const TOOLS: &[Tool] = &[
             "countersink_angle": { "type": ["number", "string"], "description": "Degrees, such as 90" }
         }"#,
         required: &["sketch", "diameter"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_draft",
+        title: "Add draft",
+        description: "Tilt faces (picked by a point inside each) by an angle about a neutral plane, which keeps its size, so the part releases from a mould. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "neutral": { "type": ["string", "array"], "items": { "type": "number" }, "description": "\"front\", \"top\", \"right\" or [x, y, z], a point on a flat face" },
+            "faces": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "A point on each face to draft: [[x, y, z], ...]" },
+            "angle": { "type": ["number", "string"], "description": "Degrees or an equation" }
+        }"#,
+        required: &["neutral", "faces", "angle"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_rib",
+        title: "Add rib",
+        description: "Grow a thin wall from a sketch's line (or chain) until it meets the part, centred on the line. flip grows it the other way from the sketch's plane. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "sketch": { "type": "integer", "description": "The rib's sketch" },
+            "thickness": { "type": ["number", "string"], "description": "mm or an equation" },
+            "flip": { "type": "boolean" }
+        }"#,
+        required: &["sketch", "thickness"],
+        read_only: false,
+    },
+    Tool {
+        name: "combine_bodies",
+        title: "Combine bodies",
+        description: "Join (add), subtract or intersect (common) bodies, each named by the feature that made it (add_extrude with separate=true makes one). A subtraction takes the others from main. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "op": { "type": "string", "enum": ["add", "subtract", "common"], "description": "Default add" },
+            "main": { "type": ["integer", "string"], "description": "For subtract: the body to subtract from" },
+            "bodies": { "type": "array", "items": { "type": ["integer", "string"] }, "description": "The bodies, by the feature that made each" }
+        }"#,
+        required: &["bodies"],
+        read_only: false,
+    },
+    Tool {
+        name: "split_bodies",
+        title: "Split bodies",
+        description: "Cut bodies apart along planes, keeping every piece as a body of its own. bodies names them by the feature that made each; every body when left out. Returns the feature id and the body after the rebuild.",
+        properties: r#"{
+            "planes": { "type": "array", "items": { "type": ["string", "array"], "items": { "type": "number" }, "description": "\"front\", \"top\", \"right\" or [x, y, z], a point on a flat face" } },
+            "bodies": { "type": "array", "items": { "type": ["integer", "string"] } }
+        }"#,
+        required: &["planes"],
         read_only: false,
     },
     Tool {

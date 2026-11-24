@@ -5,8 +5,9 @@
 use super::*;
 use crate::keymap::{Matcher, Step};
 use crate::script::{
-    self, Action, BlendSpec, CircularSpec, Depth, DirPick, Engine, ExtrudeSpec, HoleSpec, Host, MirrorSpec,
-    PatternSpec, PlanePick, PlaneSpec, RevolveSpec, ShellSpec, SketchSpec,
+    self, Action, BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, Engine,
+    ExtrudeSpec, HoleSpec, Host, MirrorSpec, PatternSpec, PlanePick, PlaneSpec, RevolveSpec, RibSpec,
+    ShellSpec, SketchSpec, SplitSpec,
 };
 use std::time::SystemTime;
 
@@ -1001,6 +1002,7 @@ impl Host for AppHost<'_> {
             depth,
             reverse: spec.reverse,
             op: if spec.cut { BodyOp::Cut } else { BodyOp::Boss },
+            merge: !spec.separate,
             ..Default::default()
         }));
         // Rebuild now, so a later sketch can sit on this feature's faces and errors show here.
@@ -1114,12 +1116,7 @@ impl Host for AppHost<'_> {
     fn add_mirror(&mut self, spec: &MirrorSpec) -> Result<u32, String> {
         let what = "anvil.mirror";
         let features = self.feature_ids(what, &spec.features)?;
-        let plane = match spec.plane {
-            PlanePick::Front => PlaneRef::Front,
-            PlanePick::Top => PlaneRef::Top,
-            PlanePick::Right => PlaneRef::Right,
-            PlanePick::Face(p) => PlaneRef::Face(self.face_at(p, what)?),
-        };
+        let plane = self.plane_of(&spec.plane, what)?;
         let before = self.app.doc.clone();
         let kind = FeatureKind::Mirror(MirrorFeature {
             plane,
@@ -1211,6 +1208,66 @@ impl Host for AppHost<'_> {
         self.commit_feature(what, before, FeatureKind::Hole(hole))
     }
 
+    fn add_draft(&mut self, spec: &DraftSpec) -> Result<u32, String> {
+        let what = "anvil.draft";
+        let neutral = self.plane_of(&spec.neutral, what)?;
+        let faces = spec.faces.iter().map(|p| self.face_at(*p, what)).collect::<Result<Vec<_>, _>>()?;
+        let kind = FeatureKind::Draft(anvil_model::DraftFeature {
+            neutral,
+            faces,
+            angle: dim_of(&spec.angle, what)?,
+            reverse: false,
+            propagation: anvil_model::Propagation::None,
+        });
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_rib(&mut self, spec: &RibSpec) -> Result<u32, String> {
+        let what = "anvil.rib";
+        if self.app.doc.sketch(spec.sketch).is_none() {
+            return Err(format!("{what}: feature {} is not a sketch", spec.sketch));
+        }
+        let kind = FeatureKind::Rib(anvil_model::rib::RibFeature {
+            sketch: spec.sketch,
+            thickness: dim_of(&spec.thickness, what)?,
+            sides: anvil_model::rib::RibSides::Both,
+            normal_to_sketch: false,
+            flip: spec.flip,
+            natural: false,
+        });
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_combine(&mut self, spec: &CombineSpec) -> Result<u32, String> {
+        let what = "anvil.combine";
+        let bodies = self.body_refs(what, &spec.bodies)?;
+        let main = match &spec.main {
+            Some(m) => Some(self.body_refs(what, std::slice::from_ref(m))?[0]),
+            None => None,
+        };
+        let op = match spec.how {
+            CombineHow::Add => anvil_model::CombineOp::Add,
+            CombineHow::Subtract => anvil_model::CombineOp::Subtract,
+            CombineHow::Common => anvil_model::CombineOp::Common,
+        };
+        if op == anvil_model::CombineOp::Subtract && main.is_none() {
+            return Err(format!("{what}: a subtraction needs main = <the body to subtract from>"));
+        }
+        let kind = FeatureKind::Combine(anvil_model::CombineFeature { op, main, bodies });
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, kind)
+    }
+
+    fn add_split(&mut self, spec: &SplitSpec) -> Result<u32, String> {
+        let what = "anvil.split";
+        let planes = spec.planes.iter().map(|p| self.plane_of(p, what)).collect::<Result<Vec<_>, _>>()?;
+        let bodies = self.body_refs(what, &spec.bodies)?;
+        let before = self.app.doc.clone();
+        self.commit_feature(what, before, FeatureKind::Split(anvil_model::SplitFeature { planes, bodies }))
+    }
+
     fn set_status(&mut self, text: &str) {
         self.app.status = text.to_string();
         self.app.scripting.script_status = Some(text.to_string());
@@ -1254,6 +1311,44 @@ fn axis_of(d: &DirPick, through: [f64; 3], what: &str) -> Result<Axis, String> {
 const PICK_TOLERANCE: f64 = 0.05;
 
 impl AppHost<'_> {
+    /// A standard plane, or the face through a point.
+    fn plane_of(&self, p: &PlanePick, what: &str) -> Result<PlaneRef, String> {
+        Ok(match p {
+            PlanePick::Front => PlaneRef::Front,
+            PlanePick::Top => PlaneRef::Top,
+            PlanePick::Right => PlaneRef::Right,
+            PlanePick::Face(q) => PlaneRef::Face(self.face_at(*q, what)?),
+        })
+    }
+
+    /// Bodies by name, as `state().bodies` lists them: the feature that last changed a
+    /// body, with `[n]` for its place when that feature left several.
+    fn body_refs(&self, what: &str, names: &[String]) -> Result<Vec<anvil_model::BodyRef>, String> {
+        names
+            .iter()
+            .map(|n| {
+                let (feature, index) = match n.trim().strip_suffix(']').and_then(|t| t.rsplit_once('[')) {
+                    Some((f, i)) => (
+                        f.trim(),
+                        i.trim().parse::<u32>().map_err(|_| format!("{what}: \"{n}\" is not a body name"))?,
+                    ),
+                    None => (n.trim(), 1),
+                };
+                let id = self.feature_named(what, feature)?.id;
+                let body = anvil_model::BodyRef { feature: id, index };
+                if self.app.state.body_names.contains(&body) {
+                    Ok(body)
+                } else {
+                    let have = self.app.body_names();
+                    Err(format!(
+                        "{what}: there is no body \"{n}\"; the part's bodies are {}",
+                        if have.is_empty() { "none yet".to_string() } else { have.join(", ") }
+                    ))
+                }
+            })
+            .collect()
+    }
+
     /// The ids of the features named by id or name, in order.
     fn feature_ids(&self, what: &str, names: &[String]) -> Result<Vec<u32>, String> {
         names.iter().map(|n| self.feature_named(what, n).map(|f| f.id)).collect()

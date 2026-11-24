@@ -1359,6 +1359,81 @@ mod tests {
         );
     }
 
+    /// Issue #71: combine and split bodies, draft faces and add ribs from a script, with
+    /// bodies named as `state().bodies` lists them.
+    #[test]
+    fn lua_combines_splits_drafts_and_ribs() {
+        let mut h = Headless::new();
+        let state = |h: &mut Headless| run(h, json!({"cmd": "state"}))["state"].clone();
+        let vol = |h: &mut Headless| state(h)["body"]["volume"].as_f64().unwrap_or(f64::NAN);
+        // Two 20 x 20 x 10 blocks overlapping by half: A at x 0..20, B (separate) at 10..30.
+        let blocks = r#"local a = anvil.sketch{ plane = "front", rects = { { 0, 0, 20, 20 } } }
+            A = anvil.extrude{ sketch = a, depth = 10 }
+            local b = anvil.sketch{ plane = "front", rects = { { 10, 0, 30, 20 } } }
+            B = anvil.extrude{ sketch = b, depth = 10, separate = true }"#;
+        for (op, want) in [("add", 6000.0), ("subtract", 2000.0), ("common", 2000.0)] {
+            run(&mut h, json!({"cmd": "new", "force": true}));
+            run(&mut h, json!({"cmd": "lua", "code": blocks}));
+            assert_eq!(state(&mut h)["bodies"], json!(["Boss-Extrude1", "Boss-Extrude2"]));
+            let bodies =
+                if op == "subtract" { "main = A, bodies = { B }" } else { "bodies = { A, 'Boss-Extrude2' }" };
+            run(&mut h, json!({"cmd": "lua", "code": format!("anvil.combine{{ op = '{op}', {bodies} }}")}));
+            assert!((vol(&mut h) - want).abs() < 1e-6, "{op}: {}", vol(&mut h));
+        }
+        // A body that is not there is refused, listing the ones that are.
+        run(&mut h, json!({"cmd": "new", "force": true}));
+        run(&mut h, json!({"cmd": "lua", "code": blocks}));
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.combine{ bodies = { 'Boss-Extrude1[2]' } }"}));
+        assert!(
+            r["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("the part's bodies are Boss-Extrude1, Boss-Extrude2")),
+            "{r}"
+        );
+
+        // A 40 x 20 x 10 block split at the Right plane: two bodies, the same volume.
+        run(&mut h, json!({"cmd": "new", "force": true}));
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "front", rects = { { -20, 0, 20, 20 } } }
+            anvil.extrude{ sketch = s, depth = 10 }
+            anvil.split{ planes = { "right" } }
+        "#}),
+        );
+        assert_eq!(state(&mut h)["bodies"], json!(["Split1[1]", "Split1[2]"]));
+        assert!((vol(&mut h) - 8000.0).abs() < 1e-6);
+
+        // A 5 degree draft on the 20 mm high, 30 mm deep side of a 40 x 30 x 20 block,
+        // about its base: a wedge of 20² tan 5° / 2 x 30 comes off.
+        run(&mut h, json!({"cmd": "new", "force": true}));
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "top", rects = { { 0, 0, 40, 30 } } }
+            anvil.extrude{ sketch = s, depth = 20 }
+            anvil.draft{ neutral = "top", faces = { {40, 10, -15} }, angle = 5 }
+        "#}),
+        );
+        let want = 24000.0 - 0.5 * 400.0 * 5f64.to_radians().tan() * 30.0;
+        assert!((vol(&mut h) - want).abs() < 1e-6, "{} vs {want}", vol(&mut h));
+
+        // An L bracket, 30 deep and centred on the Front plane, braced by a 2 mm rib from
+        // (5, 30) to (30, 5): it fills the 25 x 25 triangle in the corner, 2 thick.
+        run(&mut h, json!({"cmd": "new", "force": true}));
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "front", polylines = { { {0,0}, {40,0}, {40,5}, {5,5}, {5,40}, {0,40}, {0,0} } } }
+            anvil.extrude{ sketch = s, depth = 15 }
+            anvil.extrude{ sketch = s, depth = 15, reverse = true }
+            local r = anvil.sketch{ plane = "front", polylines = { { {5, 30}, {30, 5} } } }
+            anvil.rib{ sketch = r, thickness = 2 }
+        "#}),
+        );
+        assert!((vol(&mut h) - (11250.0 + 625.0)).abs() < 1e-6, "{}", vol(&mut h));
+    }
+
     const PLATE: &str = r#"
         anvil.var("t", 10)
         local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }

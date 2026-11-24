@@ -242,6 +242,14 @@ pub trait Host {
     fn add_circular_pattern(&mut self, spec: &CircularSpec) -> Result<u32, String>;
     /// Adds holes at a sketch's points; returns its id.
     fn add_hole(&mut self, spec: &HoleSpec) -> Result<u32, String>;
+    /// Adds a draft on the faces through the given points; returns its id.
+    fn add_draft(&mut self, spec: &DraftSpec) -> Result<u32, String>;
+    /// Adds a rib from a sketch; returns its id.
+    fn add_rib(&mut self, spec: &RibSpec) -> Result<u32, String>;
+    /// Combines bodies; returns the feature's id.
+    fn add_combine(&mut self, spec: &CombineSpec) -> Result<u32, String>;
+    /// Splits bodies along planes; returns the feature's id.
+    fn add_split(&mut self, spec: &SplitSpec) -> Result<u32, String>;
     fn set_status(&mut self, text: &str);
 }
 
@@ -282,6 +290,8 @@ pub struct ExtrudeSpec {
     pub depth: Depth,
     pub cut: bool,
     pub reverse: bool,
+    /// A boss that makes a body of its own instead of joining the part.
+    pub separate: bool,
 }
 
 /// A revolve from `anvil.revolve{...}`.
@@ -381,6 +391,51 @@ pub struct HoleSpec {
     pub counterbore: Option<(Depth, Depth)>,
     /// Countersink diameter and angle (degrees).
     pub countersink: Option<(Depth, Depth)>,
+}
+
+/// A draft from `anvil.draft{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DraftSpec {
+    /// The neutral plane, which keeps its size.
+    pub neutral: PlanePick,
+    /// A point on each face to draft, in model coordinates (mm).
+    pub faces: Vec<[f64; 3]>,
+    /// Degrees: a number or an equation.
+    pub angle: Depth,
+}
+
+/// A rib from `anvil.rib{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RibSpec {
+    pub sketch: u32,
+    pub thickness: Depth,
+    /// Grow the rib the other way from the sketch.
+    pub flip: bool,
+}
+
+/// How `anvil.combine` joins bodies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CombineHow {
+    Add,
+    Subtract,
+    Common,
+}
+
+/// A combine from `anvil.combine{...}`. Bodies are named by the feature that made them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CombineSpec {
+    pub how: CombineHow,
+    /// For a subtraction: the body the others are taken from.
+    pub main: Option<String>,
+    pub bodies: Vec<String>,
+}
+
+/// A split from `anvil.split{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SplitSpec {
+    pub planes: Vec<PlanePick>,
+    /// The bodies to split, by the feature that made them; every body when empty.
+    pub bodies: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -651,6 +706,10 @@ impl Engine {
             "pattern",
             "circular_pattern",
             "hole",
+            "draft",
+            "rib",
+            "combine",
+            "split",
             "status",
         ];
         let result = self.guarded(|lua| {
@@ -806,6 +865,34 @@ impl Engine {
                     scope.create_function(move |_, t: Table| {
                         let spec = read_hole(&t).map_err(fail)?;
                         h.borrow_mut().add_hole(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "draft",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_draft(&t).map_err(fail)?;
+                        h.borrow_mut().add_draft(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "rib",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_rib(&t).map_err(fail)?;
+                        h.borrow_mut().add_rib(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "combine",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_combine(&t).map_err(fail)?;
+                        h.borrow_mut().add_combine(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "split",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_split(&t).map_err(fail)?;
+                        h.borrow_mut().add_split(&spec).map_err(fail)
                     })?,
                 )?;
                 anvil.set(
@@ -1146,25 +1233,95 @@ fn pattern_run(t: &Table, what: &str) -> Result<PatternRun, String> {
     })
 }
 
-fn read_mirror(t: &Table) -> Result<MirrorSpec, String> {
-    let what = "anvil.mirror";
-    let plane = match t.get::<Value>("plane").map_err(lua_err)? {
+/// `"front"`, `"top"`, `"right"`, or `{x, y, z}` on a flat face.
+fn plane_pick(v: Value, what: &str) -> Result<PlanePick, String> {
+    match v {
         Value::String(p) => match p.to_string_lossy().to_ascii_lowercase().as_str() {
-            "front" => PlanePick::Front,
-            "top" => PlanePick::Top,
-            "right" => PlanePick::Right,
-            other => return Err(format!("{what}: plane \"{other}\" is not front, top or right")),
+            "front" => Ok(PlanePick::Front),
+            "top" => Ok(PlanePick::Top),
+            "right" => Ok(PlanePick::Right),
+            other => Err(format!("{what}: plane \"{other}\" is not front, top or right")),
         },
         Value::Table(p) => {
-            PlanePick::Face(numbers(&p, "anvil.mirror: plane = {x, y, z}, a point on a flat face")?)
+            Ok(PlanePick::Face(numbers(&p, &format!("{what}: {{x, y, z}}, a point on a flat face"))?))
         }
-        _ => {
-            return Err(format!(
-                "{what}: plane is \"front\", \"top\", \"right\" or {{x, y, z}} on a flat face"
-            ))
-        }
-    };
+        _ => Err(format!("{what}: a plane is \"front\", \"top\", \"right\" or {{x, y, z}} on a flat face")),
+    }
+}
+
+fn read_mirror(t: &Table) -> Result<MirrorSpec, String> {
+    let what = "anvil.mirror";
+    let plane = plane_pick(t.get::<Value>("plane").map_err(lua_err)?, what)?;
     Ok(MirrorSpec { features: features(t, what)?, plane })
+}
+
+/// Ids or names under `key`, possibly missing (`required` says whether that is an error).
+fn names(t: &Table, key: &str, what: &str, required: bool) -> Result<Vec<String>, String> {
+    let usage = || format!("{what}: {key} = {{id or name, ...}}");
+    let Some(list) = t.get::<Option<Table>>(key).map_err(lua_err)? else {
+        return if required { Err(usage()) } else { Ok(Vec::new()) };
+    };
+    let mut out = Vec::new();
+    for v in list.sequence_values::<Value>() {
+        out.push(match v.map_err(lua_err)? {
+            Value::Integer(i) => i.to_string(),
+            Value::String(s) => s.to_string_lossy(),
+            _ => return Err(usage()),
+        });
+    }
+    Ok(out)
+}
+
+fn read_draft(t: &Table) -> Result<DraftSpec, String> {
+    let what = "anvil.draft";
+    let faces = points3(t, "faces", what)?;
+    if faces.is_empty() {
+        return Err(format!("{what}: faces = {{{{x, y, z}}, ...}}, a point on each face to draft"));
+    }
+    Ok(DraftSpec {
+        neutral: plane_pick(t.get::<Value>("neutral").map_err(lua_err)?, &format!("{what} neutral"))?,
+        faces,
+        angle: size(t, "angle", what, None)?,
+    })
+}
+
+fn read_rib(t: &Table) -> Result<RibSpec, String> {
+    let what = "anvil.rib";
+    let sketch: u32 = t.get("sketch").map_err(|_| "anvil.rib: sketch = <sketch id>".to_string())?;
+    let flip = t.get::<Option<bool>>("flip").map_err(lua_err)?.unwrap_or(false);
+    Ok(RibSpec { sketch, thickness: size(t, "thickness", what, None)?, flip })
+}
+
+fn read_combine(t: &Table) -> Result<CombineSpec, String> {
+    let what = "anvil.combine";
+    let how = match t.get::<Option<String>>("op").map_err(lua_err)?.as_deref().map(str::to_ascii_lowercase) {
+        None => CombineHow::Add,
+        Some(o) if o == "add" => CombineHow::Add,
+        Some(o) if o == "subtract" => CombineHow::Subtract,
+        Some(o) if o == "common" => CombineHow::Common,
+        Some(o) => return Err(format!("{what}: op \"{o}\" is not add, subtract or common")),
+    };
+    let main = match t.get::<Value>("main").map_err(lua_err)? {
+        Value::Nil => None,
+        Value::Integer(i) => Some(i.to_string()),
+        Value::String(s) => Some(s.to_string_lossy()),
+        _ => return Err(format!("{what}: main is an id or a name")),
+    };
+    Ok(CombineSpec { how, main, bodies: names(t, "bodies", what, true)? })
+}
+
+fn read_split(t: &Table) -> Result<SplitSpec, String> {
+    let what = "anvil.split";
+    let list: Table =
+        t.get("planes").map_err(|_| format!("{what}: planes = {{\"front\", {{x, y, z}}, ...}}"))?;
+    let mut planes = Vec::new();
+    for v in list.sequence_values::<Value>() {
+        planes.push(plane_pick(v.map_err(lua_err)?, &format!("{what} planes"))?);
+    }
+    if planes.is_empty() {
+        return Err(format!("{what}: give at least one plane"));
+    }
+    Ok(SplitSpec { planes, bodies: names(t, "bodies", what, false)? })
 }
 
 fn read_pattern(t: &Table) -> Result<PatternSpec, String> {
@@ -1237,7 +1394,13 @@ fn read_extrude(t: &Table) -> Result<ExtrudeSpec, String> {
         _ => return Err("anvil.extrude: depth is a number, an equation, or \"through\"".into()),
     };
     let flag = |k: &str| t.get::<Option<bool>>(k).map(|b| b.unwrap_or(false)).map_err(lua_err);
-    Ok(ExtrudeSpec { sketch, depth, cut: flag("cut")?, reverse: flag("reverse")? })
+    Ok(ExtrudeSpec {
+        sketch,
+        depth,
+        cut: flag("cut")?,
+        reverse: flag("reverse")?,
+        separate: flag("separate")?,
+    })
 }
 
 #[cfg(test)]
