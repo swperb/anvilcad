@@ -267,7 +267,7 @@ mod tests {
         let rounds: Vec<FaceId> = (0..4).map(|k| FaceId { feature: 5, index: 8 * k + 4 }).collect();
         for r in &rounds {
             assert!(rounded.polygons.iter().any(|p| p.tag.id == *r
-                && matches!(p.tag.surface, SurfaceKind::Cylinder { radius, .. } if radius == 2.0)));
+                && matches!(p.tag.surface, SurfaceKind::Cylinder { radius, .. } if (radius - 2.0).abs() < 1e-9)));
         }
         assert_eq!(shell(&rounded, &[top], 3.0, 7).err(), Some(ShellError::FoldsOver { faces: rounds }));
         // A wall well inside the rounds is fine. (The faceted rounds fold from about 1 mm,
