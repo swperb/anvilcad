@@ -449,30 +449,77 @@ impl AnvilApp {
     }
 
     pub(super) fn insert_part(&mut self, file: &Path) {
-        let Some(s) = &mut self.asm else { return };
+        if let Err(e) = self.insert_part_at(file, None) {
+            self.message = Some(("Insert Component".into(), e));
+        }
+    }
+
+    /// Inserts `file` as a component, at `at` or beside the others; returns its id.
+    pub(super) fn insert_part_at(&mut self, file: &Path, at: Option<Vec3>) -> Result<u32, String> {
+        let Some(s) = &mut self.asm else { return Err("no assembly is open".into()) };
         let path = match &s.path {
             Some(p) => relative_to(file, p.parent().unwrap_or(Path::new(""))),
             None => file.to_string_lossy().replace('\\', "/"),
         };
-        let size = match s.parts.get(&path, None) {
-            Ok(p) => p.state.body.bounds(),
-            Err(e) => {
-                self.message = Some(("Insert Component".into(), e));
-                return;
-            }
-        };
+        let size = s.parts.get(&path, None)?.state.body.bounds();
         // Beside the assembly so far, with a gap, so the new part does not overlap.
         let here = s.body.bounds();
-        let at = if here.is_empty() || size.is_empty() {
+        let at = at.unwrap_or(if here.is_empty() || size.is_empty() {
             Vec3::ZERO
         } else {
             anvil_kernel::v3(here.max.x + 0.25 * here.diagonal().max(10.0) - size.min.x, 0.0, 0.0)
-        };
+        });
         let id = s.asm.add_component(&path, None, Frame { origin: at, ..Frame::WORLD });
         s.selection = AsmSelection::Component(id);
         s.commit();
         self.fit_pending = true;
         self.refresh_assembly();
+        Ok(id)
+    }
+
+    /// The component face through `p` (assembly coordinates), for a scripted mate.
+    pub(super) fn assembly_face_at(&self, p: Vec3) -> Result<(u32, FaceId), String> {
+        let s = self.asm.as_ref().ok_or("no assembly is open")?;
+        let f = super::scripting::face_through(&s.body, p)?;
+        s.face(f).ok_or_else(|| "that face is not on a component".to_string())
+    }
+
+    /// Adds a mate and solves; a mate that cannot hold is taken out again, and why is
+    /// returned. For scripts.
+    pub(super) fn script_mate(
+        &mut self,
+        kind: MateKind,
+        alignment: Alignment,
+        a: MateRef,
+        b: MateRef,
+    ) -> Result<u32, String> {
+        let Some(s) = &mut self.asm else { return Err("no assembly is open".into()) };
+        if a.component.is_some() && a.component == b.component {
+            return Err("the two sides are on the same component".into());
+        }
+        let before = s.asm.clone();
+        let alignment = match alignment {
+            Alignment::Closest => s.asm.closest_alignment(&mut s.parts, &a, &b),
+            other => other,
+        };
+        let id = s.asm.add_mate(kind, alignment, a, b);
+        self.refresh_assembly();
+        let Some(s) = &mut self.asm else { return Err("no assembly is open".into()) };
+        let trouble = match s.status.mate(id) {
+            Some(MateState::Unsatisfied(r)) => {
+                Some(format!("it cannot hold with the other mates (it stays {r:.3} mm off); check them, or change this one"))
+            }
+            Some(MateState::Invalid(e)) => Some(e.to_string()),
+            _ => None,
+        };
+        if let Some(why) = trouble {
+            s.asm = before;
+            self.refresh_assembly();
+            return Err(why);
+        }
+        s.selection = AsmSelection::Mate(id);
+        s.commit();
+        Ok(id)
     }
 
     /// Opens the Mate panel for a new mate, taking a selected component's nothing.

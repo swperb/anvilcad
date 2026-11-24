@@ -1474,6 +1474,64 @@ mod tests {
         assert!(r["error"].as_str().is_some_and(|e| e.contains("is not a reference plane")), "{r}");
     }
 
+    /// Issue #71: an assembly from a script. A cube mated face to face onto a plate lands
+    /// on it; a mate that cannot hold with the others is refused and nothing changes.
+    #[test]
+    fn lua_builds_and_mates_an_assembly() {
+        let dir = std::env::temp_dir().join(format!("anvil-lua-asm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let d = dir.display().to_string().replace('\\', "/");
+        let mut h = Headless::new();
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": format!(r#"
+            local s = anvil.sketch{{ plane = "top", rects = {{ {{ -50, -30, 50, 30 }} }} }}
+            anvil.extrude{{ sketch = s, depth = 10 }}
+            anvil.save("{d}/plate.anvprt")
+            anvil.new()
+            local c = anvil.sketch{{ plane = "front", rects = {{ {{ 0, 0, 20, 20 }} }} }}
+            anvil.extrude{{ sketch = c, depth = 20 }}
+            anvil.save("{d}/cube.anvprt")
+            anvil.assembly()
+            anvil.insert{{ path = "{d}/plate.anvprt" }}
+            anvil.insert{{ path = "{d}/cube.anvprt", at = {{100, 0, 0}} }}
+            -- The plate's top (y = 10) against the cube's bottom (y = 0, at x 100..120).
+            anvil.mate{{ kind = "coincident", a = {{ face = {{0, 10, 0}} }}, b = {{ face = {{110, 0, 10}} }} }}
+        "#)}),
+        );
+        let asm = run(&mut h, json!({"cmd": "state"}))["state"]["assembly"].clone();
+        let comps = asm["components"].as_array().cloned().unwrap_or_default();
+        assert_eq!(comps.len(), 2, "{asm}");
+        assert_eq!(comps[0]["definition"], "fixed");
+        let origin: Vec<f64> = comps[1]["origin"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
+            .unwrap_or_default();
+        assert!(
+            origin.len() == 3 && origin.iter().zip([100.0, 10.0, 0.0]).all(|(g, w)| (g - w).abs() < 1e-6),
+            "{asm}"
+        );
+        assert_eq!(comps[1]["definition"], "under defined (3)");
+        // 5 mm between the plate's top and the cube's bottom contradicts touching.
+        let r = h.command(&json!({"cmd": "lua", "code":
+            "anvil.mate{ kind = 'distance', value = 5, a = { face = {0, 10, 0} }, b = { plane = 'top', component = 'cube<1>' } }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("cannot hold with the other mates")), "{r}");
+        let asm = run(&mut h, json!({"cmd": "state"}))["state"]["assembly"].clone();
+        assert_eq!(asm["mates"].as_array().map(Vec::len), Some(1), "{asm}");
+        // Components are named in errors.
+        let r = h.command(&json!({"cmd": "lua", "code":
+            "anvil.mate{ kind = 'parallel', a = { plane = 'front' }, b = { plane = 'front', component = 'nut<1>' } }"}));
+        assert!(
+            r["error"].as_str().is_some_and(|e| e.contains("the components are plate<1>, cube<1>")),
+            "{r}"
+        );
+        // And it saves.
+        run(&mut h, json!({"cmd": "lua", "code": format!("anvil.save('{d}/pair.anvasm')")}));
+        assert!(dir.join("pair.anvasm").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     const PLATE: &str = r#"
         anvil.var("t", 10)
         local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }

@@ -6,9 +6,11 @@ use super::*;
 use crate::keymap::{Matcher, Step};
 use crate::script::{
     self, Action, BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, Engine,
-    ExtrudeSpec, HoleSpec, Host, MirrorSpec, PatternSpec, PlaneDef, PlanePick, PlaneSpec, RevolveSpec,
-    RibSpec, ShellSpec, SketchSpec, SplitSpec,
+    ExtrudeSpec, HoleSpec, Host, InsertSpec, MateSide, MateSpec, MirrorSpec, PatternSpec, PlaneDef,
+    PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec, SketchSpec, SplitSpec,
 };
+use anvil_model::assembly::{MateEntity, MateRef};
+use anvil_model::mates::{Alignment, MateKind};
 use std::time::SystemTime;
 
 /// Every built-in command a key binding, script (`anvil.run`) or the command palette can run,
@@ -1270,6 +1272,57 @@ impl Host for AppHost<'_> {
         self.commit_feature(what, before, FeatureKind::Split(anvil_model::SplitFeature { planes, bodies }))
     }
 
+    fn new_assembly(&mut self, force: bool) -> Result<(), String> {
+        if !force && self.app.is_dirty() {
+            return Err(
+                "anvil.assembly: there are unsaved changes; save first, or pass { force = true }".into()
+            );
+        }
+        self.app.new_assembly();
+        Ok(())
+    }
+
+    fn insert_component(&mut self, spec: &InsertSpec) -> Result<u32, String> {
+        let what = "anvil.insert";
+        if !self.app.in_assembly() {
+            return Err(format!("{what}: no assembly is open; start one with anvil.assembly()"));
+        }
+        let at = spec.at.map(|a| anvil_kernel::Vec3 { x: a[0], y: a[1], z: a[2] });
+        self.app.insert_part_at(&spec.path, at).map_err(|e| format!("{what}: {e}"))
+    }
+
+    fn add_mate(&mut self, spec: &MateSpec) -> Result<u32, String> {
+        let what = "anvil.mate";
+        if !self.app.in_assembly() {
+            return Err(format!("{what}: no assembly is open; start one with anvil.assembly()"));
+        }
+        let value =
+            || spec.value.ok_or_else(|| format!("{what}: a {} mate needs value = <number>", spec.kind));
+        let kind = match spec.kind.to_ascii_lowercase().as_str() {
+            "coincident" => MateKind::Coincident,
+            "concentric" => MateKind::Concentric,
+            "parallel" => MateKind::Parallel,
+            "perpendicular" => MateKind::Perpendicular,
+            "tangent" => MateKind::Tangent,
+            "distance" => MateKind::Distance { value: value()?, flip: spec.flip },
+            "angle" => MateKind::Angle { degrees: value()? },
+            other => {
+                return Err(format!(
+                    "{what}: kind \"{other}\" is not coincident, concentric, parallel, perpendicular, tangent, distance or angle"
+                ))
+            }
+        };
+        let alignment = match spec.align.as_deref().map(str::to_ascii_lowercase).as_deref() {
+            None | Some("closest") => Alignment::Closest,
+            Some("aligned") => Alignment::Aligned,
+            Some("anti-aligned") | Some("anti_aligned") | Some("antialigned") => Alignment::AntiAligned,
+            Some(o) => return Err(format!("{what}: align \"{o}\" is not aligned, anti-aligned or closest")),
+        };
+        let a = self.mate_ref(&spec.a, what, "a")?;
+        let b = self.mate_ref(&spec.b, what, "b")?;
+        self.app.script_mate(kind, alignment, a, b).map_err(|e| format!("{what}: {e}"))
+    }
+
     fn add_plane(&mut self, spec: &PlaneDef) -> Result<u32, String> {
         let what = "anvil.plane";
         let kind = FeatureKind::Plane(PlaneFeature {
@@ -1370,6 +1423,43 @@ impl AppHost<'_> {
             .collect()
     }
 
+    /// One side of a mate: a component's face through a point, or a standard plane.
+    fn mate_ref(&self, side: &MateSide, what: &str, key: &str) -> Result<MateRef, String> {
+        match side {
+            MateSide::Face(p) => {
+                let q = anvil_kernel::Vec3 { x: p[0], y: p[1], z: p[2] };
+                let (component, face) = self
+                    .app
+                    .assembly_face_at(q)
+                    .map_err(|e| format!("{what}: {key}: {e} at {{{}, {}, {}}}", p[0], p[1], p[2]))?;
+                Ok(MateRef { component: Some(component), entity: MateEntity::Face(face) })
+            }
+            MateSide::Plane { component, plane } => {
+                let plane = match plane {
+                    PlanePick::Front => PlaneRef::Front,
+                    PlanePick::Top => PlaneRef::Top,
+                    PlanePick::Right => PlaneRef::Right,
+                    _ => return Err(format!("{what}: {key}.plane is \"front\", \"top\" or \"right\"")),
+                };
+                let component = match component {
+                    None => None,
+                    Some(c) => Some(self.component_named(what, c)?),
+                };
+                Ok(MateRef { component, entity: MateEntity::Plane(plane) })
+            }
+        }
+    }
+
+    /// A component of the open assembly by id or name ("bracket<1>").
+    fn component_named(&self, what: &str, name: &str) -> Result<u32, String> {
+        let comps = self.app.asm.as_ref().map(|s| &s.asm.components).ok_or("no assembly is open")?;
+        let found = comps.iter().find(|c| c.id.to_string() == name || c.name == name);
+        found.map(|c| c.id).ok_or_else(|| {
+            let have: Vec<_> = comps.iter().map(|c| c.name.clone()).collect();
+            format!("{what}: there is no component \"{name}\"; the components are {}", have.join(", "))
+        })
+    }
+
     /// The ids of the features named by id or name, in order.
     fn feature_ids(&self, what: &str, names: &[String]) -> Result<Vec<u32>, String> {
         names.iter().map(|n| self.feature_named(what, n).map(|f| f.id)).collect()
@@ -1424,31 +1514,38 @@ impl AppHost<'_> {
     /// The face through point `p`, within [`PICK_TOLERANCE`], refusing a point on an edge.
     fn face_at(&self, p: [f64; 3], what: &str) -> Result<anvil_kernel::FaceId, String> {
         let q = anvil_kernel::Vec3 { x: p[0], y: p[1], z: p[2] };
-        let body = &self.app.state.body;
-        let mut found: Vec<anvil_kernel::FaceId> = Vec::new();
-        for poly in &body.polygons {
-            if (poly.normal.dot(q) - poly.w).abs() > PICK_TOLERANCE || found.contains(&poly.tag.id) {
-                continue;
-            }
-            let u = poly.normal.any_perpendicular();
-            let v = poly.normal.cross(u);
-            let flat = |x: anvil_kernel::Vec3| anvil_kernel::v2(x.dot(u), x.dot(v));
-            let pts: Vec<anvil_kernel::Vec2> = poly.verts.iter().map(|&x| flat(x)).collect();
-            if anvil_kernel::profile::point_in_polygon(flat(q), &pts) {
-                found.push(poly.tag.id);
-            }
+        face_through(&self.app.state.body, q).map_err(|e| format!("{what}: {e}"))
+    }
+}
+
+/// The face of `body` through `q`, within [`PICK_TOLERANCE`], refusing a point on an edge.
+pub(super) fn face_through(
+    body: &anvil_kernel::Solid,
+    q: anvil_kernel::Vec3,
+) -> Result<anvil_kernel::FaceId, String> {
+    let mut found: Vec<anvil_kernel::FaceId> = Vec::new();
+    for poly in &body.polygons {
+        if (poly.normal.dot(q) - poly.w).abs() > PICK_TOLERANCE || found.contains(&poly.tag.id) {
+            continue;
         }
-        match found.as_slice() {
-            [f] => Ok(*f),
-            [] => Err(format!("{what}: no face of the part passes through {{{}, {}, {}}}", p[0], p[1], p[2])),
-            _ => Err(format!(
-                "{what}: {{{}, {}, {}}} is on {} faces (an edge?); give a point inside one face",
-                p[0],
-                p[1],
-                p[2],
-                found.len()
-            )),
+        let u = poly.normal.any_perpendicular();
+        let v = poly.normal.cross(u);
+        let flat = |x: anvil_kernel::Vec3| anvil_kernel::v2(x.dot(u), x.dot(v));
+        let pts: Vec<anvil_kernel::Vec2> = poly.verts.iter().map(|&x| flat(x)).collect();
+        if anvil_kernel::profile::point_in_polygon(flat(q), &pts) {
+            found.push(poly.tag.id);
         }
+    }
+    match found.as_slice() {
+        [f] => Ok(*f),
+        [] => Err(format!("no face passes through {{{}, {}, {}}}", q.x, q.y, q.z)),
+        _ => Err(format!(
+            "{{{}, {}, {}}} is on {} faces (an edge?); give a point inside one face",
+            q.x,
+            q.y,
+            q.z,
+            found.len()
+        )),
     }
 }
 

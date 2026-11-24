@@ -11,8 +11,8 @@
 use crate::headless::Headless;
 use crate::script::{
     BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, ExtrudeSpec, HoleSpec, Host,
-    MirrorSpec, PatternRun, PatternSpec, PlaneDef, PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec,
-    SketchSpec, SplitSpec,
+    InsertSpec, MateSide, MateSpec, MirrorSpec, PatternRun, PatternSpec, PlaneDef, PlanePick, PlaneSpec,
+    RevolveSpec, RibSpec, ShellSpec, SketchSpec, SplitSpec,
 };
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
@@ -373,6 +373,40 @@ impl Server {
                 s["feature"] = json!(id);
                 s
             }
+            "new_assembly" => {
+                let force = a.bool("force")?;
+                self.host(|h| h.new_assembly(force))?;
+                json!({ "assembly": self.h.app.snapshot()["assembly"] })
+            }
+            "insert_component" => {
+                let at = match a.get("at") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => {
+                        let n: Option<Vec<f64>> =
+                            v.as_array().and_then(|r| r.iter().map(Value::as_f64).collect());
+                        Some(n.and_then(|n| <[f64; 3]>::try_from(n).ok()).ok_or("at: [x, y, z]")?)
+                    }
+                };
+                let spec = InsertSpec { path: a.path("path")?, at };
+                let id = self.host(|h| h.insert_component(&spec))?;
+                json!({ "component": id, "assembly": self.h.app.snapshot()["assembly"] })
+            }
+            "add_mate" => {
+                let value = match a.get("value") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_f64().ok_or("value is a number")?),
+                };
+                let spec = MateSpec {
+                    kind: a.req_str("kind")?.to_string(),
+                    a: mate_side(a, "a")?,
+                    b: mate_side(a, "b")?,
+                    value,
+                    flip: a.bool("flip")?,
+                    align: a.str("align")?.map(str::to_string),
+                };
+                let id = self.host(|h| h.add_mate(&spec))?;
+                json!({ "mate": id, "assembly": self.h.app.snapshot()["assembly"] })
+            }
             "add_plane" => {
                 let offset = match a.get("offset") {
                     None => Depth::Value(0.0),
@@ -680,6 +714,25 @@ fn name_list(a: &Args, k: &str) -> Result<Vec<String>, String> {
             _ => Err(usage()),
         })
         .collect()
+}
+
+/// `{ "face": [x, y, z] }` or `{ "plane": "front", "component": id or name }`.
+fn mate_side(a: &Args, k: &str) -> Result<MateSide, String> {
+    let usage =
+        format!("{k}: {{ \"face\": [x, y, z] }} or {{ \"plane\": \"front\", \"component\": <id or name> }}");
+    let side = a.get(k).and_then(Value::as_object).ok_or_else(|| usage.clone())?;
+    if let Some(f) = side.get("face") {
+        let n: Option<Vec<f64>> = f.as_array().and_then(|r| r.iter().map(Value::as_f64).collect());
+        return n.and_then(|n| <[f64; 3]>::try_from(n).ok()).map(MateSide::Face).ok_or(usage);
+    }
+    let plane = plane_pick(side.get("plane"), &format!("{k}.plane"))?;
+    let component = match side.get("component") {
+        None | Some(Value::Null) => None,
+        Some(Value::Number(n)) => Some(n.to_string()),
+        Some(Value::String(s)) => Some(s.clone()),
+        _ => return Err(usage),
+    };
+    Ok(MateSide::Plane { component, plane })
 }
 
 fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
@@ -1002,6 +1055,42 @@ const TOOLS: &[Tool] = &[
             "countersink_angle": { "type": ["number", "string"], "description": "Degrees, such as 90" }
         }"#,
         required: &["sketch", "diameter"],
+        read_only: false,
+    },
+    Tool {
+        name: "new_assembly",
+        title: "New assembly",
+        description: "Start a new, empty assembly. Refuses if there are unsaved changes, unless force. Insert parts with insert_component and place them with add_mate; save it with save_part (.anvasm).",
+        properties: r#"{
+            "force": { "type": "boolean", "description": "Discard unsaved changes" }
+        }"#,
+        required: &[],
+        read_only: false,
+    },
+    Tool {
+        name: "insert_component",
+        title: "Insert component",
+        description: "Insert a saved part (.anvprt) into the open assembly. The first component is fixed at the assembly's origin; later ones go at `at` (assembly coordinates, mm) or beside the others. Returns the component id and the assembly's components and mates.",
+        properties: r#"{
+            "path": { "type": "string", "description": "The part file" },
+            "at": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Where the part's origin goes" }
+        }"#,
+        required: &["path"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_mate",
+        title: "Add mate",
+        description: "Constrain two components: coincident, concentric, parallel, perpendicular, tangent, distance (value in mm) or angle (value in degrees). Each side is a component face picked by a point on it (assembly coordinates) or a standard plane. Solves at once; a mate that cannot hold with the others is refused and nothing changes. Returns the mate id and the assembly, with each component's placement and how well it is defined.",
+        properties: r#"{
+            "kind": { "type": "string", "enum": ["coincident", "concentric", "parallel", "perpendicular", "tangent", "distance", "angle"] },
+            "a": { "type": "object", "description": "{ \"face\": [x, y, z] } (a point on a component's face, in assembly coordinates) or { \"plane\": \"front\" | \"top\" | \"right\", \"component\": <id or name, or leave out for the assembly's own plane> }" },
+            "b": { "type": "object", "description": "{ \"face\": [x, y, z] } (a point on a component's face, in assembly coordinates) or { \"plane\": \"front\" | \"top\" | \"right\", \"component\": <id or name, or leave out for the assembly's own plane> }" },
+            "value": { "type": "number", "description": "For distance (mm) and angle (degrees)" },
+            "flip": { "type": "boolean", "description": "Distance: put b on the other side of a" },
+            "align": { "type": "string", "enum": ["aligned", "anti-aligned", "closest"], "description": "Which way the faces face; default closest" }
+        }"#,
+        required: &["kind", "a", "b"],
         read_only: false,
     },
     Tool {
