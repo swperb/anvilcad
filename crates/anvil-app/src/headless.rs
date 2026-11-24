@@ -1434,6 +1434,46 @@ mod tests {
         assert!((vol(&mut h) - (11250.0 + 625.0)).abs() < 1e-6, "{}", vol(&mut h));
     }
 
+    /// Issue #71: reference planes from a script, to sketch on and to mirror about. A rib
+    /// sketched on a plane through the middle of a bracket (no need to build it symmetric).
+    #[test]
+    fn lua_reference_planes() {
+        let mut h = Headless::new();
+        let vol = |h: &mut Headless| {
+            run(h, json!({"cmd": "state"}))["state"]["body"]["volume"].as_f64().unwrap_or(f64::NAN)
+        };
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "front", polylines = { { {0,0}, {40,0}, {40,5}, {5,5}, {5,40}, {0,40}, {0,0} } } }
+            anvil.extrude{ sketch = s, depth = 30 }
+            mid = anvil.plane{ from = "front", offset = 15 }
+            local r = anvil.sketch{ plane = { on = mid }, polylines = { { {5, 30}, {30, 5} } } }
+            anvil.rib{ sketch = r, thickness = 2 }
+        "#}),
+        );
+        assert!((vol(&mut h) - (11250.0 + 625.0)).abs() < 1e-6, "{}", vol(&mut h));
+
+        // A 10 x 10 x 10 boss at x 20..30 mirrored about a plane 10 off the Right plane
+        // (x = 10) lands at x -10..0: a second boss, no overlap.
+        run(&mut h, json!({"cmd": "new", "force": true}));
+        run(
+            &mut h,
+            json!({"cmd": "lua", "code": r#"
+            local s = anvil.sketch{ plane = "front", rects = { { 20, 0, 30, 10 } } }
+            local b = anvil.extrude{ sketch = s, depth = 10 }
+            local p = anvil.plane{ from = "right", offset = 10 }
+            anvil.mirror{ features = { b }, plane = p }
+        "#}),
+        );
+        assert!((vol(&mut h) - 2000.0).abs() < 1e-6, "{}", vol(&mut h));
+        let b = run(&mut h, json!({"cmd": "state"}))["state"]["body"]["bounds"].clone();
+        assert_eq!(b["min"][0], json!(-10.0), "{b}");
+        // A plane is refused where something else is named.
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.mirror{ features = { 2 }, plane = 2 }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("is not a reference plane")), "{r}");
+    }
+
     const PLATE: &str = r#"
         anvil.var("t", 10)
         local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }

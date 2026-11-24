@@ -250,6 +250,8 @@ pub trait Host {
     fn add_combine(&mut self, spec: &CombineSpec) -> Result<u32, String>;
     /// Splits bodies along planes; returns the feature's id.
     fn add_split(&mut self, spec: &SplitSpec) -> Result<u32, String>;
+    /// Adds a reference plane offset from another; returns its id.
+    fn add_plane(&mut self, spec: &PlaneDef) -> Result<u32, String>;
     fn set_status(&mut self, text: &str);
 }
 
@@ -332,6 +334,18 @@ pub enum PlanePick {
     Right,
     /// The flat face of the part through this point (model coordinates, mm).
     Face([f64; 3]),
+    /// A reference plane feature, by id or name.
+    Feature(String),
+}
+
+/// A reference plane from `anvil.plane{...}`: parallel to `from`, `offset` away.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlaneDef {
+    pub from: PlanePick,
+    /// mm or an equation; 0 makes a plane on `from` itself.
+    pub offset: Depth,
+    /// Put it on the other side of `from`.
+    pub flip: bool,
 }
 
 /// A direction: a model axis, or any vector.
@@ -710,6 +724,7 @@ impl Engine {
             "rib",
             "combine",
             "split",
+            "plane",
             "status",
         ];
         let result = self.guarded(|lua| {
@@ -893,6 +908,13 @@ impl Engine {
                     scope.create_function(move |_, t: Table| {
                         let spec = read_split(&t).map_err(fail)?;
                         h.borrow_mut().add_split(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "plane",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_plane(&t).map_err(fail)?;
+                        h.borrow_mut().add_plane(&spec).map_err(fail)
                     })?,
                 )?;
                 anvil.set(
@@ -1240,12 +1262,16 @@ fn plane_pick(v: Value, what: &str) -> Result<PlanePick, String> {
             "front" => Ok(PlanePick::Front),
             "top" => Ok(PlanePick::Top),
             "right" => Ok(PlanePick::Right),
-            other => Err(format!("{what}: plane \"{other}\" is not front, top or right")),
+            // Any other name is a reference plane feature's.
+            _ => Ok(PlanePick::Feature(p.to_string_lossy())),
         },
+        Value::Integer(i) => Ok(PlanePick::Feature(i.to_string())),
         Value::Table(p) => {
             Ok(PlanePick::Face(numbers(&p, &format!("{what}: {{x, y, z}}, a point on a flat face"))?))
         }
-        _ => Err(format!("{what}: a plane is \"front\", \"top\", \"right\" or {{x, y, z}} on a flat face")),
+        _ => Err(format!(
+            "{what}: a plane is \"front\", \"top\", \"right\", a plane feature's id or name, or {{x, y, z}} on a flat face"
+        )),
     }
 }
 
@@ -1308,6 +1334,15 @@ fn read_combine(t: &Table) -> Result<CombineSpec, String> {
         _ => return Err(format!("{what}: main is an id or a name")),
     };
     Ok(CombineSpec { how, main, bodies: names(t, "bodies", what, true)? })
+}
+
+fn read_plane(t: &Table) -> Result<PlaneDef, String> {
+    let what = "anvil.plane";
+    Ok(PlaneDef {
+        from: plane_pick(t.get::<Value>("from").map_err(lua_err)?, &format!("{what} from"))?,
+        offset: size(t, "offset", what, Some(0.0))?,
+        flip: t.get::<Option<bool>>("flip").map_err(lua_err)?.unwrap_or(false),
+    })
 }
 
 fn read_split(t: &Table) -> Result<SplitSpec, String> {

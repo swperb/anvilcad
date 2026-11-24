@@ -11,8 +11,8 @@
 use crate::headless::Headless;
 use crate::script::{
     BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, ExtrudeSpec, HoleSpec, Host,
-    MirrorSpec, PatternRun, PatternSpec, PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec, SketchSpec,
-    SplitSpec,
+    MirrorSpec, PatternRun, PatternSpec, PlaneDef, PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec,
+    SketchSpec, SplitSpec,
 };
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
@@ -373,6 +373,18 @@ impl Server {
                 s["feature"] = json!(id);
                 s
             }
+            "add_plane" => {
+                let offset = match a.get("offset") {
+                    None => Depth::Value(0.0),
+                    Some(_) => size(a, "offset")?,
+                };
+                let spec =
+                    PlaneDef { from: plane_pick(a.get("from"), "from")?, offset, flip: a.bool("flip")? };
+                let id = self.host(|h| h.add_plane(&spec))?;
+                let mut s = self.summary();
+                s["feature"] = json!(id);
+                s
+            }
             "add_draft" => {
                 let faces =
                     a.number_lists::<3>("faces", "faces: [[x, y, z], ...], a point on each face to draft")?;
@@ -641,15 +653,17 @@ fn plane_pick(v: Option<&Value>, what: &str) -> Result<PlanePick, String> {
             "front" => Ok(PlanePick::Front),
             "top" => Ok(PlanePick::Top),
             "right" => Ok(PlanePick::Right),
-            other => Err(format!("{what} is front, top or right, not \"{other}\"")),
+            // Any other name is a reference plane feature's.
+            _ => Ok(PlanePick::Feature(p.clone())),
         },
+        Some(Value::Number(n)) => Ok(PlanePick::Feature(n.to_string())),
         Some(Value::Array(r)) => {
             let n: Option<Vec<f64>> = r.iter().map(Value::as_f64).collect();
             n.and_then(|n| <[f64; 3]>::try_from(n).ok())
                 .map(PlanePick::Face)
                 .ok_or_else(|| format!("{what}: [x, y, z], a point on a flat face"))
         }
-        _ => Err(format!("{what} is \"front\", \"top\", \"right\" or [x, y, z] on a flat face")),
+        _ => Err(format!("{what} is \"front\", \"top\", \"right\", a plane feature's id or name, or [x, y, z] on a flat face")),
     }
 }
 
@@ -988,6 +1002,18 @@ const TOOLS: &[Tool] = &[
             "countersink_angle": { "type": ["number", "string"], "description": "Degrees, such as 90" }
         }"#,
         required: &["sketch", "diameter"],
+        read_only: false,
+    },
+    Tool {
+        name: "add_plane",
+        title: "Add reference plane",
+        description: "Add a reference plane parallel to another, offset along its normal (flip puts it on the other side). Sketch on it with add_sketch on_feature, or use it to mirror, draft or split. Returns the plane's feature id.",
+        properties: r#"{
+            "from": { "type": ["string", "integer", "array"], "items": { "type": "number" }, "description": "\"front\", \"top\", \"right\", a plane feature's id or name, or [x, y, z] on a flat face" },
+            "offset": { "type": ["number", "string"], "description": "mm or an equation; default 0" },
+            "flip": { "type": "boolean" }
+        }"#,
+        required: &["from"],
         read_only: false,
     },
     Tool {
