@@ -21,6 +21,7 @@ pub mod corpus;
 pub mod csg;
 pub mod fuzz;
 pub mod oracle;
+pub mod publish;
 pub mod raster;
 pub mod rng;
 

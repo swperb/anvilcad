@@ -10,13 +10,19 @@ const USAGE: &str = "usage: anvil-evals [corpus] [--filter TEXT] [--fuzz N] [--s
                   [--prims N] [--images DIR] [--failed-images] [--step DIR] [--no-step] [--repeats N]
                   [--report FILE.json] [--baseline FILE.json] [--save-baseline FILE.json]
                   [--slower PCT] [--quiet] [--probe] [--blend-fuzz N]
+       anvil-evals --publish FILE.md
 
 corpus runs the hand-built cases (the default when --fuzz is not given). --fuzz N runs N
 random cases from --seed. --baseline compares build times with a saved report and fails
 on any case slower by more than --slower percent (default 30) and 5 ms. Every result is
 written to STEP and read back; --step DIR keeps the files, --no-step skips the check.
 --blend-fuzz N blends four random edges of each of N random parts from --seed and fails
-on any unsound result (a refusal is fine).";
+on any unsound result (a refusal is fine). --publish runs the corpus and writes the
+results page (docs/kernel/RESULTS.md), with the committed reference timings.";
+
+/// The committed reference run whose timings the published page shows.
+const PUBLISHED_BASELINE: &str = "crates/anvil-evals/baselines/cloud-linux-x86_64.json";
+const PUBLISHED_MACHINE: &str = "a 4-core cloud Linux container, release build, best of 3";
 
 struct Args {
     corpus: bool,
@@ -32,6 +38,7 @@ struct Args {
     quiet: bool,
     probe: bool,
     blend_fuzz: u64,
+    publish: Option<PathBuf>,
     opt: Options,
 }
 
@@ -50,6 +57,7 @@ fn parse() -> Result<Args, String> {
         quiet: false,
         probe: false,
         blend_fuzz: 0,
+        publish: None,
         opt: Options::default(),
     };
     let mut it = std::env::args().skip(1);
@@ -86,6 +94,7 @@ fn parse() -> Result<Args, String> {
             "--quiet" => a.quiet = true,
             "--probe" => a.probe = true,
             "--blend-fuzz" => a.blend_fuzz = num(it.next(), "--blend-fuzz")? as u64,
+            "--publish" => a.publish = Some(it.next().ok_or("--publish needs a file")?.into()),
             "-h" | "--help" => return Err(USAGE.into()),
             other => return Err(format!("unknown argument {other}\n\n{USAGE}")),
         }
@@ -109,6 +118,10 @@ fn main() -> ExitCode {
         let at = info.location().map(|l| format!(" at {}:{}", l.file(), l.line())).unwrap_or_default();
         eprintln!("  (panic{at})");
     }));
+
+    if let Some(path) = &args.publish {
+        return publish(path);
+    }
 
     if args.blend_fuzz > 0 {
         let trials = fuzz::blend_trials(args.seed, args.blend_fuzz, 4);
@@ -264,4 +277,31 @@ fn main() -> ExitCode {
     }
 
     if regressed.is_empty() && slow == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// Runs the whole corpus and writes the results page to `path`.
+fn publish(path: &std::path::Path) -> ExitCode {
+    let cases = corpus::cases();
+    let opt = Options::default();
+    let results: Vec<CaseResult> = cases.iter().map(|c| run(c, &opt)).collect();
+    let json = include_str!("../baselines/cloud-linux-x86_64.json");
+    let baseline =
+        anvil_evals::publish::Baseline { path: PUBLISHED_BASELINE, machine: PUBLISHED_MACHINE, json };
+    let page = match anvil_evals::publish::report(&cases, &results, Some(&baseline)) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(path, &page) {
+        eprintln!("could not write {}: {e}", path.display());
+        return ExitCode::from(2);
+    }
+    println!("{}", page.lines().nth(2).unwrap_or(""));
+    println!("wrote {}", path.display());
+    if results.iter().any(|r| r.regressed()) { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
