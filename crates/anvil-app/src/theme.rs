@@ -951,8 +951,17 @@ pub fn command_button(ui: &mut Ui, icon: Icon, label: &str, selected: Option<boo
     let p = Palette::of(ui);
     let font = FontId::proportional(11.5);
     let galley = ui.painter().layout_no_wrap(label.to_string(), font, p.text);
-    let compact = compact_commands(ui);
-    let width = if compact { 40.0 } else { (galley.size().x + 14.0).max(52.0) };
+    let mode = bar_mode(ui);
+    let width = mode.button_width(galley.size().x);
+    // How much wider this button is than it would be in each mode, so the bar can tell
+    // the width of every mode from the one it drew.
+    ui.data_mut(|d| {
+        let delta = d.get_temp_mut_or_default::<[f32; 3]>(bar_delta_id());
+        for (i, m) in BarMode::ALL.into_iter().enumerate() {
+            delta[i] += width - m.button_width(galley.size().x);
+        }
+    });
+    let compact = mode == BarMode::Icons;
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(width, 54.0), Sense::click());
     button_info(&resp, label, selected);
     if ui.is_rect_visible(rect) {
@@ -994,26 +1003,70 @@ pub fn command_button(ui: &mut Ui, icon: Icon, label: &str, selected: Option<boo
     }
 }
 
-/// The memory key of the flag [`command_bar`] sets while its buttons show icons only.
-fn compact_id() -> egui::Id {
-    egui::Id::new("anvilcad-command-bar-compact")
+/// How [`command_bar`] draws its buttons, widest first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum BarMode {
+    /// Icon with its label under it.
+    #[default]
+    Full,
+    /// The same, with less padding around the label.
+    Tight,
+    /// Icon only; the label is in the tooltip.
+    Icons,
 }
 
-fn compact_commands(ui: &Ui) -> bool {
-    ui.data(|d| d.get_temp::<bool>(compact_id())).unwrap_or(false)
+impl BarMode {
+    const ALL: [BarMode; 3] = [BarMode::Full, BarMode::Tight, BarMode::Icons];
+
+    /// A command button's width in this mode, for a label `label` points wide.
+    fn button_width(self, label: f32) -> f32 {
+        match self {
+            BarMode::Full => (label + 14.0).max(52.0),
+            BarMode::Tight => (label + 6.0).max(44.0),
+            BarMode::Icons => 40.0,
+        }
+    }
 }
 
-/// A row of command groups that fits the window: with every label where they fit, with
-/// icons only (names in tooltips) where they do not, and scrolling sideways if even that is
-/// too wide. `key` names what the row holds (a tab, a mode), since each has its own width.
+/// The memory key of the mode [`command_bar`] sets while it draws its buttons.
+fn bar_mode_id() -> egui::Id {
+    egui::Id::new("anvilcad-command-bar-mode")
+}
+
+/// The memory key where command buttons add up how their width differs in each mode.
+fn bar_delta_id() -> egui::Id {
+    egui::Id::new("anvilcad-command-bar-delta")
+}
+
+fn bar_mode(ui: &Ui) -> BarMode {
+    ui.data(|d| d.get_temp::<BarMode>(bar_mode_id())).unwrap_or_default()
+}
+
+/// A row of command groups that fits the window: with every label where they fit, then
+/// with tighter labels, then icons only (names in tooltips), and scrolling sideways if even
+/// that is too wide. `key` names what the row holds (a tab, a mode), since each has its
+/// own widths.
 ///
-/// The width the row takes with labels is remembered from the last frame it was drawn
-/// with them, so it goes back to labels as soon as the window is wide enough again.
+/// The row's width in the label modes is remembered: exactly for a mode once it has been
+/// drawn, and estimated from the buttons until then. So the bar picks the widest mode that
+/// fits before drawing, and goes back to labels as soon as the window is wide enough.
 pub fn command_bar(ui: &mut Ui, key: impl std::hash::Hash, add: impl FnOnce(&mut Ui)) {
     let id = egui::Id::new(("anvilcad-command-bar-width", key));
-    let full: Option<f32> = ui.data(|d| d.get_temp(id));
-    let compact = full.is_some_and(|w| w > ui.available_width());
-    ui.data_mut(|d| d.insert_temp(compact_id(), compact));
+    // Full and Tight; each is (width, measured rather than estimated).
+    let known: [Option<(f32, bool)>; 2] = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let avail = ui.available_width();
+    let fits = |w: Option<(f32, bool)>| w.is_none_or(|(w, _)| w <= avail + 0.5);
+    let mode = if fits(known[0]) {
+        BarMode::Full
+    } else if fits(known[1]) {
+        BarMode::Tight
+    } else {
+        BarMode::Icons
+    };
+    ui.data_mut(|d| {
+        d.insert_temp(bar_mode_id(), mode);
+        d.insert_temp(bar_delta_id(), [0.0f32; 3]);
+    });
     let width = egui::ScrollArea::horizontal()
         .id_salt(id)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
@@ -1027,14 +1080,20 @@ pub fn command_bar(ui: &mut Ui, key: impl std::hash::Hash, add: impl FnOnce(&mut
             .width()
         })
         .inner;
-    ui.data_mut(|d| d.insert_temp(compact_id(), false));
-    if !compact {
-        let fits = width <= ui.available_width() + 0.5;
-        ui.data_mut(|d| d.insert_temp(id, width));
-        if !fits {
-            // Drawn with labels but too wide: draw again, compact, before anyone sees it.
-            ui.ctx().request_discard("the command bar is too wide for its labels");
+    let delta: [f32; 3] = ui.data(|d| d.get_temp(bar_delta_id())).unwrap_or_default();
+    ui.data_mut(|d| d.insert_temp(bar_mode_id(), BarMode::Full));
+    let mut next = known;
+    for (i, m) in [BarMode::Full, BarMode::Tight].into_iter().enumerate() {
+        if m == mode {
+            next[i] = Some((width, true));
+        } else if !next[i].is_some_and(|(_, measured)| measured) {
+            next[i] = Some((width - delta[i], false));
         }
+    }
+    ui.data_mut(|d| d.insert_temp(id, next));
+    if mode != BarMode::Icons && width > avail + 0.5 {
+        // Drawn too wide for this mode: draw again in the next one before anyone sees it.
+        ui.ctx().request_discard("the command bar is too wide for its labels");
     }
 }
 

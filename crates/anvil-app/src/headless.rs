@@ -966,13 +966,22 @@ mod tests {
         };
         // Wide: every command with its label under it.
         run(&mut h, json!({"cmd": "resize", "width": 1700, "height": 900}));
-        assert!(buttons(&mut h).iter().all(|b| b.1 <= 1700.0 && b.2 > 50.0));
-        // A 1280-wide laptop: too narrow for every label, so icons only, all on screen.
+        let full = buttons(&mut h);
+        assert!(full.iter().all(|b| b.1 <= 1700.0 && b.2 >= 52.0), "{full:?}");
+        // A 1280-wide laptop: too narrow for the full labels, so the labels stay with less
+        // padding (issue #148): each button 8 points narrower, all on screen.
         run(&mut h, json!({"cmd": "resize", "width": 1280, "height": 800}));
-        assert!(buttons(&mut h).iter().all(|b| b.1 <= 1280.0 && b.2 < 50.0), "{:?}", buttons(&mut h));
-        // Wide again: the labels come back.
+        let tight = buttons(&mut h);
+        for (f, t) in full.iter().zip(&tight) {
+            assert!((f.2 - 8.0 - t.2).abs() < 0.01 && t.1 <= 1280.0, "{full:?} {tight:?}");
+        }
+        // Narrower still: icons only, all on screen.
+        run(&mut h, json!({"cmd": "resize", "width": 1100, "height": 800}));
+        let icons = buttons(&mut h);
+        assert!(icons.iter().all(|b| b.1 <= 1100.0 && (b.2 - 40.0).abs() < 0.01), "{icons:?}");
+        // Wide again: the full labels come back.
         run(&mut h, json!({"cmd": "resize", "width": 1700, "height": 900}));
-        assert!(buttons(&mut h).iter().all(|b| b.2 > 50.0));
+        assert_eq!(buttons(&mut h), full);
     }
 
     #[test]
