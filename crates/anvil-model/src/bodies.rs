@@ -4,7 +4,9 @@
 
 use crate::document::*;
 use crate::exact;
+use crate::failure::Cause;
 use crate::rebuild::BuildState;
+use crate::refgeom::{num_text, value};
 use anvil_brep as brep;
 use anvil_brep::boolean::{boolean, BoolOp};
 use anvil_kernel::Vec3;
@@ -121,57 +123,84 @@ pub struct ScaleFeature {
     pub factors: [Dim; 3],
 }
 
-const EXACT_ONLY: &str =
-    "body features need the exact kernel, and the part is faceted from an earlier feature on";
-
 fn d(v: Vec3) -> DVec3 {
     DVec3::new(v.x, v.y, v.z)
 }
 
 impl BuildState {
-    /// Indices of the named bodies (all of them for an empty list).
-    fn pick(&self, refs: &[BodyRef]) -> Result<Vec<usize>, String> {
-        if refs.is_empty() {
-            return Ok((0..self.body_names.len()).collect());
-        }
-        refs.iter()
-            .map(|r| {
-                self.body_names
-                    .iter()
-                    .position(|n| n == r)
-                    .ok_or_else(|| format!("body {}[{}] no longer exists", r.feature, r.index))
-            })
-            .collect()
-    }
-
     /// Replaces the exact bodies with `out`, as feature `id`.
-    fn set_bodies(&mut self, id: u32, out: Vec<brep::Solid>) -> Result<(), String> {
+    fn set_bodies(&mut self, id: u32, out: Vec<brep::Solid>) -> Result<(), Cause> {
         if self.exact_step(id, |_| Ok(out)) {
             Ok(())
         } else {
-            Err(self.faceted_from.as_ref().map(|f| f.1.clone()).unwrap_or_else(|| EXACT_ONLY.into()))
+            Err(self
+                .faceted_from
+                .as_ref()
+                .map(|f| Cause::from(f.1.clone()))
+                .unwrap_or_else(|| "the exact kernel could not build the result".into()))
         }
     }
 }
 
 impl Document {
+    /// Why a feature that only the exact kernel builds (`what`, as in "body features")
+    /// cannot be built on this part, naming the feature where the part became faceted.
+    pub(crate) fn exact_only(&self, what: &str, st: &BuildState) -> Cause {
+        match st.faceted_from.as_ref().and_then(|(f, _)| self.feature(*f)) {
+            Some(f) => Cause::told(
+                format!("{what} need the exact kernel, and the part is faceted from {} on", f.name),
+                format!("Fix or suppress {}, so the part stays exact up to here.", f.name),
+            ),
+            None => Cause::told(
+                format!("{what} need the exact kernel, and the part is faceted"),
+                "Build the part from features the exact kernel supports, such as sketches, extrudes and revolves.",
+            ),
+        }
+    }
+
+    /// The exact bodies, for a feature that only works on them.
+    fn exact_bodies(&self, st: &BuildState) -> Result<Vec<brep::Solid>, Cause> {
+        st.exact.clone().ok_or_else(|| self.exact_only("body features", st))
+    }
+
+    /// Indices of the named bodies (all of them for an empty list).
+    fn pick(&self, st: &BuildState, refs: &[BodyRef]) -> Result<Vec<usize>, Cause> {
+        if refs.is_empty() {
+            return Ok((0..st.body_names.len()).collect());
+        }
+        refs.iter()
+            .map(|r| {
+                st.body_names.iter().position(|n| n == r).ok_or_else(|| {
+                    let from =
+                        self.feature(r.feature).map(|f| f.name.as_str()).unwrap_or("a deleted feature");
+                    Cause::told(
+                        format!("a body it uses, made by {from}, no longer exists"),
+                        "Edit it and pick the bodies again.",
+                    )
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn rebuild_combine(
         &self,
         id: u32,
         c: &CombineFeature,
         st: &mut BuildState,
-    ) -> Result<(), String> {
-        let bodies = st.exact.clone().ok_or(EXACT_ONLY)?;
-        let mut picked = st.pick(&c.bodies)?;
+    ) -> Result<(), Cause> {
+        let bodies = self.exact_bodies(st)?;
+        let mut picked = self.pick(st, &c.bodies)?;
         if let (CombineOp::Subtract, Some(m)) = (c.op, &c.main) {
-            let mi = st.pick(std::slice::from_ref(m))?[0];
+            let mi = self.pick(st, std::slice::from_ref(m))?[0];
             picked.retain(|&i| i != mi);
             picked.insert(0, mi);
         }
         if picked.len() < 2 {
-            return Err("choose at least two bodies to combine".into());
+            return Err(Cause::told(
+                format!("it needs at least two bodies to combine, and has {}", picked.len()),
+                "Edit it and pick two or more bodies.",
+            ));
         }
-        let e = |k: brep::KernelError| k.to_string();
         let mut acc = vec![bodies[picked[0]].clone()];
         for &i in &picked[1..] {
             let op = match c.op {
@@ -181,14 +210,29 @@ impl Document {
             };
             let mut next = Vec::new();
             for a in &acc {
-                next.extend(boolean(a, &bodies[i], op).map_err(e)?);
+                next.extend(boolean(a, &bodies[i], op)?);
             }
             acc = next;
         }
         match c.op {
-            CombineOp::Add if acc.len() != 1 => return Err("the bodies do not touch".into()),
-            CombineOp::Common if acc.is_empty() => return Err("the bodies have nothing in common".into()),
-            CombineOp::Subtract if acc.is_empty() => return Err("nothing of the main body is left".into()),
+            CombineOp::Add if acc.len() != 1 => {
+                return Err(Cause::told(
+                    "the bodies do not touch",
+                    "Move one body so they overlap, or pick other bodies.",
+                ))
+            }
+            CombineOp::Common if acc.is_empty() => {
+                return Err(Cause::told(
+                    "the bodies have nothing in common",
+                    "Pick bodies that overlap, or use Add to join them.",
+                ))
+            }
+            CombineOp::Subtract if acc.is_empty() => {
+                return Err(Cause::told(
+                    "nothing of the main body is left",
+                    "Pick another main body, or fewer bodies to subtract from it.",
+                ))
+            }
             _ => {}
         }
         for s in &mut acc {
@@ -209,13 +253,16 @@ impl Document {
         id: u32,
         m: &MoveCopyFeature,
         st: &mut BuildState,
-    ) -> Result<(), String> {
-        let num = |x: &Dim, what: &str| x.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
-        let t =
-            DVec3::new(num(&m.translate[0], "X")?, num(&m.translate[1], "Y")?, num(&m.translate[2], "Z")?);
+    ) -> Result<(), Cause> {
+        let num = |x: &Dim, what: &str| value(x, &st.variables, what);
+        let t = DVec3::new(
+            num(&m.translate[0], "X distance")?,
+            num(&m.translate[1], "Y distance")?,
+            num(&m.translate[2], "Z distance")?,
+        );
         let r = [num(&m.rotate[0], "X angle")?, num(&m.rotate[1], "Y angle")?, num(&m.rotate[2], "Z angle")?];
-        let bodies = st.exact.clone().ok_or(EXACT_ONLY)?;
-        let picked = st.pick(&m.bodies)?;
+        let bodies = self.exact_bodies(st)?;
+        let picked = self.pick(st, &m.bodies)?;
         let center = match m.origin {
             Some(o) => d(o),
             None => {
@@ -263,12 +310,16 @@ impl Document {
         id: u32,
         dl: &DeleteBodyFeature,
         st: &mut BuildState,
-    ) -> Result<(), String> {
-        let bodies = st.exact.clone().ok_or(EXACT_ONLY)?;
+    ) -> Result<(), Cause> {
+        let bodies = self.exact_bodies(st)?;
         if dl.bodies.is_empty() {
-            return Err("choose the bodies to delete or keep".into());
+            let what = if dl.keep { "keep" } else { "delete" };
+            return Err(Cause::told(
+                format!("it has no bodies to {what}"),
+                format!("Edit it and pick the bodies to {what}."),
+            ));
         }
-        let picked = st.pick(&dl.bodies)?;
+        let picked = self.pick(st, &dl.bodies)?;
         let out = bodies
             .into_iter()
             .enumerate()
@@ -278,17 +329,15 @@ impl Document {
         st.set_bodies(id, out)
     }
 
-    pub(crate) fn rebuild_split(
-        &self,
-        id: u32,
-        sp: &SplitFeature,
-        st: &mut BuildState,
-    ) -> Result<(), String> {
-        let bodies = st.exact.clone().ok_or(EXACT_ONLY)?;
+    pub(crate) fn rebuild_split(&self, id: u32, sp: &SplitFeature, st: &mut BuildState) -> Result<(), Cause> {
+        let bodies = self.exact_bodies(st)?;
         if sp.planes.is_empty() {
-            return Err("choose a plane to split along".into());
+            return Err(Cause::told(
+                "it has no plane to split along",
+                "Edit it and pick a plane or a flat face.",
+            ));
         }
-        let picked = st.pick(&sp.bodies)?;
+        let picked = self.pick(st, &sp.bodies)?;
         let reach = st.body.bounds().diagonal() + st.body.bounds().center().length() + 10.0;
         let mut out: Vec<brep::Solid> =
             bodies.iter().enumerate().filter(|(i, _)| !picked.contains(i)).map(|(_, b)| b.clone()).collect();
@@ -313,7 +362,7 @@ impl Document {
             let mut next = Vec::new();
             for b in &pieces {
                 for half in above.iter().chain(&below) {
-                    next.extend(boolean(b, half, BoolOp::Intersect).map_err(|e| e.to_string())?);
+                    next.extend(boolean(b, half, BoolOp::Intersect)?);
                 }
             }
             pieces = next;
@@ -322,33 +371,42 @@ impl Document {
         st.set_bodies(id, out)
     }
 
-    pub(crate) fn rebuild_scale(
-        &self,
-        id: u32,
-        sc: &ScaleFeature,
-        st: &mut BuildState,
-    ) -> Result<(), String> {
-        let num = |x: &Dim, what: &str| x.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
+    pub(crate) fn rebuild_scale(&self, id: u32, sc: &ScaleFeature, st: &mut BuildState) -> Result<(), Cause> {
+        let num = |x: &Dim, what: &str| value(x, &st.variables, what);
         let k = [
-            num(&sc.factors[0], "X factor")?,
-            num(&sc.factors[1], "Y factor")?,
-            num(&sc.factors[2], "Z factor")?,
+            num(&sc.factors[0], "X scale factor")?,
+            num(&sc.factors[1], "Y scale factor")?,
+            num(&sc.factors[2], "Z scale factor")?,
         ];
-        let bodies = st.exact.clone().ok_or(EXACT_ONLY)?;
-        let picked = st.pick(&sc.bodies)?;
+        let bodies = self.exact_bodies(st)?;
+        let picked = self.pick(st, &sc.bodies)?;
+        // The kernel refuses these too; saying which factor is wrong helps more.
+        if !picked.is_empty() {
+            if let Some((axis, f)) =
+                ["X", "Y", "Z"].into_iter().zip(k).find(|(_, f)| !f.is_finite() || *f <= 0.0)
+            {
+                return Err(Cause::told(
+                    format!("the {axis} scale factor ({}) must be greater than zero", num_text(f)),
+                    "Give each factor a value above 0; a factor of 1 leaves that direction as it is.",
+                ));
+            }
+        }
         let (center, axes) = match sc.about {
             ScaleAbout::Origin => (DVec3::ZERO, brep::Frame::world()),
             ScaleAbout::CoordSys(cs) => {
-                let f = st.frames.get(&cs).ok_or("the coordinate system failed or is missing")?;
+                let f = st.frames.get(&cs).ok_or_else(|| {
+                    Cause::told(
+                        "the coordinate system it scales about failed or is missing",
+                        "Fix or unsuppress the coordinate system, or scale about the centroid or the origin.",
+                    )
+                })?;
                 (d(f.origin), exact::frame(f))
             }
             ScaleAbout::Centroid => {
                 let params = brep::tess::TessParams::default();
                 let (mut v, mut c) = (0.0, DVec3::ZERO);
                 for &i in &picked {
-                    let m = brep::mass::properties(
-                        &brep::tess::tessellate(&bodies[i], &params).map_err(|e| e.to_string())?,
-                    );
+                    let m = brep::mass::properties(&brep::tess::tessellate(&bodies[i], &params)?);
                     v += m.volume;
                     c += m.centroid * m.volume;
                 }
@@ -357,7 +415,14 @@ impl Document {
         };
         let mut out = bodies.clone();
         for &i in &picked {
-            out[i] = brep::scale::scaled(&bodies[i], center, &axes, k).map_err(|e| e.to_string())?;
+            out[i] = brep::scale::scaled(&bodies[i], center, &axes, k).map_err(|e| match e {
+                // The only thing the scale refuses as unsupported: round faces scaled unevenly.
+                brep::KernelError::Unsupported(_) => Cause::told(
+                    "scaling by different factors would make its round faces elliptical, which the modeler cannot build yet",
+                    "Use the same factor in X, Y and Z for a body with round faces.",
+                ),
+                e => e.into(),
+            })?;
         }
         st.set_bodies(id, out)
     }
@@ -561,5 +626,176 @@ mod tests {
             bodies: ids.iter().map(|&i| body(i)).collect(),
         }));
         assert_eq!(doc.feature(c).map(|f| f.name.as_str()), Some("Combine1"));
+    }
+
+    fn told(c: &str, s: &str) -> (String, String) {
+        (c.to_string(), s.to_string())
+    }
+
+    /// Each way a body feature can fail says what to change; the bodies stay as they were.
+    #[test]
+    fn body_feature_failures_say_what_to_change() {
+        let v = |x: f64| Dim::Value(x);
+        let combine = |op: CombineOp, main: Option<BodyRef>, bodies: Vec<BodyRef>| {
+            FeatureKind::Combine(CombineFeature { op, main, bodies })
+        };
+        // Inside the 12 x 12 x 12 box: A is subtracted to nothing.
+        const BIG: Boxed = ((-1.0, -1.0), (11.0, 11.0), 12.0);
+        type Make = Box<dyn Fn(&[u32]) -> FeatureKind>;
+        let cases: Vec<(&[Boxed], Make, (String, String))> = vec![
+            (
+                &[A, D],
+                Box::new(move |ids| combine(CombineOp::Add, None, ids.iter().map(|&i| body(i)).collect())),
+                told("the bodies do not touch", "Move one body so they overlap, or pick other bodies."),
+            ),
+            (
+                &[A, D],
+                Box::new(move |ids| combine(CombineOp::Common, None, ids.iter().map(|&i| body(i)).collect())),
+                told(
+                    "the bodies have nothing in common",
+                    "Pick bodies that overlap, or use Add to join them.",
+                ),
+            ),
+            (
+                &[A, BIG],
+                Box::new(move |ids| {
+                    combine(CombineOp::Subtract, Some(body(ids[0])), ids.iter().map(|&i| body(i)).collect())
+                }),
+                told(
+                    "nothing of the main body is left",
+                    "Pick another main body, or fewer bodies to subtract from it.",
+                ),
+            ),
+            (
+                &[A, B],
+                Box::new(move |ids| combine(CombineOp::Add, None, vec![body(ids[0])])),
+                told(
+                    "it needs at least two bodies to combine, and has 1",
+                    "Edit it and pick two or more bodies.",
+                ),
+            ),
+            (
+                &[A, B],
+                Box::new(move |ids| {
+                    combine(CombineOp::Add, None, vec![body(ids[0]), BodyRef { feature: ids[1], index: 5 }])
+                }),
+                told(
+                    "a body it uses, made by Boss-Extrude2, no longer exists",
+                    "Edit it and pick the bodies again.",
+                ),
+            ),
+            (
+                &[A, D],
+                Box::new(|_| FeatureKind::DeleteBody(DeleteBodyFeature { bodies: vec![], keep: false })),
+                told("it has no bodies to delete", "Edit it and pick the bodies to delete."),
+            ),
+            (
+                &[A, D],
+                Box::new(|_| FeatureKind::DeleteBody(DeleteBodyFeature { bodies: vec![], keep: true })),
+                told("it has no bodies to keep", "Edit it and pick the bodies to keep."),
+            ),
+            (
+                &[A, D],
+                Box::new(|_| FeatureKind::Split(SplitFeature { planes: vec![], bodies: vec![] })),
+                told("it has no plane to split along", "Edit it and pick a plane or a flat face."),
+            ),
+            (
+                &[A, D],
+                Box::new(move |_| {
+                    FeatureKind::Scale(ScaleFeature {
+                        bodies: vec![],
+                        about: ScaleAbout::Origin,
+                        factors: [v(2.0), v(0.0), v(2.0)],
+                    })
+                }),
+                told(
+                    "the Y scale factor (0) must be greater than zero",
+                    "Give each factor a value above 0; a factor of 1 leaves that direction as it is.",
+                ),
+            ),
+            (
+                &[A, D],
+                Box::new(move |_| {
+                    FeatureKind::Scale(ScaleFeature {
+                        bodies: vec![],
+                        about: ScaleAbout::CoordSys(999),
+                        factors: [v(2.0), v(2.0), v(2.0)],
+                    })
+                }),
+                told(
+                    "the coordinate system it scales about failed or is missing",
+                    "Fix or unsuppress the coordinate system, or scale about the centroid or the origin.",
+                ),
+            ),
+            (
+                &[A, D],
+                Box::new(move |_| {
+                    FeatureKind::MoveCopy(MoveCopyFeature {
+                        bodies: vec![],
+                        copies: 0,
+                        translate: [Dim::Expr("q".into()), v(0.0), v(0.0)],
+                        rotate: [v(0.0), v(0.0), v(0.0)],
+                        origin: None,
+                    })
+                }),
+                told(
+                    "the X distance cannot be worked out: unknown variable 'q'",
+                    "Edit the X distance and fix its equation, or define the variables it uses in Equations.",
+                ),
+            ),
+        ];
+        for (rects, make, want) in cases {
+            let (mut doc, ids) = boxes(rects);
+            let before = volumes(&built(&mut doc));
+            let id = doc.add_feature(make(&ids));
+            assert_eq!(crate::refgeom::failure_of(&mut doc, id), want);
+            assert_eq!(volumes(&doc.rebuild()), before);
+        }
+    }
+
+    #[test]
+    fn scaling_round_faces_unevenly_says_use_one_factor() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        sf.sketch.add_circle(c, 10.0);
+        let s = doc.add_feature(FeatureKind::Sketch(sf));
+        doc.add_feature(FeatureKind::Extrude(ExtrudeFeature { sketch: s, ..Default::default() }));
+        let id = doc.add_feature(FeatureKind::Scale(ScaleFeature {
+            bodies: vec![],
+            about: ScaleAbout::Origin,
+            factors: [Dim::Value(2.0), Dim::Value(1.0), Dim::Value(1.0)],
+        }));
+        assert_eq!(
+            crate::refgeom::failure_of(&mut doc, id),
+            told(
+                "scaling by different factors would make its round faces elliptical, which the modeler cannot build yet",
+                "Use the same factor in X, Y and Z for a body with round faces."
+            )
+        );
+    }
+
+    #[test]
+    fn body_features_on_a_faceted_part_name_where_it_became_faceted() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        sf.sketch.add_circle(c, 10.0);
+        let s = doc.add_feature(FeatureKind::Sketch(sf));
+        let e = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature { sketch: s, ..Default::default() }));
+        doc.add_feature(FeatureKind::Dome(crate::modify::DomeFeature {
+            faces: vec![anvil_kernel::FaceId { feature: e, index: anvil_kernel::FaceId::END_CAP }],
+            height: Dim::Value(5.0),
+            reverse: false,
+            elliptical: true,
+        }));
+        let id = doc.add_feature(FeatureKind::DeleteBody(DeleteBodyFeature { bodies: vec![], keep: false }));
+        assert_eq!(
+            crate::refgeom::failure_of(&mut doc, id),
+            told(
+                "body features need the exact kernel, and the part is faceted from Dome1 on",
+                "Fix or suppress Dome1, so the part stays exact up to here."
+            )
+        );
     }
 }

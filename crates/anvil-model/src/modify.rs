@@ -3,7 +3,10 @@
 
 use crate::document::*;
 use crate::exact;
+use crate::failure::Cause;
 use crate::rebuild::BuildState;
+use crate::refgeom::{num_text, value};
+use anvil_brep::KernelError;
 use anvil_kernel::FaceId;
 use serde::{Deserialize, Serialize};
 
@@ -70,15 +73,13 @@ const EXACT_ONLY: &str =
     "this feature needs the exact kernel, and the part is faceted from an earlier feature on";
 
 impl Document {
-    pub(crate) fn rebuild_draft(
-        &self,
-        id: u32,
-        df: &DraftFeature,
-        st: &mut BuildState,
-    ) -> Result<(), String> {
-        let angle = df.angle.eval(&st.variables).map_err(|e| format!("angle: {e}"))?;
+    pub(crate) fn rebuild_draft(&self, id: u32, df: &DraftFeature, st: &mut BuildState) -> Result<(), Cause> {
+        let angle = value(&df.angle, &st.variables, "draft angle")?;
         if !(angle > 0.0 && angle < 90.0) {
-            return Err("the draft angle must be between 0 and 90 degrees".into());
+            return Err(Cause::told(
+                format!("the draft angle ({} degrees) must be between 0 and 90 degrees", num_text(angle)),
+                "Give it an angle above 0 and below 90 degrees; to lean the other way, turn on Reverse direction.",
+            ));
         }
         let neutral = exact::frame(&self.resolve_plane(&df.neutral, st)?);
         let neutral_face = match df.neutral {
@@ -86,9 +87,12 @@ impl Document {
             _ => None,
         };
         if df.propagation != Propagation::None && neutral_face.is_none() {
-            return Err("propagating along loops needs a face of the part as the neutral plane".into());
+            return Err(Cause::told(
+                "propagating along loops needs a face of the part as the neutral plane",
+                "Pick a flat face of the part as the neutral plane, or turn off Propagation.",
+            ));
         }
-        let bodies = st.exact.clone().ok_or(EXACT_ONLY)?;
+        let bodies = st.exact.clone().ok_or_else(|| self.exact_only("drafts", st))?;
         let a = if df.reverse { -angle } else { angle }.to_radians();
         let mut out = Vec::new();
         let mut drafted = 0;
@@ -119,24 +123,51 @@ impl Document {
                 continue;
             }
             drafted += faces.len();
-            out.push(anvil_brep::draft::draft_faces(b, &faces, &neutral, a).map_err(|e| e.to_string())?);
+            out.push(anvil_brep::draft::draft_faces(b, &faces, &neutral, a).map_err(|e| match e {
+                // The draft's own refusals are written for the user: say them as they are.
+                KernelError::Unsupported(m) | KernelError::InvalidInput(m) => Cause::told(
+                    m,
+                    "Try a smaller angle, or draft other faces: flat faces square to the neutral plane, \
+                     and round faces whose axis runs along the pull.",
+                ),
+                e => e.into(),
+            })?);
         }
         if drafted == 0 {
-            return Err("choose faces to draft".into());
+            return Err(if df.faces.is_empty() && df.propagation == Propagation::None {
+                Cause::told("it has no faces to draft", "Edit it and pick the faces to draft.")
+            } else if df.faces.is_empty() {
+                Cause::told(
+                    "no faces run along the neutral face's loops it propagates to",
+                    "Pick faces to draft, or choose other loops under Propagation.",
+                )
+            } else {
+                Cause::told(
+                    "the faces it drafts are no longer on the part",
+                    "Edit it and pick the faces to draft again.",
+                )
+            });
         }
         if !st.exact_step(id, |_| Ok(out)) {
-            return Err(st.faceted_from.as_ref().map(|f| f.1.clone()).unwrap_or_else(|| EXACT_ONLY.into()));
+            return Err(st
+                .faceted_from
+                .as_ref()
+                .map(|f| Cause::from(f.1.clone()))
+                .unwrap_or_else(|| self.exact_only("drafts", st)));
         }
         Ok(())
     }
 
-    pub(crate) fn rebuild_dome(&self, id: u32, d: &DomeFeature, st: &mut BuildState) -> Result<(), String> {
-        let h = d.height.eval(&st.variables).map_err(|e| format!("height: {e}"))?;
+    pub(crate) fn rebuild_dome(&self, id: u32, d: &DomeFeature, st: &mut BuildState) -> Result<(), Cause> {
+        let h = value(&d.height, &st.variables, "height")?;
         if h < 0.0 {
-            return Err("the height must not be negative".into());
+            return Err(Cause::told(
+                format!("the height ({} mm) must not be negative", num_text(h)),
+                "Give it a height of 0 or more; 0 makes a half sphere, and Reverse cuts the dome in.",
+            ));
         }
         if d.faces.is_empty() {
-            return Err("choose a flat round face to dome".into());
+            return Err(Cause::told("it has no face to dome", "Edit it and pick a flat round face."));
         }
         // Exactly, when the part is exact and the dome is a spherical cap.
         let exact_bodies = st.exact.clone();
@@ -185,9 +216,16 @@ fn faceted_dome(
     elliptical: bool,
     reverse: bool,
     id: u32,
-) -> Result<anvil_kernel::Solid, String> {
+) -> Result<anvil_kernel::Solid, Cause> {
     use anvil_kernel::{v2, Frame, Loop2, Profile};
-    let frame = body.planar_face_frame(f).ok_or("a dome needs a flat face")?;
+    let gone =
+        || Cause::told("the face to dome is no longer on the part", "Edit it and pick the face again.");
+    let frame = body.planar_face_frame(f).ok_or_else(|| {
+        Cause::told(
+            "the face to dome is not flat, or is no longer on the part",
+            "Edit it and pick a flat round face.",
+        )
+    })?;
     let (mut area, mut c) = (0.0, anvil_kernel::Vec3::ZERO);
     let mut verts = Vec::new();
     for p in body.face_polygons(f) {
@@ -197,12 +235,12 @@ fn faceted_dome(
         verts.extend(p.verts.iter().copied());
     }
     if area <= 0.0 {
-        return Err("a face to dome no longer exists".into());
+        return Err(gone());
     }
     let c = c * (1.0 / area);
     let r = verts.iter().map(|v| (*v - c).length()).fold(0.0, f64::max);
     if r <= 0.0 {
-        return Err("the face to dome has no size".into());
+        return Err(gone());
     }
     // Height 0 is the dome tangent to the cylinder below: a hemisphere.
     let h = if h == 0.0 { r } else { h };
@@ -227,8 +265,7 @@ fn faceted_dome(
     }
     pts.push(v2(0.0, h));
     let profile = Profile::new(Loop2::polygon(&pts, 0), vec![]);
-    anvil_kernel::build::revolve(&[profile], &sec, v2(0.0, 0.0), v2(0.0, 1.0), std::f64::consts::TAU, id)
-        .map_err(|e| e.to_string())
+    Ok(anvil_kernel::build::revolve(&[profile], &sec, v2(0.0, 0.0), v2(0.0, 1.0), std::f64::consts::TAU, id)?)
 }
 
 #[cfg(test)]
@@ -357,5 +394,167 @@ mod tests {
         }
         let st = doc.rebuild();
         assert!((exact_volume(&st) - 5432.337297).abs() < 3e-5 * 5432.0);
+    }
+
+    fn told(c: &str, s: &str) -> (String, String) {
+        (c.to_string(), s.to_string())
+    }
+
+    /// Makes the failing feature from the id of the body it works on.
+    type Make = Box<dyn Fn(u32) -> FeatureKind>;
+
+    /// A 10 mm high round boss of radius 10 on the Front plane; returns its extrude.
+    fn cylinder(doc: &mut Document) -> u32 {
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        let c = sf.sketch.add_point(v2(0.0, 0.0));
+        sf.sketch.add_circle(c, 10.0);
+        let s = doc.add_feature(FeatureKind::Sketch(sf));
+        doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: s,
+            depth: Dim::Value(10.0),
+            ..Default::default()
+        }))
+    }
+
+    #[test]
+    fn draft_failures_say_what_to_change() {
+        let draft = |e: u32, f: &dyn Fn(&mut DraftFeature)| {
+            let mut d = DraftFeature {
+                neutral: PlaneRef::Front,
+                faces: (0..4).map(|k| FaceId::side(e, k)).collect(),
+                angle: Dim::Value(5.0),
+                reverse: false,
+                propagation: Propagation::None,
+            };
+            f(&mut d);
+            FeatureKind::Draft(d)
+        };
+        let cases: Vec<(Make, (String, String))> = vec![
+            (
+                Box::new(move |e| draft(e, &|d| d.angle = Dim::Value(0.0))),
+                told(
+                    "the draft angle (0 degrees) must be between 0 and 90 degrees",
+                    "Give it an angle above 0 and below 90 degrees; to lean the other way, turn on Reverse direction.",
+                ),
+            ),
+            (
+                Box::new(move |e| draft(e, &|d| d.angle = Dim::Expr("tilt".into()))),
+                told(
+                    "the draft angle cannot be worked out: unknown variable 'tilt'",
+                    "Edit the draft angle and fix its equation, or define the variables it uses in Equations.",
+                ),
+            ),
+            (
+                Box::new(move |e| draft(e, &|d| d.propagation = Propagation::Outer)),
+                told(
+                    "propagating along loops needs a face of the part as the neutral plane",
+                    "Pick a flat face of the part as the neutral plane, or turn off Propagation.",
+                ),
+            ),
+            (
+                Box::new(move |e| draft(e, &|d| d.faces.clear())),
+                told("it has no faces to draft", "Edit it and pick the faces to draft."),
+            ),
+            (
+                // The box's top has no inner loops to propagate along.
+                Box::new(move |e| {
+                    draft(e, &|d| {
+                        d.neutral = PlaneRef::Face(FaceId { feature: e, index: FaceId::END_CAP });
+                        d.faces.clear();
+                        d.propagation = Propagation::Inner;
+                    })
+                }),
+                told(
+                    "no faces run along the neutral face's loops it propagates to",
+                    "Pick faces to draft, or choose other loops under Propagation.",
+                ),
+            ),
+            (
+                Box::new(move |e| draft(e, &|d| d.faces = vec![FaceId::side(e, 9)])),
+                told("the faces it drafts are no longer on the part", "Edit it and pick the faces to draft again."),
+            ),
+            (
+                // The top face is parallel to the neutral plane: the kernel's own words.
+                Box::new(move |e| draft(e, &|d| d.faces = vec![FaceId { feature: e, index: FaceId::END_CAP }])),
+                told(
+                    "a face parallel to the neutral plane cannot be drafted",
+                    "Try a smaller angle, or draft other faces: flat faces square to the neutral plane, \
+                     and round faces whose axis runs along the pull.",
+                ),
+            ),
+        ];
+        for (make, want) in cases {
+            let mut doc = Document::new();
+            let e = boxed(&mut doc, (0.0, 0.0), (20.0, 20.0), PlaneRef::Front, 10.0);
+            let id = doc.add_feature(make(e));
+            assert_eq!(crate::refgeom::failure_of(&mut doc, id), want);
+            assert!((exact_volume(&doc.rebuild()) - 4000.0).abs() < 1e-6);
+        }
+
+        // On a part an elliptical dome has made faceted, the dome is named.
+        let mut doc = Document::new();
+        let e = cylinder(&mut doc);
+        let top = FaceId { feature: e, index: FaceId::END_CAP };
+        doc.add_feature(FeatureKind::Dome(DomeFeature {
+            faces: vec![top],
+            height: Dim::Value(5.0),
+            reverse: false,
+            elliptical: true,
+        }));
+        let id = doc.add_feature(FeatureKind::Draft(DraftFeature {
+            neutral: PlaneRef::Front,
+            faces: vec![FaceId::side(e, 0)],
+            angle: Dim::Value(5.0),
+            reverse: false,
+            propagation: Propagation::None,
+        }));
+        assert_eq!(
+            crate::refgeom::failure_of(&mut doc, id),
+            told(
+                "drafts need the exact kernel, and the part is faceted from Dome1 on",
+                "Fix or suppress Dome1, so the part stays exact up to here."
+            )
+        );
+    }
+
+    #[test]
+    fn dome_failures_say_what_to_change() {
+        let dome = |faces: Vec<FaceId>, h: Dim| {
+            FeatureKind::Dome(DomeFeature { faces, height: h, reverse: false, elliptical: false })
+        };
+        let cases: Vec<(Make, (String, String))> = vec![
+            (
+                Box::new(move |e| {
+                    dome(vec![FaceId { feature: e, index: FaceId::END_CAP }], Dim::Value(-1.0))
+                }),
+                told(
+                    "the height (-1 mm) must not be negative",
+                    "Give it a height of 0 or more; 0 makes a half sphere, and Reverse cuts the dome in.",
+                ),
+            ),
+            (
+                Box::new(move |_| dome(vec![], Dim::Value(5.0))),
+                told("it has no face to dome", "Edit it and pick a flat round face."),
+            ),
+            (
+                // The cylinder's round side.
+                Box::new(move |e| dome(vec![FaceId::side(e, 0)], Dim::Value(5.0))),
+                told(
+                    "the face to dome is not flat, or is no longer on the part",
+                    "Edit it and pick a flat round face.",
+                ),
+            ),
+        ];
+        for (make, want) in cases {
+            let mut doc = Document::new();
+            let e = cylinder(&mut doc);
+            let id = doc.add_feature(make(e));
+            assert_eq!(crate::refgeom::failure_of(&mut doc, id), want);
+            let st = doc.rebuild();
+            assert!(st.exact.is_some(), "a failed dome leaves the part exact");
+            let v = exact_volume(&st);
+            // The mesh of the round side is within 2e-5 of it; any dome would add over 200 mm³.
+            assert!((v - 1000.0 * std::f64::consts::PI).abs() < 2e-5 * v, "{v}");
+        }
     }
 }

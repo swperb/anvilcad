@@ -7,6 +7,7 @@
 //! [`Axis::Feature`], end conditions through [`PointRef::Feature`].
 
 use crate::document::*;
+use crate::failure::Cause;
 use crate::rebuild::BuildState;
 use anvil_kernel::{EdgeRef, FaceId, Frame, SurfaceKind, Vec3};
 use serde::{Deserialize, Serialize};
@@ -289,8 +290,40 @@ impl CoordSysFeature {
     }
 }
 
-fn err<T>(m: &str) -> Result<T, String> {
-    Err(m.to_string())
+/// A failure with its own suggestion.
+fn refuse<T>(cause: &str, suggestion: &str) -> Result<T, Cause> {
+    Err(Cause::told(cause, suggestion))
+}
+
+/// A number for a message: at most three decimals, trailing zeros dropped ("6", "2.5").
+pub(crate) fn num_text(x: f64) -> String {
+    let s = format!("{x:.3}");
+    let s = if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.') } else { &s };
+    if s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// The value of dimension `d`, or why its equation cannot be worked out. `what` names it
+/// in the message, as in "spacing".
+pub(crate) fn value(
+    d: &Dim,
+    vars: &std::collections::BTreeMap<String, f64>,
+    what: &str,
+) -> Result<f64, Cause> {
+    d.eval(vars).map_err(|e| {
+        Cause::told(
+            format!("the {what} cannot be worked out: {e}"),
+            format!("Edit the {what} and fix its equation, or define the variables it uses in Equations."),
+        )
+    })
+}
+
+/// What to do about a reference that did not build: "Fix or unsuppress <it>, or pick another."
+pub(crate) fn fix_or_pick(it: &str) -> String {
+    format!("Fix or unsuppress {it}, or pick another.")
 }
 
 /// `v` turned `angle` radians about the unit vector `k`.
@@ -306,13 +339,13 @@ fn frame(o: Vec3, n: Vec3, x_hint: Vec3) -> Frame {
 
 impl Document {
     /// The line a reference names: a point on it and its unit direction.
-    pub(crate) fn resolve_line(&self, l: &LineRef, st: &BuildState) -> Result<(Vec3, Vec3), String> {
+    pub(crate) fn resolve_line(&self, l: &LineRef, st: &BuildState) -> Result<(Vec3, Vec3), Cause> {
         match *l {
             LineRef::Axis(a) => self.resolve_axis(&a, st),
             LineRef::SketchLine { .. } | LineRef::Edge(_) => {
                 let (p, q) = self.resolve_segment(l, st)?;
                 if p.distance(q) < 1e-9 {
-                    return err("the line has no length");
+                    return refuse("the line it uses has no length", "Pick another line or edge.");
                 }
                 Ok((p, (q - p).normalized()))
             }
@@ -320,40 +353,47 @@ impl Document {
     }
 
     /// The two ends of a straight edge or sketch line.
-    pub(crate) fn resolve_segment(&self, l: &LineRef, st: &BuildState) -> Result<(Vec3, Vec3), String> {
+    pub(crate) fn resolve_segment(&self, l: &LineRef, st: &BuildState) -> Result<(Vec3, Vec3), Cause> {
         match *l {
             LineRef::Edge(e) => edge_ends(st, e),
             LineRef::SketchLine { sketch, entity } => {
-                let f = st.frames.get(&sketch).ok_or("the sketch holding the line failed or is missing")?;
-                let sk = &self.sketch(sketch).ok_or("the sketch holding the line is missing")?.sketch;
+                let lost = || {
+                    Cause::told(
+                        "the sketch holding the line failed or is missing",
+                        fix_or_pick("that sketch"),
+                    )
+                };
+                let f = st.frames.get(&sketch).ok_or_else(lost)?;
+                let sk = &self.sketch(sketch).ok_or_else(lost)?.sketch;
                 match sk.entities.get(entity).map(|e| e.geom) {
                     Some(anvil_sketch::Geom::Line { a, b }) => {
                         Ok((f.to_world(sk.pos(a)), f.to_world(sk.pos(b))))
                     }
-                    _ => err("the sketch entity is not a line"),
+                    _ => refuse(
+                        "the sketch curve it uses is not a straight line",
+                        "Pick a straight sketch line.",
+                    ),
                 }
             }
-            LineRef::Axis(_) => err("this needs an edge or sketch line, which have ends"),
+            LineRef::Axis(_) => refuse(
+                "this needs an edge or sketch line, which have ends",
+                "Pick a straight edge or a sketch line instead of an axis.",
+            ),
         }
     }
 
     /// A pattern or revolve axis as a point and unit direction.
-    pub(crate) fn resolve_axis(&self, a: &Axis, st: &BuildState) -> Result<(Vec3, Vec3), String> {
+    pub(crate) fn resolve_axis(&self, a: &Axis, st: &BuildState) -> Result<(Vec3, Vec3), Cause> {
         match a {
-            Axis::Feature(id) => {
-                st.axes.get(id).copied().ok_or_else(|| "the reference axis failed or is missing".into())
-            }
+            Axis::Feature(id) => st.axes.get(id).copied().ok_or_else(|| {
+                Cause::told("the reference axis failed or is missing", fix_or_pick("the axis"))
+            }),
             other => Ok((other.origin(), other.dir())),
         }
     }
 
-    pub(crate) fn rebuild_plane(
-        &self,
-        id: u32,
-        pf: &PlaneFeature,
-        st: &mut BuildState,
-    ) -> Result<(), String> {
-        let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
+    pub(crate) fn rebuild_plane(&self, id: u32, pf: &PlaneFeature, st: &mut BuildState) -> Result<(), Cause> {
+        let num = |d: &Dim, what: &str| value(d, &st.variables, what);
         let base = self.resolve_plane(&pf.base, st);
         let point = |p: &PointRef| self.resolve_point(p, st);
         let mut f = match &pf.kind {
@@ -366,7 +406,10 @@ impl Document {
                 let (a, b, c) = (point(&points[0])?, point(&points[1])?, point(&points[2])?);
                 let n = (b - a).cross(c - a);
                 if n.length() < 1e-9 * (b - a).length().max(1.0) * (c - a).length().max(1.0) {
-                    return err("the three points lie on one line");
+                    return refuse(
+                        "the three points lie on one line",
+                        "Pick three points that are not in a line.",
+                    );
                 }
                 frame(a, n, b - a)
             }
@@ -374,7 +417,7 @@ impl Document {
                 let (o, u) = self.resolve_line(line, st)?;
                 let n = u.cross(point(p)? - o);
                 if n.length() < 1e-9 {
-                    return err("the point lies on the line");
+                    return refuse("the point lies on the line", "Pick a point off the line.");
                 }
                 frame(o, n, u)
             }
@@ -382,7 +425,10 @@ impl Document {
                 let b = base?;
                 let (o, u) = self.resolve_line(line, st)?;
                 if u.dot(b.z).abs() > 1e-9 {
-                    return err("the line must be parallel to the plane it is turned from");
+                    return refuse(
+                        "the line must be parallel to the plane it is turned from",
+                        "Pick a line that lies in the plane or runs parallel to it.",
+                    );
                 }
                 let a = num(angle, "angle")?.to_radians();
                 let n = turn(b.z, u, if pf.flip { -a } else { a });
@@ -419,14 +465,14 @@ impl Document {
         Ok(())
     }
 
-    pub(crate) fn rebuild_axis(&self, id: u32, a: &AxisFeature, st: &mut BuildState) -> Result<(), String> {
+    pub(crate) fn rebuild_axis(&self, id: u32, a: &AxisFeature, st: &mut BuildState) -> Result<(), Cause> {
         let (o, d) = match &a.kind {
             AxisKind::Line(l) => self.resolve_line(l, st)?,
             AxisKind::TwoPlanes(p, q) => {
                 let (p, q) = (self.resolve_plane(p, st)?, self.resolve_plane(q, st)?);
                 let dir = p.z.cross(q.z);
                 if dir.length() < 1e-9 {
-                    return err("the two planes are parallel");
+                    return refuse("the two planes are parallel", "Pick two planes that cross.");
                 }
                 let dir = dir.normalized();
                 let pt = plane_plane_point(&p, &q).ok_or("the planes do not meet")?;
@@ -436,7 +482,7 @@ impl Document {
             AxisKind::TwoPoints(p, q) => {
                 let (p, q) = (self.resolve_point(p, st)?, self.resolve_point(q, st)?);
                 if (q - p).length() < 1e-9 {
-                    return err("the two points coincide");
+                    return refuse("the two points are in the same place", "Pick two different points.");
                 }
                 (p, (q - p).normalized())
             }
@@ -445,8 +491,15 @@ impl Document {
                 | Some(SurfaceKind::Revolved { axis_origin, axis_dir }) => {
                     (axis_origin, axis_dir.normalized())
                 }
-                Some(_) => return err("the face is not cylindrical or conical"),
-                None => return err("the face no longer exists"),
+                Some(_) => {
+                    return refuse(
+                        "the face is not cylindrical or conical",
+                        "Pick a round face, such as the inside of a hole or the side of a shaft.",
+                    )
+                }
+                None => {
+                    return refuse("the face it uses no longer exists", "Edit it and pick the face again.")
+                }
             },
             AxisKind::PointPlane(p, q) => (self.resolve_point(p, st)?, self.resolve_plane(q, st)?.z),
         };
@@ -454,17 +507,25 @@ impl Document {
         Ok(())
     }
 
-    pub(crate) fn rebuild_point(&self, id: u32, p: &PointFeature, st: &mut BuildState) -> Result<(), String> {
-        let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
+    pub(crate) fn rebuild_point(&self, id: u32, p: &PointFeature, st: &mut BuildState) -> Result<(), Cause> {
+        let num = |d: &Dim, what: &str| value(d, &st.variables, what);
         let at = match p {
             PointFeature::ArcCenter(ArcRef::Sketch { sketch, entity }) => {
-                let f = st.frames.get(sketch).ok_or("the sketch failed or is missing")?;
-                let sk = &self.sketch(*sketch).ok_or("the sketch is missing")?.sketch;
+                let lost = || {
+                    Cause::told("the sketch holding the arc failed or is missing", fix_or_pick("that sketch"))
+                };
+                let f = st.frames.get(sketch).ok_or_else(lost)?;
+                let sk = &self.sketch(*sketch).ok_or_else(lost)?.sketch;
                 match sk.entities.get(*entity).map(|e| e.geom) {
                     Some(anvil_sketch::Geom::Arc { c, .. } | anvil_sketch::Geom::Circle { c, .. }) => {
                         f.to_world(sk.pos(c))
                     }
-                    _ => return err("the sketch entity is not an arc or circle"),
+                    _ => {
+                        return refuse(
+                            "the sketch curve it uses is not an arc or circle",
+                            "Pick an arc or a circle.",
+                        )
+                    }
                 }
             }
             PointFeature::ArcCenter(ArcRef::Edge(e)) => edge_circle_center(st, *e)?,
@@ -476,7 +537,10 @@ impl Document {
                         let pl = self.resolve_plane(pl, st)?;
                         let den = u.dot(pl.z);
                         if den.abs() < 1e-12 {
-                            return err("the line runs parallel to the plane");
+                            return refuse(
+                                "the line runs parallel to the plane",
+                                "Pick a line that crosses the plane.",
+                            );
                         }
                         o + u * ((pl.origin - o).dot(pl.z) / den)
                     }
@@ -484,14 +548,17 @@ impl Document {
                         let (q, w) = self.resolve_line(m, st)?;
                         let n = u.cross(w);
                         if n.length() < 1e-12 {
-                            return err("the lines are parallel");
+                            return refuse("the lines are parallel", "Pick two lines that cross.");
                         }
                         // Closest points of the two lines; they must meet.
                         let t = (q - o).cross(w).dot(n) / n.length_sq();
                         let s = (q - o).cross(u).dot(n) / n.length_sq();
                         let (a, b) = (o + u * t, q + w * s);
                         if a.distance(b) > 1e-6 {
-                            return err("the lines do not meet");
+                            return refuse(
+                                "the lines do not meet",
+                                "Pick two lines that cross; lines in different planes pass without meeting.",
+                            );
                         }
                         a
                     }
@@ -507,24 +574,32 @@ impl Document {
                 let (a, b) = if *reverse { (b, a) } else { (a, b) };
                 let len = a.distance(b);
                 let (k, n) = (*index as f64, (*count).max(1) as f64);
-                let v = num(value, "value")?;
+                let v = num(value, "distance along the curve")?;
                 let d = match mode {
                     AlongMode::Distance => {
                         if v * n > len + 1e-9 {
-                            return Err(format!(
-                                "{} points {v} apart do not fit; the most is {}",
-                                n,
-                                len / n
+                            return Err(Cause::told(
+                                format!(
+                                    "{n} points {} mm apart do not fit on the {} mm curve",
+                                    num_text(v),
+                                    num_text(len)
+                                ),
+                                format!(
+                                    "Space them at most {} mm apart, or use fewer points.",
+                                    num_text(len / n)
+                                ),
                             ));
                         }
                         k * v
                     }
                     AlongMode::Percent => {
                         if v * n > 100.0 + 1e-9 {
-                            return Err(format!(
-                                "{} points at {v}% do not fit; the most is {}%",
-                                n,
-                                100.0 / n
+                            return Err(Cause::told(
+                                format!("{n} points {}% apart do not fit on the curve", num_text(v)),
+                                format!(
+                                    "Space them at most {}% apart, or use fewer points.",
+                                    num_text(100.0 / n)
+                                ),
                             ));
                         }
                         k * v / 100.0 * len
@@ -535,7 +610,10 @@ impl Document {
             }
             PointFeature::CenterOfMass => {
                 if st.body.is_empty() {
-                    return err("there is no body yet");
+                    return refuse(
+                        "there is no body yet",
+                        "Move the point after a feature that makes a body.",
+                    );
                 }
                 exact_centroid(st).unwrap_or(st.body.mass_properties().centroid)
             }
@@ -549,7 +627,7 @@ impl Document {
         id: u32,
         c: &CoordSysFeature,
         st: &mut BuildState,
-    ) -> Result<(), String> {
+    ) -> Result<(), Cause> {
         let origin = match &c.origin {
             Some(p) => self.resolve_point(p, st)?,
             None => Vec3::ZERO,
@@ -562,7 +640,10 @@ impl Document {
                 DirRef::Point(p) => {
                     let v = self.resolve_point(p, st)? - origin;
                     if v.length() < 1e-9 {
-                        return err("an axis points at the origin itself");
+                        return refuse(
+                            "an axis points at the origin itself",
+                            "Pick a point away from the origin for that axis.",
+                        );
                     }
                     v.normalized()
                 }
@@ -589,7 +670,7 @@ fn plane_plane_point(p: &Frame, q: &Frame) -> Option<Vec3> {
 
 /// The axes of a coordinate system from the directions given (see the specification's
 /// completion rules), or from the rotations when none is given.
-pub(crate) fn complete_axes(d: [Option<Vec3>; 3], rotation: [f64; 3]) -> Result<[Vec3; 3], String> {
+pub(crate) fn complete_axes(d: [Option<Vec3>; 3], rotation: [f64; 3]) -> Result<[Vec3; 3], Cause> {
     let world = [Vec3::X, Vec3::Y, Vec3::Z];
     let given: Vec<usize> = (0..3).filter(|&i| d[i].is_some()).collect();
     let mut a = world;
@@ -625,7 +706,10 @@ pub(crate) fn complete_axes(d: [Option<Vec3>; 3], rotation: [f64; 3]) -> Result<
             let (u, w) = (d[*i].unwrap_or(world[*i]).normalized(), d[*j].unwrap_or(world[*j]));
             let w = w - u * w.dot(u);
             if w.length() < 1e-9 {
-                return err("two axes are given the same direction");
+                return refuse(
+                    "two axes are given the same direction",
+                    "Pick directions for the axes that are not parallel.",
+                );
             }
             let w = w.normalized();
             a[*i] = u;
@@ -639,7 +723,10 @@ pub(crate) fn complete_axes(d: [Option<Vec3>; 3], rotation: [f64; 3]) -> Result<
             let y = d[1].unwrap_or(Vec3::Y);
             let y = y - x * y.dot(x);
             if y.length() < 1e-9 {
-                return err("two axes are given the same direction");
+                return refuse(
+                    "two axes are given the same direction",
+                    "Pick directions for the axes that are not parallel.",
+                );
             }
             let y = y.normalized();
             a = [x, y, x.cross(y)];
@@ -649,7 +736,7 @@ pub(crate) fn complete_axes(d: [Option<Vec3>; 3], rotation: [f64; 3]) -> Result<
 }
 
 /// The two ends of a straight model edge.
-pub(crate) fn edge_ends(st: &BuildState, e: EdgeRef) -> Result<(Vec3, Vec3), String> {
+pub(crate) fn edge_ends(st: &BuildState, e: EdgeRef) -> Result<(Vec3, Vec3), Cause> {
     if let Some(bodies) = &st.exact {
         for b in bodies {
             for (i, edge) in b.edges.iter().enumerate() {
@@ -661,21 +748,23 @@ pub(crate) fn edge_ends(st: &BuildState, e: EdgeRef) -> Result<(Vec3, Vec3), Str
                         let (p, q) = (edge.curve.eval(edge.t0), edge.curve.eval(edge.t1));
                         return Ok((Vec3 { x: p.x, y: p.y, z: p.z }, Vec3 { x: q.x, y: q.y, z: q.z }));
                     }
-                    return err("the edge is not straight");
+                    return refuse("the edge it uses is not straight", "Pick a straight edge.");
                 }
             }
         }
     }
     let segs: Vec<[Vec3; 2]> =
         st.body.model_edges().into_iter().filter(|m| m.faces == e).map(|m| m.seg).collect();
-    let first = segs.first().ok_or("the edge no longer exists")?;
+    let first = segs.first().ok_or_else(|| {
+        Cause::told("the edge it uses no longer exists", "Edit it and pick the edge again.")
+    })?;
     let u = (first[1] - first[0]).normalized();
     let o = first[0];
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     for s in &segs {
         for p in s {
             if (*p - o).cross(u).length() > 1e-6 {
-                return err("the edge is not straight");
+                return refuse("the edge it uses is not straight", "Pick a straight edge.");
             }
             let t = (*p - o).dot(u);
             lo = lo.min(t);
@@ -686,7 +775,7 @@ pub(crate) fn edge_ends(st: &BuildState, e: EdgeRef) -> Result<(Vec3, Vec3), Str
 }
 
 /// The centre of a round model edge.
-fn edge_circle_center(st: &BuildState, e: EdgeRef) -> Result<Vec3, String> {
+fn edge_circle_center(st: &BuildState, e: EdgeRef) -> Result<Vec3, Cause> {
     if let Some(bodies) = &st.exact {
         for b in bodies {
             for (i, edge) in b.edges.iter().enumerate() {
@@ -698,7 +787,7 @@ fn edge_circle_center(st: &BuildState, e: EdgeRef) -> Result<Vec3, String> {
                         let o = frame.origin;
                         return Ok(Vec3 { x: o.x, y: o.y, z: o.z });
                     }
-                    return err("the edge is not round");
+                    return refuse("the edge it uses is not round", "Pick a round edge.");
                 }
             }
         }
@@ -707,13 +796,13 @@ fn edge_circle_center(st: &BuildState, e: EdgeRef) -> Result<Vec3, String> {
     let pts: Vec<Vec3> =
         st.body.model_edges().into_iter().filter(|m| m.faces == e).flat_map(|m| m.seg).collect();
     if pts.len() < 3 {
-        return err("the edge no longer exists or is not round");
+        return refuse("the edge it uses no longer exists or is not round", "Edit it and pick a round edge.");
     }
     let (a, b, c) = (pts[0], pts[pts.len() / 3], pts[2 * pts.len() / 3]);
     let (ab, ac) = (b - a, c - a);
     let n = ab.cross(ac);
     if n.length_sq() < 1e-18 {
-        return err("the edge is not round");
+        return refuse("the edge it uses is not round", "Pick a round edge.");
     }
     let o = a + (n.cross(ab) * ac.length_sq() + ac.cross(n) * ab.length_sq()) * (0.5 / n.length_sq());
     Ok(o)
@@ -736,7 +825,7 @@ fn exact_centroid(st: &BuildState) -> Option<Vec3> {
 
 /// The area centroid of a face: of the exact face, finely tessellated, when the part
 /// is exact.
-fn face_centroid(st: &BuildState, f: FaceId) -> Result<Vec3, String> {
+fn face_centroid(st: &BuildState, f: FaceId) -> Result<Vec3, Cause> {
     if let Some(bodies) = &st.exact {
         let params = anvil_brep::tess::TessParams { chord: 1e-5, max_angle: 0.005 };
         let (mut area, mut c) = (0.0, glam::DVec3::ZERO);
@@ -744,7 +833,7 @@ fn face_centroid(st: &BuildState, f: FaceId) -> Result<Vec3, String> {
             if !b.faces.iter().any(|x| crate::exact::face_id(x) == f) {
                 continue;
             }
-            let mesh = anvil_brep::tess::tessellate(b, &params).map_err(|e| e.to_string())?;
+            let mesh = anvil_brep::tess::tessellate(b, &params)?;
             for (t, fi) in mesh.triangles.iter().zip(&mesh.triangle_face) {
                 if b.faces.get(*fi as usize).map(crate::exact::face_id) != Some(f) {
                     continue;
@@ -771,9 +860,23 @@ fn face_centroid(st: &BuildState, f: FaceId) -> Result<Vec3, String> {
         }
     }
     if area <= 0.0 {
-        return err("the face no longer exists");
+        return refuse("the face it uses no longer exists", "Edit it and pick the face again.");
     }
     Ok(c * (1.0 / area))
+}
+
+/// For tests: rebuilds `doc` and returns why feature `id` failed, as its cause and
+/// suggestion, after checking the message reads as plain words.
+#[cfg(test)]
+pub(crate) fn failure_of(doc: &mut Document, id: u32) -> (String, String) {
+    let st = doc.rebuild();
+    let e = st.errors.get(&id).cloned().unwrap_or_else(|| panic!("feature {id} built: {:?}", st.errors));
+    let m = e.message();
+    for t in ["{", "}", "::", "Some(", "None", "\"", "<", ">", "Err(", "Ok("] {
+        assert!(!e.cause.contains(t) && !e.suggestion.contains(t), "{m}");
+    }
+    assert!(e.suggestion.ends_with('.') && !e.cause.ends_with('.'), "{m}");
+    (e.cause, e.suggestion)
 }
 
 #[cfg(test)]
@@ -1123,5 +1226,192 @@ mod tests {
         let st = built(&mut doc);
         assert!((st.body.mass_properties().volume - 2.0 * 240000.0).abs() < 1e-6);
         assert!((st.body.bounds().min.x + 100.0).abs() < 1e-9);
+    }
+
+    /// Each way a plane, axis, point or coordinate system can fail says what to pick
+    /// instead.
+    #[test]
+    fn reference_failures_say_what_to_pick() {
+        let ax = |a: Axis| LineRef::Axis(a);
+        let off_x = Axis::Line { origin: v(0.0, 1.0, 0.0), dir: Vec3::X };
+        let skew = Axis::Line { origin: v(0.0, 0.0, 5.0), dir: Vec3::Y };
+        let point = |p: PointFeature| FeatureKind::Point(p);
+        let axis = |k: AxisKind| FeatureKind::Axis(AxisFeature { kind: k, reverse: false });
+        let along = |curve: LineRef, mode: AlongMode| {
+            point(PointFeature::AlongCurve {
+                curve,
+                mode,
+                value: Dim::Value(40.0),
+                count: 3,
+                index: 1,
+                reverse: false,
+            })
+        };
+        // The block's sketch is feature 1; its first line runs 100 mm along x.
+        let (bottom, gone_face) =
+            (LineRef::SketchLine { sketch: 1, entity: 0 }, FaceId { feature: 2, index: 99 });
+        let cases: Vec<(FeatureKind, &str, &str)> = vec![
+            (
+                FeatureKind::Plane(PlaneFeature {
+                    kind: PlaneKind::ThreePoints {
+                        points: [model(Vec3::ZERO), model(v(1.0, 0.0, 0.0)), model(v(2.0, 0.0, 0.0))],
+                    },
+                    ..Default::default()
+                }),
+                "the three points lie on one line",
+                "Pick three points that are not in a line.",
+            ),
+            (
+                FeatureKind::Plane(PlaneFeature {
+                    kind: PlaneKind::LinePoint { line: ax(Axis::X), point: model(v(5.0, 0.0, 0.0)) },
+                    ..Default::default()
+                }),
+                "the point lies on the line",
+                "Pick a point off the line.",
+            ),
+            (
+                FeatureKind::Plane(PlaneFeature {
+                    base: PlaneRef::Front,
+                    kind: PlaneKind::AtAngle { line: ax(Axis::Z), angle: Dim::Value(30.0) },
+                    ..Default::default()
+                }),
+                "the line must be parallel to the plane it is turned from",
+                "Pick a line that lies in the plane or runs parallel to it.",
+            ),
+            (
+                FeatureKind::Plane(PlaneFeature { offset: Dim::Expr("zz".into()), ..Default::default() }),
+                "the offset cannot be worked out: unknown variable 'zz'",
+                "Edit the offset and fix its equation, or define the variables it uses in Equations.",
+            ),
+            (
+                axis(AxisKind::TwoPlanes(PlaneRef::Front, PlaneRef::Front)),
+                "the two planes are parallel",
+                "Pick two planes that cross.",
+            ),
+            (
+                axis(AxisKind::TwoPoints(model(Vec3::X), model(Vec3::X))),
+                "the two points are in the same place",
+                "Pick two different points.",
+            ),
+            (
+                axis(AxisKind::Face(FaceId::side(2, 0))),
+                "the face is not cylindrical or conical",
+                "Pick a round face, such as the inside of a hole or the side of a shaft.",
+            ),
+            (
+                axis(AxisKind::Face(gone_face)),
+                "the face it uses no longer exists",
+                "Edit it and pick the face again.",
+            ),
+            (
+                axis(AxisKind::Line(ax(Axis::Feature(999)))),
+                "the reference axis failed or is missing",
+                "Fix or unsuppress the axis, or pick another.",
+            ),
+            (
+                axis(AxisKind::Line(LineRef::SketchLine { sketch: 1, entity: 99 })),
+                "the sketch curve it uses is not a straight line",
+                "Pick a straight sketch line.",
+            ),
+            (
+                axis(AxisKind::Line(LineRef::SketchLine { sketch: 999, entity: 0 })),
+                "the sketch holding the line failed or is missing",
+                "Fix or unsuppress that sketch, or pick another.",
+            ),
+            (
+                point(PointFeature::Intersection(ax(Axis::X), IntersectWith::Plane(PlaneRef::Front))),
+                "the line runs parallel to the plane",
+                "Pick a line that crosses the plane.",
+            ),
+            (
+                point(PointFeature::Intersection(ax(Axis::X), IntersectWith::Line(ax(off_x)))),
+                "the lines are parallel",
+                "Pick two lines that cross.",
+            ),
+            (
+                point(PointFeature::Intersection(ax(Axis::X), IntersectWith::Line(ax(skew)))),
+                "the lines do not meet",
+                "Pick two lines that cross; lines in different planes pass without meeting.",
+            ),
+            (
+                along(bottom, AlongMode::Distance),
+                "3 points 40 mm apart do not fit on the 100 mm curve",
+                "Space them at most 33.333 mm apart, or use fewer points.",
+            ),
+            (
+                along(bottom, AlongMode::Percent),
+                "3 points 40% apart do not fit on the curve",
+                "Space them at most 33.333% apart, or use fewer points.",
+            ),
+            (
+                along(ax(Axis::X), AlongMode::Even),
+                "this needs an edge or sketch line, which have ends",
+                "Pick a straight edge or a sketch line instead of an axis.",
+            ),
+            (
+                along(LineRef::Edge(EdgeRef::new(gone_face, FaceId::side(2, 0))), AlongMode::Even),
+                "the edge it uses no longer exists",
+                "Edit it and pick the edge again.",
+            ),
+            (
+                point(PointFeature::ArcCenter(ArcRef::Sketch { sketch: 1, entity: 0 })),
+                "the sketch curve it uses is not an arc or circle",
+                "Pick an arc or a circle.",
+            ),
+            (
+                point(PointFeature::ArcCenter(ArcRef::Edge(EdgeRef::new(
+                    FaceId::side(2, 0),
+                    FaceId::side(2, 1),
+                )))),
+                "the edge it uses is not round",
+                "Pick a round edge.",
+            ),
+            (
+                point(PointFeature::FaceCenter(gone_face)),
+                "the face it uses no longer exists",
+                "Edit it and pick the face again.",
+            ),
+            (
+                FeatureKind::CoordSys(CoordSysFeature {
+                    axes: [Some(DirRef::Line(ax(Axis::X))), Some(DirRef::Line(ax(off_x))), None],
+                    ..Default::default()
+                }),
+                "two axes are given the same direction",
+                "Pick directions for the axes that are not parallel.",
+            ),
+            (
+                FeatureKind::CoordSys(CoordSysFeature {
+                    axes: [Some(DirRef::Point(model(Vec3::ZERO))), None, None],
+                    ..Default::default()
+                }),
+                "an axis points at the origin itself",
+                "Pick a point away from the origin for that axis.",
+            ),
+        ];
+        for (kind, cause, suggestion) in cases {
+            let (mut doc, e) = block();
+            assert_eq!(e, 2);
+            let id = doc.add_feature(kind);
+            assert_eq!(failure_of(&mut doc, id), (cause.to_string(), suggestion.to_string()));
+        }
+        // A centre of mass needs a body.
+        let mut doc = Document::new();
+        let id = doc.add_feature(point(PointFeature::CenterOfMass));
+        assert_eq!(
+            failure_of(&mut doc, id),
+            (
+                "there is no body yet".to_string(),
+                "Move the point after a feature that makes a body.".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn numbers_in_messages_drop_trailing_zeros() {
+        assert_eq!(num_text(6.0), "6");
+        assert_eq!(num_text(2.5), "2.5");
+        assert_eq!(num_text(100.0 / 3.0), "33.333");
+        assert_eq!(num_text(-0.0001), "0");
+        assert_eq!(num_text(-1.0), "-1");
     }
 }
