@@ -78,8 +78,10 @@ impl Sketch {
         let mut ends: std::collections::BTreeMap<PointId, usize> = Default::default();
         for e in self.entities.iter().filter(|e| !e.construction) {
             let (a, b) = match e.geom {
-                Geom::Circle { .. } => continue,
-                Geom::Line { a, b } | Geom::Arc { a, b, .. } => (roots[a], roots[b]),
+                Geom::Circle { .. } | Geom::Ellipse { .. } => continue,
+                Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => {
+                    (roots[a], roots[b])
+                }
             };
             // A line whose ends coincide is skipped, as it is for loops; an arc whose ends
             // coincide is a closed curve.
