@@ -43,8 +43,9 @@ pub fn cases() -> Vec<Case> {
     c.push(
         Case::new("box/nested-subtract-void", "box", big.minus(small))
             .volume(63.0)
-            .graceful()
-            .note("a sealed hollow needs a second shell, which the kernel does not model yet"),
+            .bodies(1)
+            .genus(0)
+            .note("one body with a sealed void: two shells"),
     );
     let unit = cuboid(DVec3::ZERO, DVec3::ONE);
     c.push(Case::new("box/identical-union", "box", unit.clone().union(unit.clone())).volume(1.0).bodies(1));
@@ -462,6 +463,27 @@ pub fn cases() -> Vec<Case> {
         )
         .volume(72.0 + 4.0 * PI / 3.0)
         .note("touching at a point: two bodies or a clear error are both fine"),
+    );
+
+    c.push(
+        Case::new("sphere/hollow", "sphere", sphere(DVec3::ZERO, 5.0).minus(sphere(DVec3::ZERO, 4.0)))
+            .volume(244.0 * PI / 3.0)
+            .bodies(1)
+            .genus(0)
+            .note("one body with a sealed void: two shells"),
+    );
+    c.push(
+        Case::new(
+            "sphere/nested-hollows",
+            "sphere",
+            sphere(DVec3::ZERO, 10.0)
+                .minus(sphere(v(1.0, 0.0, 0.0), 8.0))
+                .union(sphere(v(1.0, 1.0, 0.0), 6.0).minus(sphere(v(1.0, 1.0, 1.0), 4.0)))
+                .union(sphere(v(1.0, 1.5, 1.5), 2.0)),
+        )
+        .volume(4.0 * PI * (1000.0 - 512.0 + 216.0 - 64.0 + 8.0) / 3.0)
+        .bodies(3)
+        .note("three bodies, each inside the one around it's void (brep-bench boolean/nested-shells)"),
     );
 
     // --- Cones and tori ----------------------------------------------------------------

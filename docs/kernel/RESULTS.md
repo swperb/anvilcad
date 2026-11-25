@@ -1,6 +1,6 @@
 # Kernel evaluation results
 
-**89 cases: 85 pass, 4 refused, 0 fail, 0 panic. Every case met its expectation.**
+**91 cases: 88 pass, 3 refused, 0 fail, 0 panic. Every case met its expectation.**
 
 Each case is a solid built by AnvilCAD's exact kernel and checked against an independent reference: its topology and mesh are audited, its volume compared, 300 points tested for inside and outside, its STEP export read back, and its images compared pixel by pixel. **pass** means every check agreed; **refused** means the kernel declined with an error, so the user sees a message and loses nothing; a **fail** would be a wrong or invalid body, which is never accepted. A case marked *may refuse* is a known limit. How each check works is in [EVALS.md](EVALS.md).
 
@@ -17,7 +17,7 @@ Timings are from the committed reference run `crates/anvil-evals/baselines/cloud
 | `box/overlap-intersect` |  | 1 (exact) | pass | pass | 0.42 | 0.02 |
 | `box/nested-union` |  | 64 (exact) | pass | pass | 0.11 | 0.03 |
 | `box/nested-intersect` |  | 1 (exact) | pass | pass | 0.08 | 0.01 |
-| `box/nested-subtract-void` | a sealed hollow needs a second shell, which the kernel does not model yet | 63 (exact) | refused | may refuse | 0.09 | 0.00 |
+| `box/nested-subtract-void` | one body with a sealed void: two shells | 63 (exact) | pass | pass | 0.09 | 0.00 |
 | `box/identical-union` |  | 1 (exact) | pass | pass | 0.09 | 0.01 |
 | `box/identical-intersect` |  | 1 (exact) | pass | pass | 0.08 | 0.01 |
 | `box/identical-subtract` | subtracting a solid from itself leaves nothing | 0 (exact) | pass | pass | 0.07 | 0.00 |
@@ -37,7 +37,6 @@ Timings are from the committed reference run `crates/anvil-evals/baselines/cloud
 
 Why cases did not pass:
 
-- `box/nested-subtract-void`: not supported yet: a cut that leaves an empty pocket inside the part
 - `box/touching-edge`: not supported yet: zero-thickness geometry (bodies would touch along an edge)
 
 ## near
@@ -111,10 +110,12 @@ Why cases did not pass:
 | `sphere/ball-on-corner` |  | 503.665 (exact) | pass | pass | 1.37 | 6.85 |
 | `sphere/in-bore` | pieces meeting only in a circle are refused: the kernel's solids are manifold | 41.8879 (exact) | refused | may refuse | 2.90 | 0.00 |
 | `sphere/tangent-to-face` | touching at a point: two bodies or a clear error are both fine | 76.1888 (exact) | pass | pass | 1.24 | 7.58 |
+| `sphere/hollow` | one body with a sealed void: two shells | 255.516 (exact) | pass | pass | – | – |
+| `sphere/nested-hollows` | three bodies, each inside the one around it's void (brep-bench boolean/nested-shells) | 2714.34 (exact) | pass | pass | – | – |
 
 Why cases did not pass:
 
-- `sphere/in-bore`: not supported yet: a cut that leaves an empty pocket inside the part
+- `sphere/in-bore`: not supported yet: zero-thickness geometry (the result would touch itself along a curve)
 
 ## cone
 

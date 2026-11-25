@@ -393,6 +393,40 @@ mod exact_shell {
     use super::*;
     use anvil_kernel::{v2, EdgeRef, FaceId};
 
+    /// A 40 x 30 x 20 box shelled with no face removed, walls 2 thick: a sealed hollow,
+    /// built on the exact kernel as one body with a void 36 x 26 x 16.
+    #[test]
+    fn sealed_box_shells_exactly() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        sf.sketch.add_rectangle(v2(0.0, 0.0), v2(40.0, 30.0));
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(20.0),
+            reverse: false,
+            op: BodyOp::Boss,
+            ..Default::default()
+        }));
+        let shell =
+            doc.add_feature(FeatureKind::Shell(ShellFeature { remove: vec![], thickness: Dim::Value(2.0) }));
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert_eq!(st.faceted_from, None);
+        assert!(st.exact_features.contains(&shell));
+        let exact = st.exact.as_ref().expect("exact");
+        assert_eq!(exact.len(), 1);
+        assert_eq!(anvil_brep::voids::shell_faces(&exact[0]).len(), 2);
+        let want = 40.0 * 30.0 * 20.0 - 36.0 * 26.0 * 16.0;
+        // Exact integration is good to about 1e-9 of the part's size.
+        let v = anvil_brep::mass::exact_properties(&exact[0]).expect("mass").volume;
+        assert!((v - want).abs() / want < 1e-8, "{v} vs {want}");
+        // The faceted body regenerated from it agrees.
+        let m = st.body.mass_properties().volume;
+        assert!((m - want).abs() / want < 1e-9, "{m} vs {want}");
+    }
+
     /// A 40 x 30 x 20 box with its four upright edges rounded (radius 5), opened at the
     /// top with walls 2 thick: built on the exact kernel, the inside rounds have radius 3.
     #[test]

@@ -452,7 +452,8 @@ Kernel design notes:
   cross-section revolved about the axis. A shell is the part less its cavity: every
   face offset inwards onto its exact offset surface (removed faces outwards), each edge
   and corner solved where the offset faces meet, keeping the part's shape; a wall too
-  thick for that, a sealed hollow or a freeform face goes to the faceted kernel. The
+  thick for that or a freeform face goes to the faceted kernel; with no face removed
+  the result is a sealed hollow, one solid with a second shell bounding the void. The
   behaviour is specified in [docs/re/shell-and-fillet.md](docs/re/shell-and-fillet.md)
   and [docs/re/fillet-curved-edges.md](docs/re/fillet-curved-edges.md), the latter
   studied with REA from Dassault's published help pages only.
@@ -466,10 +467,12 @@ Kernel design notes:
   the sketch entity (0 start cap, 1 end cap, 2 + entity for side faces), so sketches on
   faces and edge selections survive whichever kernel built the face.
 - Every exact solid passes a topology check (closed, consistently oriented, valid Euler
-  characteristic) before it is used. Exact booleans are tested with randomized boxes on an
+  characteristic, and any void shells facing in and lying inside the outer one) before it
+  is used. A solid may hold sealed voids: a body subtracted from inside another leaves
+  one, and STEP carries it as BREP_WITH_VOIDS both ways. Exact booleans are tested with randomized boxes on an
   integer grid, which makes faces, edges and corners coincide constantly, against exact
   volumes. Operations the exact kernel cannot do yet (open intersection curves such as a
-  plane parallel to a cone's axis, bodies touching along an edge, internal voids) are
+  plane parallel to a cone's axis, bodies touching along an edge) are
   reported, never guessed.
 - Faceted solids are planar convex polygons, each tagged with its face name and exact
   surface. Their booleans use BSP trees (iterative, no recursion limits), then T-junctions
