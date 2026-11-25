@@ -37,8 +37,21 @@ impl EdgeTreatment {
 pub enum BlendError {
     EdgeNotFound(EdgeRef),
     Unsupported(String),
-    TooLarge(String),
+    /// The blend is too wide for a face next to each of `edges`. `size` is the radius or
+    /// distance asked for; `limit` is the largest of the same measure that every one of
+    /// those edges allows, so any size under it fits them.
+    TooLarge {
+        edges: Vec<EdgeRef>,
+        size: f64,
+        limit: f64,
+    },
     Invalid(String),
+}
+
+/// A number for a message: up to four decimals, without trailing zeros.
+fn short(x: f64) -> String {
+    let s = format!("{x:.4}");
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 impl std::fmt::Display for BlendError {
@@ -50,7 +63,16 @@ impl std::fmt::Display for BlendError {
                 e.a.feature, e.a.index, e.b.feature, e.b.index
             ),
             BlendError::Unsupported(s) => write!(f, "{s} are not supported yet"),
-            BlendError::TooLarge(s) => write!(f, "{s}"),
+            BlendError::TooLarge { edges, size, limit } => {
+                let which =
+                    if edges.len() == 1 { "an edge".to_string() } else { format!("{} edges", edges.len()) };
+                write!(
+                    f,
+                    "a size of {} does not fit on the faces next to {which}; at most {} fits",
+                    short(*size),
+                    short(*limit)
+                )
+            }
             BlendError::Invalid(s) => write!(f, "{s}"),
         }
     }
@@ -78,6 +100,9 @@ pub fn blend_edges(
     let shared = solid.shared_segments();
     let mut removes: Vec<Solid> = Vec::new();
     let mut adds: Vec<Solid> = Vec::new();
+    // Edges the blend is too wide for, with the size each allows. Every edge is checked,
+    // so the error can name all of them rather than only the first.
+    let mut too_large: Vec<(EdgeRef, f64)> = Vec::new();
     for (k, e) in edges.iter().enumerate() {
         // Segments of this edge as (segment, polygon on face a, polygon on face b).
         let segs: Vec<([Vec3; 2], usize, usize)> = shared
@@ -100,7 +125,15 @@ pub fn blend_edges(
         let (sa, sb) = (solid.polygons[segs[0].1].tag.surface, solid.polygons[segs[0].2].tag.surface);
         let (region, convex) = match (sa, sb) {
             (SurfaceKind::Plane, SurfaceKind::Plane) => {
-                for r in linear_regions(solid, &segs, t, feature, base)? {
+                let regions = match linear_regions(solid, &segs, t, feature, base) {
+                    Err(Fit::TooLarge(limit)) => {
+                        too_large.push((*e, limit));
+                        continue;
+                    }
+                    Err(Fit::Failed(err)) => return Err(err),
+                    Ok(r) => r,
+                };
+                for r in regions {
                     if r.1 {
                         removes.push(r.0);
                     } else {
@@ -109,13 +142,19 @@ pub fn blend_edges(
                 }
                 continue;
             }
-            (SurfaceKind::Plane, SurfaceKind::Cylinder { .. }) => {
-                let segs: Vec<_> = segs.iter().map(|&(s, a, b)| (s, a, b)).collect();
-                circular_region(solid, &segs, t, feature, base)?
-            }
-            (SurfaceKind::Cylinder { .. }, SurfaceKind::Plane) => {
-                let segs: Vec<_> = segs.iter().map(|&(s, a, b)| (s, b, a)).collect();
-                circular_region(solid, &segs, t, feature, base)?
+            (SurfaceKind::Plane, SurfaceKind::Cylinder { .. })
+            | (SurfaceKind::Cylinder { .. }, SurfaceKind::Plane) => {
+                let plane_first = matches!(sa, SurfaceKind::Plane);
+                let segs: Vec<_> =
+                    segs.iter().map(|&(s, a, b)| if plane_first { (s, a, b) } else { (s, b, a) }).collect();
+                match circular_region(solid, &segs, t, feature, base) {
+                    Err(Fit::TooLarge(limit)) => {
+                        too_large.push((*e, limit));
+                        continue;
+                    }
+                    Err(Fit::Failed(err)) => return Err(err),
+                    Ok(r) => r,
+                }
             }
             _ => {
                 return Err(BlendError::Unsupported(
@@ -129,6 +168,14 @@ pub fn blend_edges(
             adds.push(region);
         }
     }
+    if !too_large.is_empty() {
+        let limit = too_large.iter().map(|&(_, l)| l).fold(f64::INFINITY, f64::min);
+        return Err(BlendError::TooLarge {
+            edges: too_large.into_iter().map(|(e, _)| e).collect(),
+            size: t.size(),
+            limit,
+        });
+    }
     let mut body = solid.clone();
     for c in &removes {
         body = body.subtract(c);
@@ -137,6 +184,19 @@ pub fn blend_edges(
         body = body.union(c);
     }
     Ok(body)
+}
+
+/// Why one edge could not be blended: too wide for its faces, allowing at most the size
+/// given, or any other blend error.
+enum Fit {
+    TooLarge(f64),
+    Failed(BlendError),
+}
+
+impl From<BlendError> for Fit {
+    fn from(e: BlendError) -> Fit {
+        Fit::Failed(e)
+    }
 }
 
 fn centroid(p: &Polygon) -> Vec3 {
@@ -196,12 +256,12 @@ fn linear_regions(
     t: EdgeTreatment,
     feature: u32,
     base: u32,
-) -> Result<Vec<(Solid, bool)>, BlendError> {
+) -> Result<Vec<(Solid, bool)>, Fit> {
     let (pa, pb) = (&solid.polygons[segs[0].1], &solid.polygons[segs[0].2]);
     let (na, nb) = (pa.normal, pb.normal);
     let e = na.cross(nb);
     if e.length() < 1e-9 {
-        return Err(BlendError::Invalid("the two faces are parallel".into()));
+        return Err(BlendError::Invalid("the two faces are parallel".into()).into());
     }
     let e = e.normalized();
     let p0 = segs[0].0[0];
@@ -217,7 +277,7 @@ fn linear_regions(
     let (ua, ub) = (into(na, pa), into(nb, pb));
     let theta = ua.dot(ub).clamp(-1.0, 1.0).acos();
     if !(1e-3..PI - 1e-3).contains(&theta) {
-        return Err(BlendError::Unsupported("edges between tangent faces".into()));
+        return Err(BlendError::Unsupported("edges between tangent faces".into()).into());
     }
     // The wedge between the faces is material when face b dips behind face a.
     let convex = na.dot(ub) < 0.0;
@@ -243,19 +303,42 @@ fn linear_regions(
     // The blend must fit on both faces, as on the exact kernel: the point it sets back
     // to, from the middle of each run, has to lie on the face. Without this a blend wider
     // than a face cuts or adds material far from the edge (issue #172).
-    let (setback, name, size) = match t {
-        EdgeTreatment::Fillet { radius } => (radius / (theta / 2.0).tan(), "fillet", radius),
-        EdgeTreatment::Chamfer { distance } => (distance, "chamfer", distance),
+    // The setback is how far from the edge the blend meets each face; `per` converts it
+    // back to the treatment's own size (a fillet's radius, a chamfer's distance).
+    let per = match t {
+        EdgeTreatment::Fillet { .. } => (theta / 2.0).tan(),
+        EdgeTreatment::Chamfer { .. } => 1.0,
     };
-    for &(lo, hi) in &runs {
+    let setback = t.size() / per;
+    let fits = |face: FaceId, n: Vec3, at: Vec3| face_contains(solid, face, n, e, at);
+    let sides = [(pa.tag.id, na, ua), (pb.tag.id, nb, ub)];
+    let too_wide = runs.iter().any(|&(lo, hi)| {
         let mid = p0 + e * ((lo + hi) / 2.0);
-        for (face, n, u) in [(pa.tag.id, na, ua), (pb.tag.id, nb, ub)] {
-            if !face_contains(solid, face, n, e, mid + u * (setback * 0.999)) {
-                return Err(BlendError::TooLarge(format!(
-                    "a {name} of {size} does not fit on the faces next to this edge"
-                )));
+        sides.iter().any(|&(face, n, u)| !fits(face, n, mid + u * (setback * 0.999)))
+    });
+    if too_wide {
+        // The largest setback every run's faces allow, found by bisection from the edge
+        // (which always lies on the face) out to the setback asked for.
+        let mut most = setback;
+        for &(lo, hi) in &runs {
+            let mid = p0 + e * ((lo + hi) / 2.0);
+            for &(face, n, u) in &sides {
+                let (mut inside, mut outside) = (0.0, most);
+                if fits(face, n, mid + u * outside) {
+                    continue;
+                }
+                for _ in 0..60 {
+                    let m = (inside + outside) / 2.0;
+                    if fits(face, n, mid + u * m) {
+                        inside = m;
+                    } else {
+                        outside = m;
+                    }
+                }
+                most = most.min(inside);
             }
         }
+        return Err(Fit::TooLarge(most * per));
     }
 
     // Cross-section frame: x along face a, z along the edge.
@@ -314,7 +397,7 @@ fn circular_region(
     t: EdgeTreatment,
     feature: u32,
     base: u32,
-) -> Result<(Solid, bool), BlendError> {
+) -> Result<(Solid, bool), Fit> {
     let (pp, pc) = (&solid.polygons[segs[0].1], &solid.polygons[segs[0].2]);
     let SurfaceKind::Cylinder { axis_origin: o, axis_dir, radius: big_r } = pc.tag.surface else {
         unreachable!()
@@ -324,7 +407,8 @@ fn circular_region(
     if np.dot(dir).abs() < 1.0 - 1e-6 {
         return Err(BlendError::Unsupported(
             "edges between a cylinder and a plane not square to its axis".into(),
-        ));
+        )
+        .into());
     }
     let axial = |p: Vec3| (p - o).dot(dir);
     let radial = |p: Vec3| {
@@ -361,10 +445,10 @@ fn circular_region(
     let wall_out = sign(pc.normal.dot(rdir));
 
     let size = t.size();
+    // Inside a hole or around a boss's foot the blend runs on the plane towards the axis,
+    // so it must stay under the cylinder's radius.
     if sigma_r < 0.0 && size >= big_r - 1e-9 {
-        return Err(BlendError::TooLarge(format!(
-            "the size ({size}) must be smaller than the cylinder radius ({big_r:.4})"
-        )));
+        return Err(Fit::TooLarge(big_r));
     }
 
     // Angular extent of the edge around the axis.
@@ -440,15 +524,22 @@ mod tests {
         let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 10.0), 1).unwrap();
         let edge = EdgeRef::new(face(1, 1), face(1, 3));
         let blend = |t| blend_edges(&b, &[edge], t, 9);
+        // The 10 mm side is the narrower face, so it sets the limit for both: a right
+        // angle sets a fillet back by its radius and a chamfer by its distance.
+        let too_large = |size: f64| Some(BlendError::TooLarge { edges: vec![edge], size, limit: 10.0 });
+        let near = |e: Option<BlendError>, want: Option<BlendError>| match (e, want) {
+            (
+                Some(BlendError::TooLarge { edges, size, limit }),
+                Some(BlendError::TooLarge { edges: we, size: ws, limit: wl }),
+            ) => edges == we && size == ws && (limit - wl).abs() < 1e-6,
+            _ => false,
+        };
+        let got = blend(EdgeTreatment::Fillet { radius: 100.0 }).err();
+        assert!(near(got.clone(), too_large(100.0)), "{got:?}");
+        assert!(near(blend(EdgeTreatment::Chamfer { distance: 10.5 }).err(), too_large(10.5)));
         assert_eq!(
-            blend(EdgeTreatment::Fillet { radius: 100.0 }).err(),
-            Some(BlendError::TooLarge("a fillet of 100 does not fit on the faces next to this edge".into()))
-        );
-        assert_eq!(
-            blend(EdgeTreatment::Chamfer { distance: 10.5 }).err(),
-            Some(BlendError::TooLarge(
-                "a chamfer of 10.5 does not fit on the faces next to this edge".into()
-            ))
+            blend(EdgeTreatment::Chamfer { distance: 10.5 }).err().map(|e| e.to_string()).as_deref(),
+            Some("a size of 10.5 does not fit on the faces next to an edge; at most 10 fits")
         );
         // Just inside the 10 mm side still fits, and removes what it should.
         let out = blend(EdgeTreatment::Fillet { radius: 9.9 }).expect("fits");
@@ -566,7 +657,28 @@ mod tests {
                 EdgeTreatment::Fillet { radius: 3.0 },
                 9
             ),
-            Err(BlendError::TooLarge(_))
+            Err(BlendError::TooLarge { size: 3.0, limit: 2.0, .. })
         ));
+    }
+
+    /// Every edge a blend is too wide for is named, and the limit is the tightest one.
+    /// The 20 x 10 x 6 box's top meets its 10 mm long x = max side and its 6 mm tall
+    /// y = min side; an 8 mm fillet fits on neither, but does on the upright edge between
+    /// those sides, which are 20 and 10 mm wide.
+    #[test]
+    fn a_blend_too_large_for_several_edges_names_them_all() {
+        let b = block(v3(0.0, 0.0, 0.0), v3(20.0, 10.0, 6.0), 1).unwrap();
+        let x_side = EdgeRef::new(face(1, 1), face(1, 3));
+        let y_side = EdgeRef::new(face(1, 1), face(1, 2));
+        let fits = EdgeRef::new(face(1, 2), face(1, 3));
+        match blend_edges(&b, &[x_side, fits, y_side], EdgeTreatment::Fillet { radius: 8.0 }, 9) {
+            Err(BlendError::TooLarge { edges, size, limit }) => {
+                assert_eq!(edges, vec![x_side, y_side]);
+                assert_eq!(size, 8.0);
+                // The y = min side is only 6 mm tall.
+                assert!((limit - 6.0).abs() < 1e-6, "{limit}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 }

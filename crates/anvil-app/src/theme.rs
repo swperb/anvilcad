@@ -164,12 +164,20 @@ pub struct SceneColors {
     pub hover: [f32; 3],
     pub select: [f32; 3],
     pub edge: [f32; 3],
+    /// Faces a failed feature names, while it is being edited.
+    pub failed: [f32; 3],
 }
 
 impl Default for SceneColors {
     fn default() -> SceneColors {
-        use crate::render::{BODY_COLOR, EDGE_COLOR, HOVER_COLOR, SELECT_COLOR};
-        SceneColors { body: BODY_COLOR, hover: HOVER_COLOR, select: SELECT_COLOR, edge: EDGE_COLOR }
+        use crate::render::{BODY_COLOR, EDGE_COLOR, FAILED_COLOR, HOVER_COLOR, SELECT_COLOR};
+        SceneColors {
+            body: BODY_COLOR,
+            hover: HOVER_COLOR,
+            select: SELECT_COLOR,
+            edge: EDGE_COLOR,
+            failed: FAILED_COLOR,
+        }
     }
 }
 
@@ -182,6 +190,7 @@ pub fn scene_colors(ctx: &egui::Context) -> SceneColors {
                 "hover_face" => c.hover = *rgb,
                 "selected_face" => c.select = *rgb,
                 "edge" => c.edge = *rgb,
+                "failed_face" => c.failed = *rgb,
                 _ => {}
             }
         }

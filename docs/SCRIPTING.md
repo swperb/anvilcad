@@ -70,7 +70,8 @@ anvil.theme.edge = "#1d2021"         -- model edges
 Interface colours: `chrome`, `panel`, `inset`, `border`, `text`, `text_weak`, `hover`,
 `accent`, `on_accent`, `select_fill`, `select`, `error`, `warning`, `ok`, `view_top`,
 `view_bottom` (the viewport gradient) and `float_fill` (the view toolbar). Model colours:
-`body`, `hover_face`, `selected_face` and `edge`.
+`body`, `hover_face`, `selected_face`, `edge` and `failed_face` (faces a failed feature names,
+while it is being edited).
 
 ## Keys
 

@@ -3065,8 +3065,9 @@ impl AnvilApp {
                 }
             };
             let hover = if self.sketch.is_some() { None } else { self.hover_face };
+            let failed: Vec<FaceId> = self.editing_failure().map_or_else(Vec::new, |e| e.faces.clone());
             let colors = crate::theme::scene_colors(ui.ctx());
-            let data = SceneData::build(&self.mesh, &self.edges, hover, &selected, &colors);
+            let data = SceneData::build(&self.mesh, &self.edges, hover, &selected, &failed, &colors);
             self.renderer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_scene(data);
             self.scene_dirty = false;
         }
@@ -3239,15 +3240,29 @@ impl AnvilApp {
         self.rebuild();
     }
 
+    /// Why the feature being edited failed, when it did. The geometry it names is on the
+    /// part before the feature, which is what the editor shows.
+    fn editing_failure(&self) -> Option<&anvil_model::FeatureError> {
+        let (id, _) = self.pick_target()?;
+        self.pick_body.as_ref()?;
+        self.state.errors.get(&id)
+    }
+
     fn draw_picked_edges(&self, painter: &egui::Painter, rect: egui::Rect) {
         let (Some((id, PickKind::Edges)), Some(pb)) = (self.pick_target(), &self.pick_body) else { return };
+        // Edges the feature failed on, drawn over the picked ones in the error colour.
+        let failed: &[EdgeRef] = self.editing_failure().map_or(&[], |e| &e.edges);
+        let ctx = painter.ctx();
+        let error = Palette::for_ctx(ctx, ctx.style().visuals.dark_mode).error;
         let chosen: &[EdgeRef] = match self.doc.feature(id).map(|f| &f.kind) {
             Some(FeatureKind::Fillet(f)) => &f.edges,
             Some(FeatureKind::Chamfer(c)) => &c.edges,
             _ => &[],
         };
         for e in &pb.edges {
-            let color = if chosen.contains(&e.faces) {
+            let color = if failed.contains(&e.faces) {
+                error
+            } else if chosen.contains(&e.faces) {
                 Color32::from_rgb(255, 120, 0)
             } else if self.hover_edge == Some(e.faces) {
                 Color32::from_rgb(255, 200, 40)
@@ -5170,11 +5185,28 @@ fn feature_error(ui: &mut egui::Ui, e: &anvil_model::FeatureError) {
     ui.add_space(4.0);
     ui.colored_label(pal.error, format!("{} could not be built: {}.", e.feature, e.cause));
     ui.label(&e.suggestion);
+    if let Some(marked) = marked_in_view(e) {
+        ui.label(egui::RichText::new(marked).color(pal.text_weak));
+    }
     if let Some(d) = &e.details {
         egui::CollapsingHeader::new("Details").id_salt("feature-error-details").show(ui, |ui| {
             ui.label(egui::RichText::new(d).monospace().size(11.0).color(pal.text_weak));
         });
     }
+}
+
+/// Where a failure's geometry is marked, for the line under its message in the editor.
+fn marked_in_view(e: &anvil_model::FeatureError) -> Option<String> {
+    let what = match (e.edges.len(), e.faces.len()) {
+        (0, 0) => return None,
+        (1, 0) => "The edge".to_string(),
+        (n, 0) => format!("The {n} edges"),
+        (0, 1) => "The face".to_string(),
+        (0, n) => format!("The {n} faces"),
+        _ => "The edges and faces".to_string(),
+    };
+    let verb = if e.edges.len() + e.faces.len() == 1 { "is" } else { "are" };
+    Some(format!("{what} it failed on {verb} marked in red in the view."))
 }
 
 /// End-to-end UI tests: real egui frames driven by synthetic mouse input (no window or GPU).
@@ -5631,6 +5663,67 @@ mod ui_tests {
         // faceted in 10-degree chords, which over-cuts this small region by about 2%.
         let expected = (1.0 - std::f64::consts::PI / 4.0) * 4.0 * len;
         assert!((removed - expected).abs() / expected < 0.03, "removed {removed}, expected {expected}");
+    }
+
+    /// A fillet too large for some of its edges marks those edges while it is edited,
+    /// and says so under its message. The block is 40 x 20 x 10: its 10 mm sides leave a
+    /// 15 mm round no room on the top edges.
+    #[test]
+    fn a_failed_fillet_marks_the_edges_it_failed_on() {
+        let mut h = Harness::new();
+        let (mut doc, ex) = block_doc();
+        let top = FaceId { feature: ex, index: FaceId::END_CAP };
+        let (a, b) = (EdgeRef::new(top, FaceId::side(ex, 0)), EdgeRef::new(top, FaceId::side(ex, 1)));
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![a, b],
+            radius: Dim::Value(15.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
+        h.app.load_document(doc, None);
+        h.step(vec![]);
+        // Not marked until the fillet is being edited.
+        assert!(h.app.editing_failure().is_none());
+        let before = h.app.doc.clone();
+        h.app.open_editor(id, before, false);
+        h.step(vec![]);
+        let e = h.app.editing_failure().cloned().expect("the fillet failed");
+        assert_eq!(e.edges, vec![a, b]);
+        assert_eq!(
+            marked_in_view(&e).as_deref(),
+            Some("The 2 edges it failed on are marked in red in the view.")
+        );
+        // Both edges are on the body the editor shows, so both are drawn.
+        let shown = &h.app.pick_body.as_ref().expect("picking edges").edges;
+        assert!([a, b].iter().all(|e| shown.iter().any(|m| m.faces == *e)));
+    }
+
+    #[test]
+    fn marked_in_view_counts_edges_and_faces() {
+        let e = |edges: usize, faces: usize| anvil_model::FeatureError {
+            feature: "Shell1".into(),
+            cause: "c".into(),
+            suggestion: "s.".into(),
+            details: None,
+            edges: vec![
+                EdgeRef::new(FaceId { feature: 1, index: 0 }, FaceId { feature: 1, index: 1 });
+                edges
+            ],
+            faces: vec![FaceId { feature: 1, index: 0 }; faces],
+        };
+        assert_eq!(marked_in_view(&e(0, 0)), None);
+        assert_eq!(
+            marked_in_view(&e(1, 0)).as_deref(),
+            Some("The edge it failed on is marked in red in the view.")
+        );
+        assert_eq!(
+            marked_in_view(&e(0, 1)).as_deref(),
+            Some("The face it failed on is marked in red in the view.")
+        );
+        assert_eq!(
+            marked_in_view(&e(0, 3)).as_deref(),
+            Some("The 3 faces it failed on are marked in red in the view.")
+        );
     }
 
     #[test]
