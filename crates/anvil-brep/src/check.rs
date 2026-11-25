@@ -7,8 +7,9 @@ fn fail<T>(msg: impl Into<String>) -> Result<T> {
     Err(KernelError::Topology(msg.into()))
 }
 
-/// Verifies that `solid` is a closed, connected, orientable 2-manifold whose
-/// geometry agrees with its topology.
+/// Verifies that `solid` is a closed, orientable 2-manifold whose geometry agrees with
+/// its topology: one connected shell, or one outer shell holding sealed voids (see
+/// [`crate::voids`]).
 pub fn validate(solid: &Solid) -> Result<()> {
     if solid.faces.is_empty() {
         return fail("solid has no faces");
@@ -68,38 +69,34 @@ pub fn validate(solid: &Solid) -> Result<()> {
         }
     }
 
-    // Connectivity: one shell.
-    let mut seen = vec![false; solid.faces.len()];
-    let mut stack = vec![0usize];
-    seen[0] = true;
-    let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); solid.faces.len()];
-    for fs in &edge_faces {
-        for &a in fs {
-            for &b in fs {
-                if a != b {
-                    adjacency[a].push(b);
-                }
-            }
+    // Connectivity: one shell, or an outer shell holding voids.
+    let shells = crate::voids::shell_faces(solid);
+    if shells.len() > 1 {
+        for faces in &shells {
+            shell_genus(&crate::voids::extract(solid, faces)?)?;
         }
-    }
-    while let Some(f) = stack.pop() {
-        for &g in &adjacency[f] {
-            if !seen[g] {
-                seen[g] = true;
-                stack.push(g);
-            }
-        }
-    }
-    if seen.iter().any(|s| !s) {
-        return fail("solid has more than one shell");
+        return crate::voids::check_layout(solid);
     }
 
-    genus(solid).map(|_| ())
+    shell_genus(solid).map(|_| ())
 }
 
-/// Genus from the Euler-Poincare formula V - E + F - R = 2(S - G) with one
-/// shell. Each through-hole adds one to the genus.
+/// Genus from the Euler-Poincare formula V - E + F - R = 2(S - G), summed over the
+/// solid's shells. Each through-hole adds one to the genus; a void adds nothing.
 pub fn genus(solid: &Solid) -> Result<u32> {
+    let shells = crate::voids::shell_faces(solid);
+    if shells.len() > 1 {
+        let mut total = 0;
+        for faces in &shells {
+            total += shell_genus(&crate::voids::extract(solid, faces)?)?;
+        }
+        return Ok(total);
+    }
+    shell_genus(solid)
+}
+
+/// Genus of a solid of one shell.
+fn shell_genus(solid: &Solid) -> Result<u32> {
     let v = solid.vertices.len() as i64;
     let e = solid.edges.len() as i64;
     let f = solid.faces.len() as i64;

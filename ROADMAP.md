@@ -57,7 +57,7 @@ The work is split into issues tracked in [#104](https://github.com/swperb/anvilc
 ### Also planned
 
 - Kernel: overflow choices and round corners, spherical corner blends, variable-radius
-  fillets; shells of freeform faces, sealed hollows (a second shell inside a solid), and
+  fillets; shells of freeform faces, and
   walls thick enough to change a part's shape; freeform faces that touch other surfaces
   without crossing them, and results that would touch themselves at a single point.
 - Features: more hole options (up-to-surface and offset end conditions, far-side and

@@ -713,3 +713,46 @@ fn pinched_tori_round_trip_exactly() {
         assert!((mesh_volume(&b.mesh) - v).abs() / v < 0.01, "{}", mesh_volume(&b.mesh));
     }
 }
+
+/// Volume and area of a solid integrated on its exact surfaces.
+fn exact_mass(s: &anvil_brep::Solid) -> (f64, f64) {
+    let m = mass::exact_properties(s).expect("exact");
+    (m.volume, m.area)
+}
+
+#[test]
+fn sealed_voids_round_trip_as_brep_with_voids() {
+    use anvil_brep::{shell, voids};
+    // A box hollowed with no face removed (brep-bench shell/box-hollowed, 288) and a ball
+    // hollowed the same way (shell/sphere-hollowed, 244 pi / 3).
+    let k = prism(&rect(0.0, 0.0, 10.0, 8.0), &Frame::world(), 0.0, 6.0);
+    let hollow_box = shell::shell(&k, &[], 1.0).expect("shell").remove(0);
+    let half = Loop2::new(vec![
+        Segment::Arc { center: DVec2::ZERO, radius: 5.0, start: -0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(0.0, 5.0), b: DVec2::new(0.0, -5.0) },
+    ]);
+    let r = build_regions(&[half]).expect("region");
+    let ball =
+        anvil_brep::revolve::revolve(&Frame::world(), &r[0], DVec2::ZERO, DVec2::Y, TAU).expect("ball");
+    let hollow_ball = shell::shell(&ball, &[], 1.0).expect("shell").remove(0);
+    for (part, volume, area) in [(hollow_box, 288.0, 584.0), (hollow_ball, 244.0 * PI / 3.0, 164.0 * PI)] {
+        let text = export::write(std::slice::from_ref(&part), "hollow");
+        assert_eq!(text.matches("BREP_WITH_VOIDS(").count(), 1);
+        assert_eq!(text.matches("ORIENTED_CLOSED_SHELL('',*,#").count(), 1);
+        assert!(text.contains(",.F.)"));
+        assert!(!text.contains("MANIFOLD_SOLID_BREP("));
+        let imp = import(&text).expect("import");
+        assert_eq!(imp.bodies.len(), 1);
+        let b = &imp.bodies[0];
+        let exact = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+        check::validate(exact).expect("valid");
+        assert_eq!(voids::shell_faces(exact).len(), 2);
+        assert_eq!(exact.faces.len(), part.faces.len());
+        let (v, a) = exact_mass(exact);
+        assert!((v - volume).abs() < 1e-7 * volume, "{v} vs {volume}");
+        assert!((a - area).abs() < 1e-7 * area, "{a} vs {area}");
+        // The importer's own mesh counts the void too.
+        assert!(watertight(&b.mesh));
+        assert!((mesh_volume(&b.mesh) - volume).abs() / volume < 0.01, "{}", mesh_volume(&b.mesh));
+    }
+}

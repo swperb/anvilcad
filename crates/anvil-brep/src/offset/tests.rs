@@ -112,8 +112,11 @@ fn walls_too_thick_are_refused() {
     let e = edge_near(&p, DVec3::new(10.0, 10.0, 5.0), 1e-6).expect("edge");
     let r = blend_edge(&p, e, Blend::Fillet(0.5), 1, 0).expect("fillet").remove(0);
     assert!(shell(&r, &[top(&r)], 1.0).is_err());
-    // No face removed: a sealed hollow, not built exactly.
-    assert!(matches!(shell(&cube, &[], 1.0), Err(KernelError::Unsupported(_))));
+    // No face removed: a sealed hollow, still refused when the walls meet.
+    for t in [5.0, 6.0, 20.0] {
+        assert!(shell(&cube, &[], t).is_err(), "{t}");
+    }
+    assert!(close(volume(&shell(&cube, &[], 4.0).expect("shell")), 1000.0 - 8.0, 1e-9));
 }
 
 #[test]

@@ -34,8 +34,10 @@ Inputs: a solid, a wall thickness `t` > 0, and a set of faces to remove (may be 
 
 AnvilCAD's exact kernel builds the shell when every face has an exact offset (planes,
 cylinders, cones, spheres, tori) and the hollow keeps the part's shape; otherwise the
-faceted kernel builds it, as before. A sealed hollow (no faces removed) needs a solid with
-two shells, which the exact kernel does not represent yet, so it is built faceted.
+faceted kernel builds it, as before. A sealed hollow (no faces removed) is one solid with
+two shells: the part's own faces facing out, and the cavity's facing in, toward the void
+(see `crates/anvil-brep/src/voids.rs`). A wall as thick as the part leaves no room for the
+hollow and is refused.
 
 ## Fillets and chamfers on round edges
 

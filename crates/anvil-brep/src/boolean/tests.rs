@@ -167,7 +167,11 @@ fn contained_tool() {
     let small = cuboid(DVec3::splat(2.0), DVec3::splat(4.0));
     let u = boolean(&big, &small, BoolOp::Union).expect("union");
     assert!(close(volume(&u), 1000.0, 1e-9));
-    assert!(matches!(boolean(&big, &small, BoolOp::Subtract), Err(KernelError::Unsupported(_))));
+    // Subtracting it leaves one body with a sealed void.
+    let d = boolean(&big, &small, BoolOp::Subtract).expect("subtract");
+    assert_eq!(d.len(), 1);
+    assert_eq!(crate::voids::shell_faces(&d[0]).len(), 2);
+    assert!(close(volume(&d), 992.0, 1e-9));
     let i = boolean(&big, &small, BoolOp::Intersect).expect("intersect");
     assert!(close(volume(&i), 8.0, 1e-9));
 }

@@ -1438,24 +1438,12 @@ impl<'a> Engine<'a> {
             check::validate(&solid)?;
             out.push(solid);
         }
-        // A shell lying inside another one is a void, not a separate body.
+        // A shell lying inside another one is a void, not a separate body: each outer
+        // shell takes the voids it holds.
         if out.len() > 1 {
-            for i in 0..out.len() {
-                let Some(probe) = shell_probe(&out[i]) else {
-                    continue;
-                };
-                for (j, other) in out.iter().enumerate() {
-                    if i == j {
-                        continue;
-                    }
-                    let infos: Vec<FaceInfo> = other.faces.iter().map(|f| face_info(other, f)).collect();
-                    let loc = |g: usize, q: DVec3| locate_in(other, g, &infos[g], q);
-                    if point_in_solid(other, probe, loc)? {
-                        return Err(KernelError::Unsupported(
-                            "a cut that leaves an empty pocket inside the part".into(),
-                        ));
-                    }
-                }
+            out = crate::voids::bodies(out)?;
+            for s in out.iter().filter(|s| crate::voids::shell_faces(s).len() > 1) {
+                check::validate(s)?;
             }
         }
         Ok(out)
@@ -1794,7 +1782,7 @@ fn point_in_solid(solid: &Solid, p: DVec3, locate: impl Fn(usize, DVec3) -> Loc)
 }
 
 /// A point on a shell's surface: the interior point of its first face.
-fn shell_probe(solid: &Solid) -> Option<DVec3> {
+pub(crate) fn shell_probe(solid: &Solid) -> Option<DVec3> {
     let face = solid.faces.first()?;
     let info = face_info(solid, face);
     let uv = interior_point(&info.loops_uv)?;

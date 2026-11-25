@@ -39,6 +39,7 @@ pub mod taper;
 pub mod tess;
 pub mod tol;
 pub mod topo;
+pub mod voids;
 
 pub use error::KernelError;
 pub use geom::{Curve, Frame, Surface};

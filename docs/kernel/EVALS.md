@@ -151,5 +151,7 @@ nothing to blend) and one unsound, listed below.
 - Freeform (B-spline) faces, sweeps, lofts, shells and drafts, and fillets that meet at a
   corner: the reference model has no exact counterpart for them yet. Their own tests in `anvil-brep` and `anvil-model`
   check them against exact values.
-- Results with internal voids or non-manifold contact, which the kernel refuses by design today.
+- Results with non-manifold contact, which the kernel refuses by design today. (Solids with
+  sealed internal voids are built and audited: `box/nested-subtract-void`, `sphere/hollow`,
+  `sphere/nested-hollows`.)
 - Self-intersection of a single face, which neither this audit nor SMLib's checker tests.

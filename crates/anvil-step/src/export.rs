@@ -1,6 +1,6 @@
 //! Exact STEP export: AP214 ADVANCED_BREP with analytic curves and surfaces.
 
-use anvil_brep::{Curve, Frame, Solid, Surface};
+use anvil_brep::{Curve, Frame, Solid, Surface, voids};
 use std::fmt::Write;
 
 fn real(v: f64) -> String {
@@ -111,6 +111,109 @@ impl Writer {
         let x = self.dir(f.x);
         self.ent(format!("AXIS2_PLACEMENT_3D('',#{o},#{z},#{x})"))
     }
+
+    /// Writes one closed shell of `solid` (its vertices, edges and faces) and returns the
+    /// CLOSED_SHELL's id.
+    fn closed_shell(&mut self, solid: &Solid) -> usize {
+        let vertices: Vec<usize> = solid
+            .vertices
+            .iter()
+            .map(|v| {
+                let p = self.point(v.point);
+                self.ent(format!("VERTEX_POINT('',#{p})"))
+            })
+            .collect();
+        let mut edges = Vec::with_capacity(solid.edges.len());
+        for e in &solid.edges {
+            let (geom, same) = match &e.curve {
+                Curve::Spline(sp) => (self.spline(sp), e.t1 >= e.t0),
+                &Curve::Line { origin, dir } => {
+                    let p = self.point(origin);
+                    let d = self.dir(dir);
+                    let v = self.ent(format!("VECTOR('',#{d},1.)"));
+                    (self.ent(format!("LINE('',#{p},#{v})")), e.t1 >= e.t0)
+                }
+                &Curve::Circle { frame, radius } => {
+                    let a = self.placement(&frame);
+                    (self.ent(format!("CIRCLE('',#{a},{})", real(radius))), e.t1 >= e.t0)
+                }
+                &Curve::Ellipse { frame, a, b } => {
+                    let pl = self.placement(&frame);
+                    (self.ent(format!("ELLIPSE('',#{pl},{},{})", real(a), real(b))), e.t1 >= e.t0)
+                }
+            };
+            let (vs, ve) = (vertices[e.start.index()], vertices[e.end.index()]);
+            edges.push(
+                self.ent(format!("EDGE_CURVE('',#{vs},#{ve},#{geom},{})", if same { ".T." } else { ".F." })),
+            );
+        }
+        let mut faces = Vec::with_capacity(solid.faces.len());
+        for f in &solid.faces {
+            let surf = match f.surface.clone() {
+                Surface::BSpline(sp) => self.patch(&sp),
+                Surface::Plane { frame } => {
+                    let a = self.placement(&frame);
+                    self.ent(format!("PLANE('',#{a})"))
+                }
+                Surface::Cylinder { frame, radius } => {
+                    let a = self.placement(&frame);
+                    self.ent(format!("CYLINDRICAL_SURFACE('',#{a},{})", real(radius)))
+                }
+                Surface::Cone { frame, radius, half_angle, .. } => {
+                    let a = self.placement(&frame);
+                    self.ent(format!("CONICAL_SURFACE('',#{a},{},{})", real(radius), real(half_angle)))
+                }
+                Surface::Torus { frame, major, minor, .. } if major < minor => {
+                    // A spindle torus: the apple (outer part) for a positive major
+                    // radius, the lemon for a negative one.
+                    let a = self.placement(&frame);
+                    let outer = if major >= 0.0 { ".T." } else { ".F." };
+                    self.ent(format!(
+                        "DEGENERATE_TOROIDAL_SURFACE('',#{a},{},{},{outer})",
+                        real(major.abs()),
+                        real(minor)
+                    ))
+                }
+                Surface::Torus { frame, major, minor, .. } => {
+                    let a = self.placement(&frame);
+                    self.ent(format!("TOROIDAL_SURFACE('',#{a},{},{})", real(major), real(minor)))
+                }
+                Surface::Sphere { frame, radius } => {
+                    let a = self.placement(&frame);
+                    self.ent(format!("SPHERICAL_SURFACE('',#{a},{})", real(radius)))
+                }
+            };
+            let mut bounds = Vec::new();
+            for (li, l) in f.loops().enumerate() {
+                let oes: Vec<String> = l
+                    .coedges
+                    .iter()
+                    .map(|c| {
+                        let e = edges[c.edge.index()];
+                        format!(
+                            "#{}",
+                            self.ent(format!(
+                                "ORIENTED_EDGE('',*,*,#{e},{})",
+                                if c.reversed { ".F." } else { ".T." }
+                            ))
+                        )
+                    })
+                    .collect();
+                let lp = self.ent(format!("EDGE_LOOP('',({}))", oes.join(",")));
+                let kind = if li == 0 { "FACE_OUTER_BOUND" } else { "FACE_BOUND" };
+                bounds.push(format!("#{}", self.ent(format!("{kind}('',#{lp},.T.)"))));
+            }
+            faces.push(format!(
+                "#{}",
+                self.ent(format!(
+                    "ADVANCED_FACE('',({}),#{surf},{})",
+                    bounds.join(","),
+                    if f.reversed { ".F." } else { ".T." }
+                ))
+            ));
+        }
+        self.ent(format!("CLOSED_SHELL('',({}))", faces.join(",")))
+    }
 }
 
 /// Writes solids as one STEP part with a body per solid.
@@ -141,105 +244,26 @@ pub fn write(solids: &[Solid], name: &str) -> String {
 
     let mut breps = Vec::new();
     for (si, solid) in solids.iter().enumerate() {
-        let vertices: Vec<usize> = solid
-            .vertices
-            .iter()
-            .map(|v| {
-                let p = w.point(v.point);
-                w.ent(format!("VERTEX_POINT('',#{p})"))
-            })
-            .collect();
-        let mut edges = Vec::with_capacity(solid.edges.len());
-        for e in &solid.edges {
-            let (geom, same) = match &e.curve {
-                Curve::Spline(sp) => (w.spline(sp), e.t1 >= e.t0),
-                &Curve::Line { origin, dir } => {
-                    let p = w.point(origin);
-                    let d = w.dir(dir);
-                    let v = w.ent(format!("VECTOR('',#{d},1.)"));
-                    (w.ent(format!("LINE('',#{p},#{v})")), e.t1 >= e.t0)
-                }
-                &Curve::Circle { frame, radius } => {
-                    let a = w.placement(&frame);
-                    (w.ent(format!("CIRCLE('',#{a},{})", real(radius))), e.t1 >= e.t0)
-                }
-                &Curve::Ellipse { frame, a, b } => {
-                    let pl = w.placement(&frame);
-                    (w.ent(format!("ELLIPSE('',#{pl},{},{})", real(a), real(b))), e.t1 >= e.t0)
-                }
-            };
-            let (vs, ve) = (vertices[e.start.index()], vertices[e.end.index()]);
-            edges.push(
-                w.ent(format!("EDGE_CURVE('',#{vs},#{ve},#{geom},{})", if same { ".T." } else { ".F." })),
-            );
+        // A solid with sealed voids is a BREP_WITH_VOIDS: the outer shell, and each void's
+        // shell written facing out of the void and used reversed (ISO 10303-42).
+        let (outer, cavities) = match voids::outer_and_voids(solid) {
+            Ok(parts) => parts,
+            Err(_) => (solid.clone(), Vec::new()),
+        };
+        let shell = w.closed_shell(&outer);
+        if cavities.is_empty() {
+            breps.push(format!("#{}", w.ent(format!("MANIFOLD_SOLID_BREP('Body{}',#{shell})", si + 1))));
+            continue;
         }
-        let mut faces = Vec::with_capacity(solid.faces.len());
-        for f in &solid.faces {
-            let surf = match f.surface.clone() {
-                Surface::BSpline(sp) => w.patch(&sp),
-                Surface::Plane { frame } => {
-                    let a = w.placement(&frame);
-                    w.ent(format!("PLANE('',#{a})"))
-                }
-                Surface::Cylinder { frame, radius } => {
-                    let a = w.placement(&frame);
-                    w.ent(format!("CYLINDRICAL_SURFACE('',#{a},{})", real(radius)))
-                }
-                Surface::Cone { frame, radius, half_angle, .. } => {
-                    let a = w.placement(&frame);
-                    w.ent(format!("CONICAL_SURFACE('',#{a},{},{})", real(radius), real(half_angle)))
-                }
-                Surface::Torus { frame, major, minor, .. } if major < minor => {
-                    // A spindle torus: the apple (outer part) for a positive major
-                    // radius, the lemon for a negative one.
-                    let a = w.placement(&frame);
-                    let outer = if major >= 0.0 { ".T." } else { ".F." };
-                    w.ent(format!(
-                        "DEGENERATE_TOROIDAL_SURFACE('',#{a},{},{},{outer})",
-                        real(major.abs()),
-                        real(minor)
-                    ))
-                }
-                Surface::Torus { frame, major, minor, .. } => {
-                    let a = w.placement(&frame);
-                    w.ent(format!("TOROIDAL_SURFACE('',#{a},{},{})", real(major), real(minor)))
-                }
-                Surface::Sphere { frame, radius } => {
-                    let a = w.placement(&frame);
-                    w.ent(format!("SPHERICAL_SURFACE('',#{a},{})", real(radius)))
-                }
-            };
-            let mut bounds = Vec::new();
-            for (li, l) in f.loops().enumerate() {
-                let oes: Vec<String> = l
-                    .coedges
-                    .iter()
-                    .map(|c| {
-                        let e = edges[c.edge.index()];
-                        format!(
-                            "#{}",
-                            w.ent(format!(
-                                "ORIENTED_EDGE('',*,*,#{e},{})",
-                                if c.reversed { ".F." } else { ".T." }
-                            ))
-                        )
-                    })
-                    .collect();
-                let lp = w.ent(format!("EDGE_LOOP('',({}))", oes.join(",")));
-                let kind = if li == 0 { "FACE_OUTER_BOUND" } else { "FACE_BOUND" };
-                bounds.push(format!("#{}", w.ent(format!("{kind}('',#{lp},.T.)"))));
-            }
-            faces.push(format!(
-                "#{}",
-                w.ent(format!(
-                    "ADVANCED_FACE('',({}),#{surf},{})",
-                    bounds.join(","),
-                    if f.reversed { ".F." } else { ".T." }
-                ))
-            ));
+        let mut inner = Vec::with_capacity(cavities.len());
+        for v in &cavities {
+            let cs = w.closed_shell(&voids::flipped(v));
+            inner.push(format!("#{}", w.ent(format!("ORIENTED_CLOSED_SHELL('',*,#{cs},.F.)"))));
         }
-        let shell = w.ent(format!("CLOSED_SHELL('',({}))", faces.join(",")));
-        breps.push(format!("#{}", w.ent(format!("MANIFOLD_SOLID_BREP('Body{}',#{shell})", si + 1))));
+        breps.push(format!(
+            "#{}",
+            w.ent(format!("BREP_WITH_VOIDS('Body{}',#{shell},({}))", si + 1, inner.join(",")))
+        ));
     }
     let rep =
         w.ent(format!("ADVANCED_BREP_SHAPE_REPRESENTATION('{name}',(#{origin},{}),#{ctx})", breps.join(",")));
