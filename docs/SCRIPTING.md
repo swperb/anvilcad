@@ -126,7 +126,7 @@ built-in or user command by typing part of its name or description.
 
 Built-in commands, by the names the toolbar and menus use: New, New Assembly, Insert
 Component, Mate, Interference, Bill of Materials, New Drawing, Update Views, Change Part, Model Dimensions,
-Reference Dimension, Export PDF, Export DXF, Open, Save, Save As, Save as Part Template, Export, Open Sample Part, Undo, Redo, Rebuild, Delete, Extruded Boss/Base,
+Reference Dimension, Hole Callouts, Detail View, Export PDF, Export DXF, Open, Save, Save As, Save as Part Template, Export, Open Sample Part, Undo, Redo, Rebuild, Delete, Extruded Boss/Base,
 Revolved Boss/Base, Extruded Cut, Revolved Cut, Linear Pattern, Circular Pattern, Mirror,
 Fillet, Chamfer, Shell, Hole, Sweep, Loft, Draft, Dome, Rib, Combine, Move/Copy Bodies,
 Delete/Keep Bodies, Split, Scale, Plane, Axis, Point, Coordinate System, Sketch, Exit Sketch,
@@ -136,7 +136,9 @@ Tab, Mass Properties, Check Design (DFM), Measure, Section View, Equations, Cust
 Configuration Table, Command Palette, Run Script..., Reload Config and Edit Config. Names are
 not case-sensitive. While a drawing is open, only the commands that apply to it run (New, New
 Assembly, New Drawing, Open, Save, Save As, Update Views, Change Part, Model Dimensions,
-Reference Dimension, Export PDF, Export DXF, Delete (the selected dimension), Open Sample
+Reference Dimension, Hole Callouts, Section View (which there cuts a section view instead of
+showing the part's), Detail View, Export PDF, Export DXF, Delete (the selected dimension, callout,
+or section or detail view), Open Sample
 Part, Undo, Redo, Rebuild, Zoom to Fit, the theme commands, Command Palette, Run Script...,
 Reload Config and Edit Config); the others say to open a part. A binding to a name that does not exist is an error when the file loads.
 

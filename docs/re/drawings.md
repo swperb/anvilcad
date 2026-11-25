@@ -7,15 +7,18 @@ tangent edges shown, thin or removed, views that follow the part when it changes
 PDF output. SOLIDWORKS users know the equivalent workflow well, so AnvilCAD follows its
 published behaviour where that makes sense. The second slice (issue #97) adds model and
 reference dimensions, title blocks filled from the part's custom properties and
-configuration, and DXF output; it is specified in the sections from "Dimensions" on.
-Section, detail and auxiliary views, hole callouts and BOM tables (#98) come later and are
-noted only where the data model must leave room for them.
+configuration, and DXF output; it is specified in the sections from "Dimensions" on. The
+third slice (issue #98) adds section views (full and offset) hatched by material, detail
+views and hole callouts; it is specified in "Section views", "Hatching", "Detail views" and
+"Hole callouts". Assembly drawings with a bill of materials and balloons, the rest of #98,
+are specified in "Assembly drawings, BOM tables and balloons" but not yet built (#210).
 
 This specification was written before the implementation, which is in
 `crates/anvil-drawing` (document, projection, layout and PDF) and
 `crates/anvil-app/src/app/drawing.rs` (drawing mode). The second slice is in
 `crates/anvil-drawing/src/dims.rs` (dimensions), `title.rs` (title blocks), `dxf.rs` (DXF)
-and the same app module.
+and the same app module. The third slice is in `section.rs` (section views and hatching),
+`detail.rs` (detail views) and `callout.rs` (hole callouts).
 
 ## How this was studied
 
@@ -50,6 +53,18 @@ and the same app module.
   pages were read, no `.slddrw` or `.dxf` file written by SOLIDWORKS was studied, and REA's
   analysis tools were not run. The DXF structure comes from Autodesk's published DXF
   reference (D1), not from SOLIDWORKS output; it was used for group codes only.
+- **Third slice.** Section views, hatching, detail views, hole callouts and BOM tables were
+  studied the same way on 2026-11-25 (S80 to S106), with the same REA version (6.10.1) and
+  submodule pin, following the `reverse-engineer-anything` skill's habit of separating
+  observations, inferences, decisions and unknowns. Pages were found from the links inside
+  "Hole Callouts", "Detail View" and "Area Hatch/Fill" and from there onward. The 2025 pages
+  `c_section_views.htm`, `HIDD_DVE_SECTION_VIEW.htm`, `c_offset_section.htm`,
+  `c_detail_views.htm`, `HIDD_DVE_HOLE_CALLOUT.htm`, `c_crosshatch.htm` and
+  `HIDD_OPTIONS_VIEW_LABELS.htm` were tried and are missing. Pictures were again not
+  available, so nothing here describes what a SOLIDWORKS section line or callout looks like
+  beyond what the text says. No `calloutformat.txt` or `sldwks.ptn` file (both ship with the
+  installed product, S86, S95) was read. Material hatch families come from no SOLIDWORKS
+  source; see "Hatching".
 - **Standards.** Paper sizes and line widths are not given in the SOLIDWORKS help. They come
   from the published standards ISO 216 (A sizes), ASME Y14.1 (inch sizes) and ISO 128 (line
   types and widths), and are marked as such.
@@ -124,6 +139,33 @@ material.
 | S70 | Model View PropertyManager, configuration information | A + `HIDD_DVE_NAMED_VIEW.htm` | 2025 |
 | S71 | DXF/DWG file export options | A + `r_dxf_dwg_export_options.htm` | 2025 |
 | S72 | Setting DXF/DWG export options | A + `HIDD_EXPORT_OPTION_DXF.htm` | 2025 |
+| S80 | Section views in drawings | A + `c_section_views_in_drawings.htm` | 2025 |
+| S81 | Section View PropertyManager (new view) | A + `HIDD_DVE_SECTION_PROP_NEW.htm` | 2025 |
+| S82 | Section View PropertyManager (drawings) | A + `HIDD_DVE_SECTION_PROP.htm` | 2025 |
+| S83 | Inserting a section view | A + `t_Inserting_Section_View_drawing.htm` | 2025 |
+| S84 | Inserting a section view with offset | A + `t_Inserting_Section_View_Offset.htm` | 2025 |
+| S85 | Examples: section view, and with offset | A + `c_Examples_Section_View.htm`, `c_Examples_Section_View_Offset.htm` | 2025 |
+| S86 | Area hatch/fill | A + `c_area_hatch_fill.htm` | 2025 |
+| S87 | Area Hatch/Fill PropertyManager, new and edit | A + `HIDD_DVE_AREAHATCH.htm`, `HIDD_DVE_AREAHATCH_PROPS.htm` | 2025 |
+| S88 | Section view labels | A + `HIDD_Options_section_label.htm` | 2025 |
+| S89 | Additional features of section views | A + `c_additional_section_views_in_drawings.htm` | 2025 |
+| S90 | Troubleshooting section views | A + `c_troubleshooting_section_views.htm` | 2025 |
+| S91 | Modifying section views | A + `t_modify_section_views.htm` | 2025 |
+| S92 | Detail view | A + `c_detail_view.htm` | 2025 |
+| S93 | Detail View PropertyManager | A + `HIDD_DVE_DETAIL_CIRCLE.htm` | 2025 |
+| S94 | Detail view labels | A + `HIDD_Options_detail_label.htm` | 2025 |
+| S95 | Creating a detail view | A + `t_create_detail_view.htm` | 2025 |
+| S96 | Derived drawing views | A + `c_derived_drawing_views.htm` | 2025 |
+| S97 | Hole callouts | A + `c_hole_callouts.htm` | 2025 |
+| S98 | Adding hole callouts in a drawing | A + `t_adding_hole_callouts_drawing.htm` | 2025 |
+| S99 | Modifying the hole callout format | A + `c_modify_hole_callout_format.htm` | 2025 |
+| S100 | Callout variables | A + `HIDD_CALLOUT_VARIABLE.htm` | 2025 |
+| S101 | Instance indicators | A + `t_instance_indicators.htm` | 2025 |
+| S102 | View labels | A + `c_view_labels.htm` | 2025 |
+| S103 | Balloons | A + `c_balloons.htm` | 2025 |
+| S104 | Inserting balloons; balloon styles and sizes | A + `t_inserting_balloons.htm`, `c_Balloon_Styles_and_Sizes.htm` | 2025 |
+| S105 | Auto balloons and the Auto Balloon PropertyManager | A + `c_Auto_Balloons.htm`, `HIDD_DVE_AUTO_BALLOON.htm` | 2025 |
+| S106 | Bill of materials overview and PropertyManager | A + `c_Bill_of_Materials_-_Overview2.htm`, `HIDD_DVE_INSERT_BOM.htm` | 2025 |
 | D1 | DXF Reference (Autodesk, AutoCAD 2012 edition) | `https://images.autodesk.com/adsk/files/autocad_2012_pdf_dxf-reference_enu.pdf` | AutoCAD 2012 |
 
 Numbers missing from the table are pages that were read but added nothing used here.
@@ -475,6 +517,198 @@ Numbers missing from the table are pages that were read but added nothing used h
   "Scale output 1:1", other versions, DWG and several sheets are not offered: a drawing has
   one sheet, and DXF at sheet size matches the PDF.
 
+## Section views
+
+- **Observed.** A section view cuts a parent view with a cutting line (section line). The
+  line can be straight or an offset section defined by a stepped line, and can include
+  concentric arcs (S80). The tool offers vertical, horizontal, auxiliary (any angle) and
+  aligned lines, with arc, single and notch offsets that can be combined (S80, S81, S83).
+  A single offset is set by a first point on the cutting line and a second point giving
+  the depth of the offset; a notch by two points on the line and a third for its depth
+  (S84, S85).
+- **Observed.** The cut direction is shown by arrows and is reversed with Flip direction or
+  by double-clicking the line (S82, S91). Each section line and view has a letter label
+  that can be edited (S82, S91). Cutting lines are not always required by international
+  standards and can be hidden (S80).
+- **Observed.** A section of a section view is calculated from the original model, and
+  section views update when the model changes (S89). A section view needing an update is
+  marked with hatching (S91).
+- **Observed.** Options include a partial section limited to the line's length, a slice
+  showing only the cut faces, hiding the "shoulders" (the edges the line's corners make in
+  the view, S90), emphasizing the outline of cut faces after ISO 128-50, and a depth that
+  limits what is shown behind the cut (S80, S82). A section view uses the parent's scale,
+  the sheet's scale or its own, and the parent's display style unless set otherwise (S82).
+- **Observed.** If the line does not cross the whole model, portions are shown uncut;
+  a cut that leaves zero-thickness geometry is reported (S90).
+- **Observed.** Section view labels follow a drafting standard and show a name, the letter,
+  and the scale; the label can be shown above the view (S88). The line style choices
+  include a continuous line with thick ends and changes of direction (S88).
+- **Unknown.** The default name text of the label, the arrow shape and size, the default
+  cut direction, and where a new section view is placed relative to its parent beyond
+  "drag the preview to a location" (S83).
+- **Inferred.** The cutting line belongs to the parent view; the cut removes the material
+  between the viewer and the cutting surface, and the section view looks in the direction
+  the arrows point. An offset section's cut faces lie at several depths but are all seen
+  square on, so the view is still orthographic.
+- **Decision.** Section View cuts a front, top or side view, or another section view, with
+  a horizontal or vertical cutting line through points the user clicks on the view. One
+  point makes a full section. Each further point makes an offset section: the line runs
+  through every point, in order along the line, and steps square to itself halfway between
+  neighbouring points (a single or notch offset in S84's terms, as many as needed). Arcs,
+  auxiliary and aligned lines, partial, slice and depth-limited sections are later work.
+- **Decision.** The arrows point away from the material kept: a horizontal line looks
+  down, a vertical line looks to the left, as seen on the parent; Flip direction reverses
+  it. The section view looks the way the arrows point, so it is one of the six standard
+  orthographic directions (front, back, top, bottom, left or right). It is cut from the
+  part's exact bodies again whenever the views update; the jog faces of an offset section
+  are seen edge on, and the lines where they meet the cut faces (the shoulders) are left
+  out, as S82's "hide cutting line shoulders" does.
+- **Decision.** If the cut fails (the kernel cannot cut the body there), the view shows
+  nothing and the left pane says why and what to try (move the line); the rest of the
+  drawing is unaffected.
+- **Decision (after ISO 128-40 and 128-44).** The cutting line is a thin long-dash dot line
+  (12 mm dashes, then a 0.5 mm dot with 1.25 mm gaps either side) with thick 0.5 mm strokes
+  6 mm long at its ends and 3 mm either side of each corner; it runs 6 mm past the parent
+  view's lines, so the thick ends stay outside them. Each end
+  has a filled arrow (shaft 7 mm, head 4 mm by 1.6 mm) pointing the way the view looks,
+  with the letter (5 mm) beside it. Letters run A, B, C... skipping I, O and Q (ASME
+  Y14.2 practice, to avoid confusion with numbers), shared with detail views, and can be
+  changed. The view's label is `SECTION A-A` in 5 mm text centred under the view; when its
+  scale differs from the sheet's, `SCALE 2:1` follows on a second line in 3.5 mm text.
+- **Decision.** Section views use the sheet's scale and their own display style, which
+  starts as hidden lines removed and tangent edges removed. Model dimensions are not put in
+  section views; reference dimensions can be.
+
+## Hatching
+
+- **Observed.** Hatching is applied automatically to the cut faces of section views
+  (S86). Its pattern, scale and angle can be the material's crosshatch as specified in the
+  part document (S87). The pattern alternates between bodies of a multibody part and
+  between components of an assembly (S82). An option applies the view's scale to the
+  hatch (S82), so by default the spacing does not follow the view scale. Patterns come
+  from a file of named patterns that ships with the product (S86).
+- **Unknown.** The patterns, spacing and angle SOLIDWORKS uses for each material, and the
+  default of "scale hatch pattern".
+- **Standard.** ISO 128-50 draws hatching as thin lines, usually at 45 degrees, with the
+  spacing chosen for the size of the area; adjacent parts are hatched at different angles
+  or spacings. ASME Y14.2 gives symbols for families of materials (iron, steel, copper
+  alloys, light alloys, plastics and others). The standard texts are paid and were not
+  read; the families below are AnvilCAD's own patterns in that spirit, not copies of the
+  standard's drawings.
+- **Decision.** Every cut face is hatched with thin 0.25 mm lines (as the "Thin" pen), at a
+  spacing fixed on paper whatever the view's scale, after the part's material:
+  - no material, titanium and anything not listed below: single lines 3 mm apart;
+  - steels and irons (name containing steel, iron, AISI, ASTM or 17-4): pairs of lines
+    0.8 mm apart, every 4 mm;
+  - copper alloys (brass, bronze, copper): solid lines alternating with dashed lines
+    (2 mm dashes, 1 mm gaps), 2 mm apart;
+  - light alloys (aluminium, magnesium, and the 1060, 5052, 6061 and 7075 alloys): solid
+    lines alternating with long-dash dot lines, 2 mm apart;
+  - plastics (the material class): lines both ways (crossed at 90 degrees), 3 mm apart.
+
+  Lines run at 45 degrees for the first body and 135 degrees for the next, alternating
+  (S82's alternation). All hatch lines lie on one grid per view, so neighbouring cut faces
+  of one body line up across a step.
+
+## Detail views
+
+- **Observed.** A detail view shows a portion of a view, usually enlarged; the portion is
+  enclosed by a circle or another closed sketch; the parent can be an orthographic,
+  isometric, section, crop or exploded view, or another detail view (S92, S95). A default
+  scaling factor sets the detail's scale as a factor of the parent's (S92). The view can
+  have no outline, a full outline or a jagged outline; the detail circle has a style and a
+  letter label (S93, S94). Labels show a name, letter and scale (S94).
+- **Unknown.** The default scaling factor and the default outline.
+- **Decision.** Detail View takes a circle on any view: click its centre, then a point on
+  the circle. The detail starts at twice the parent's scale, rounded up to the next
+  standard scale, and its scale can be typed. It shows the parent's lines and hatching
+  clipped to the circle, with a thin full outline (an AnvilCAD choice, so the edge of what
+  is shown is clear). The parent shows the circle as a thin line with the letter (5 mm)
+  outside it; the view's label is `DETAIL B` with `SCALE 2:1` under it. Other profiles and
+  jagged outlines are later work. Reference dimensions can be put on detail views (at the
+  detail's scale); model dimensions cannot.
+
+## Placing derived views
+
+- **Unknown.** S83 and S95 only say the user drags the view to where it goes.
+- **Decision.** Views do not store positions yet (see "The drawing document"). Section and
+  detail views are placed in columns to the right of the standard views, top to bottom in
+  the order they were made, each with its label below it; Fit and the scale chosen for a
+  new drawing take them into account. When a new section or detail view does not fit at
+  the sheet's scale, the scale is lowered to the largest standard one at which everything
+  fits, as part of the same undo step, and the status line says so. Moving views by hand
+  is later work.
+- **Decision.** A section or detail view can be deleted; views made from it go with it,
+  with their dimensions and callouts. Standard views cannot be deleted in this slice.
+
+## Hole callouts
+
+- **Observed.** The Hole Callout tool adds driven diameter dimensions to holes made by the
+  hole feature or by circular cuts; it uses the hole feature's information and updates
+  when the hole changes (S97). The hole's axis must be normal to the sheet (S97). The
+  callout is placed by clicking a hole's edge and then where the text goes (S98). It holds
+  the diameter, the depth when the hole has one, and for hole-feature holes more, such as
+  a countersink or the number of instances (S97, S98). Callouts can be put in section and
+  detail views too (S98).
+- **Observed.** The text for each hole type comes from a format file with one definition
+  per type and standard; a countersunk through hole is the hole diameter and "thru" on one
+  line and the countersink symbol, its diameter, `X` and its angle on the next (S99). The
+  variables include the type, standard, fastener size, counterbore depth and diameter and
+  countersink angle (S99, S100). The number of instances is included for holes of one
+  feature or pattern; JIS can write it with `x` or `-` (S97, S101).
+- **Unknown.** The exact default text of each hole type (the format file was not read),
+  the default instance indicator outside JIS, and how tapped hole threads are written.
+- **Decision.** Callout text, one line per item, top to bottom, in the drawing's
+  dimension text (3.5 mm), millimetres to two decimals with trailing zeros dropped. Words
+  stand in for the counterbore, countersink and depth symbols, because the PDF's
+  Helvetica and the DXF's text styles have no such glyphs (ASME Y14.5's older word forms):
+  - hole: `Ø6.6 THRU` or `Ø6.6 X 10 DEEP`;
+  - counterbore: the hole's line, then `CBORE Ø11 X 6.4 DEEP`;
+  - countersink: the hole's line, then `CSK Ø12.4 X 90°`;
+  - tapped hole: the tap drill's line (`Ø5 X 15 DEEP` or `Ø5 THRU`), then the thread:
+    `M6x1 X 12 DEEP` for ISO metric sizes and holes with no standard size, `1/4-20 UNC X
+    12.7 DEEP` for ANSI inch sizes (the size name and the coarse series). The thread depth
+    is always given, as the Hole feature records it, even on a through hole;
+  - a near-side countersink adds `CSK Ø.. X ..°` as the last line;
+  - when the feature makes more than one hole, the first line starts with the count and
+    `X`, as `4X Ø6.6 THRU`.
+
+  A blind hole's drill point is not in the callout (its depth is to the shoulder, as the
+  Hole feature measures it).
+- **Decision.** Hole Callouts (like Model Dimensions, for holes) puts one callout per Hole
+  feature into the first front, top or side view that looks along the hole's axis from
+  the side it is drilled from, or failing that from the other side. A feature already
+  called out is skipped. The leader runs from the text, with a 4 mm shoulder, to the edge
+  of the feature's first hole with a filled arrow; the text sits beside the shoulder. By
+  default the leader rises steeply to the right until the text clears the top of the view
+  by 2 mm, so it sits in the space above the view and not over the part or the view beside
+  it. The
+  callout's text is dragged like a dimension's value. A callout whose feature is gone or
+  suppressed is counted in the left pane like a missing model dimension and left out of
+  PDF and DXF. Clicking a single hole, callouts on holes made by cuts, section and detail
+  views, and tolerances are later work.
+
+## Assembly drawings, BOM tables and balloons (not yet built, #210)
+
+- **Observed.** A bill of materials can be inserted into the drawing of an assembly; it
+  updates when components are added, deleted or replaced or their properties change
+  (with automatic update on); rows combine when every field but the item number is the
+  same; the part number column cannot be deleted (S106). The table has a stationary
+  corner and an anchor; BOM types are top-level only, parts only and indented (S106).
+- **Observed.** Balloons label components with their item numbers in the BOM; a balloon is
+  attached by clicking a component in a view of the assembly and placing it; styles
+  include circular, and sizes are fitted to the number of characters (S103, S104). Auto
+  balloons put balloons in views without duplicates, numbered in assembly order or
+  sequentially, with layouts (square, circular, top, bottom, left, right) and an option to
+  balloon one instance only of repeated components (S105).
+- **Decision (for the next slice).** A drawing of an `.anvasm` shows the placed exact
+  bodies of every component. A BOM table, fed by AnvilCAD's existing bill of materials
+  (`anvil-model` `Assembly::bill_of_materials`: item, part number, description,
+  quantity), sits above the title block with its stationary corner at the lower right.
+  Auto Balloons puts one circular balloon per BOM row, numbered with the row's item, in the
+  first view where one of its components has a visible line, with a leader ending in a dot
+  on that line. This waits on subassemblies (#93), which changes the bill of materials.
+
 ## Unknown or not covered
 
 1. The `.slddrw` format and how SOLIDWORKS stores model references and cached view
@@ -490,8 +724,11 @@ Numbers missing from the table are pages that were read but added nothing used h
 6. How "the most appropriate view" for a model dimension is chosen (S60, S63), and how
    dangling reference dimensions behave.
 7. Factory dimension styles (arrow and text sizes, precision) and DXF export defaults.
-8. Later slices: section, detail, auxiliary and broken views, hole callouts and BOM tables
-   (#98); editing model dimensions from the drawing; dimensions of other features (fillet
+8. Section line arrow shapes, label wording and placement defaults (S83, S88); hatch
+   patterns per material (S87); the detail scale factor and outline defaults (S92, S93);
+   the hole callout format file's default text (S99).
+9. Later slices: assembly drawings with BOM tables and balloons; auxiliary, aligned,
+   partial and broken views and arc offsets; callouts on cut holes; editing model dimensions from the drawing; dimensions of other features (fillet
    radii, hole sizes, pattern counts, revolve angles); title-block templates saved apart
    from a drawing; annotations; several sheets, portrait and custom sizes, moving views by
    hand, shaded views, assemblies, and keeping projected geometry in the drawing so it opens

@@ -10,12 +10,13 @@
 
 use super::AnvilApp;
 use crate::theme::{self, Icon, Palette, RowLook};
+use anvil_drawing::callout::{self, CalloutPicture};
 use anvil_drawing::dims::{self, DimPicture, Pick2, Pickables, ViewContext};
 use anvil_drawing::glam::DVec2;
 use anvil_drawing::layout::{Align, Pen, SheetPicture};
 use anvil_drawing::{
-    DisplayStyle, Drawing, PartData, Progress, Projection, Scale, Sheet, SheetSize, TangentEdges, TitleBlock,
-    TitleField, ViewGeometry, ViewRole, DRAWING_EXT,
+    detail, DetailDef, DisplayStyle, Drawing, PartData, Path2, Progress, Projected, Projection, Scale,
+    SectionDef, Sheet, SheetSize, TangentEdges, TitleBlock, TitleField, ViewGeometry, ViewRole, DRAWING_EXT,
 };
 use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke};
 use std::collections::HashMap;
@@ -30,7 +31,7 @@ const WATCH_EVERY: f64 = 1.0;
 
 /// What a background view update came back with.
 enum JobResult {
-    Done(HashMap<u32, ViewGeometry>, Box<PartData>, HashMap<u32, Pickables>),
+    Done(Projected, Box<PartData>, HashMap<u32, Pickables>),
     Failed(String),
     Cancelled,
 }
@@ -57,6 +58,40 @@ struct DimTool {
     picks: Vec<Pick2>,
 }
 
+/// The Section View tool: the view the cutting line goes on and the points it passes
+/// through so far, on that view's plane.
+struct SectionTool {
+    horizontal: bool,
+    view: Option<u32>,
+    points: Vec<DVec2>,
+}
+
+/// The Detail View tool: the view and the circle's centre, once clicked.
+#[derive(Default)]
+struct DetailTool {
+    view: Option<u32>,
+    centre: Option<DVec2>,
+}
+
+/// What a section or detail view is made from, without what only changes how it is laid
+/// out: a change needs the views projected again.
+type DerivedKey = Vec<(u32, Option<SectionDef>, Option<(u32, [f64; 3], f64)>)>;
+
+fn derived_key(d: &Drawing) -> DerivedKey {
+    d.views
+        .iter()
+        .filter(|v| v.role.is_derived())
+        .map(|v| (v.id, v.section.clone(), v.detail.as_ref().map(|x| (x.parent, x.centre, x.radius))))
+        .collect()
+}
+
+/// Something on the sheet that can be picked and dragged by its text.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Annotation {
+    Dim(u32),
+    Callout(u32),
+}
+
 pub(super) struct DrawingSession {
     pub drawing: Drawing,
     saved: Drawing,
@@ -67,14 +102,27 @@ pub(super) struct DrawingSession {
     pub selected: Option<u32>,
     /// The selected dimension.
     selected_dim: Option<u32>,
+    /// The selected hole callout.
+    selected_callout: Option<u32>,
     /// The projected views, by view id.
     geometry: HashMap<u32, ViewGeometry>,
+    /// Why views could not be made (a section the kernel could not cut), by view id.
+    failed: HashMap<u32, String>,
     /// What the drawing takes from its part, once the views are in.
     part: Option<PartData>,
     /// What the Dimension tool can pick on each view.
     pickables: HashMap<u32, Pickables>,
     /// The Reference Dimension tool, while it is on.
     tool: Option<DimTool>,
+    /// The Section View tool, while it is on.
+    section_tool: Option<SectionTool>,
+    /// The Detail View tool, while it is on.
+    detail_tool: Option<DetailTool>,
+    /// A section or detail view was just added: lower the scale once its views are in if
+    /// they no longer fit.
+    refit: bool,
+    /// The section and detail views the geometry was made for.
+    derived_for: Option<DerivedKey>,
     /// A dimension's value being dragged: the edit is one undo step, made when it ends.
     dragging: bool,
     /// Counts view updates taken in, so the laid-out sheet is kept until something changes.
@@ -112,10 +160,16 @@ impl DrawingSession {
             redo: Vec::new(),
             selected: None,
             selected_dim: None,
+            selected_callout: None,
             geometry: HashMap::new(),
+            failed: HashMap::new(),
             part: None,
             pickables: HashMap::new(),
             tool: None,
+            section_tool: None,
+            detail_tool: None,
+            refit: false,
+            derived_for: None,
             dragging: false,
             generation: 0,
             laid_out: std::cell::RefCell::new(None),
@@ -176,9 +230,9 @@ impl DrawingSession {
         let thread = std::thread::Builder::new().name("drawing views".into()).spawn(move || {
             let result = if model.exists() {
                 match anvil_drawing::load_part(&model, drawing.configuration.as_deref()) {
-                    Ok(part) => match anvil_drawing::project_views(&drawing, &part.bodies, &p) {
+                    Ok(part) => match anvil_drawing::project_views(&drawing, &part.bodies, part.hatch, &p) {
                         Ok(g) => {
-                            let picks = g.iter().map(|(id, v)| (*id, dims::pickables(v))).collect();
+                            let picks = g.geometry.iter().map(|(id, v)| (*id, dims::pickables(v))).collect();
                             JobResult::Done(g, Box::new(part), picks)
                         }
                         Err(_) => JobResult::Cancelled,
@@ -197,6 +251,7 @@ impl DrawingSession {
             Ok(t) => {
                 self.projected_for = Some(self.drawing.sheet.projection);
                 self.configured_for = Some(self.drawing.configuration.clone());
+                self.derived_for = Some(derived_key(&self.drawing));
                 self.job = Some(Job { progress, rx, thread: Some(t) });
             }
             Err(e) => self.problem = Some(format!("The views cannot be updated: {e}.")),
@@ -231,11 +286,13 @@ impl DrawingSession {
         self.generation += 1;
         Some(match result {
             JobResult::Done(g, part, picks) => {
-                self.geometry = g;
+                self.geometry = g.geometry;
+                self.failed = g.failed;
                 self.part = Some(*part);
                 self.pickables = picks;
                 self.problem = None;
                 self.stale = false;
+                let mut news = "Views updated".to_string();
                 if std::mem::take(&mut self.fit_pending) {
                     self.fit_scale();
                     // Part of making the drawing, not a change to undo.
@@ -243,11 +300,30 @@ impl DrawingSession {
                     if self.path.is_none() {
                         self.saved = self.drawing.clone();
                     }
+                } else if std::mem::take(&mut self.refit) {
+                    let geo = &self.geometry;
+                    let extent = |v: &anvil_drawing::View| geo.get(&v.id).and_then(|g| g.bounds());
+                    let now = self.drawing.sheet.scale;
+                    if !anvil_drawing::layout::fits(&self.drawing, now, &extent) {
+                        self.fit_scale();
+                        // Part of the step that added the view, so one undo takes both back.
+                        if self.committed.views == self.drawing.views {
+                            self.committed = self.drawing.clone();
+                        }
+                        news = format!(
+                            "Views updated; the sheet scale is now {} so every view fits",
+                            self.drawing.sheet.scale
+                        );
+                    }
                 }
-                "Views updated".into()
+                if let Some(why) = self.failed.values().next() {
+                    news = format!("Views updated, but a view cannot be shown: {why}");
+                }
+                news
             }
             JobResult::Failed(e) => {
                 self.geometry.clear();
+                self.failed.clear();
                 self.part = None;
                 self.pickables.clear();
                 self.problem = Some(e.clone());
@@ -313,6 +389,79 @@ impl DrawingSession {
         before != self.drawing.dimensions.len()
     }
 
+    fn delete_callout(&mut self) -> bool {
+        let Some(id) = self.selected_callout.take() else { return false };
+        let before = self.drawing.callouts.len();
+        self.drawing.callouts.retain(|c| c.id != id);
+        before != self.drawing.callouts.len()
+    }
+
+    /// Deletes the selected section or detail view and the views made from it. Returns a
+    /// status line, or `None` when no such view is selected.
+    fn delete_view(&mut self) -> Option<String> {
+        let id = self.selected.filter(|id| self.drawing.view(*id).is_some_and(|v| v.role.is_derived()))?;
+        let title = self.drawing.view(id).map(|v| v.title(self.drawing.sheet.projection)).unwrap_or_default();
+        let n = self.drawing.remove_view(id);
+        self.selected = None;
+        Some(if n > 1 {
+            format!("{title} deleted, with the {} view{} made from it", n - 1, if n == 2 { "" } else { "s" })
+        } else {
+            format!("{title} deleted")
+        })
+    }
+
+    /// Brings in a callout for every Hole feature not yet called out. Returns a status line.
+    fn insert_hole_callouts(&mut self) -> String {
+        let Some(part) = &self.part else {
+            return "Hole Callouts needs the views: wait for them to update, or fix the part first".into();
+        };
+        if part.holes.is_empty() {
+            return "The part has no Hole feature to call out".into();
+        }
+        let new = callout::hole_callouts(&self.drawing, part);
+        if new.is_empty() {
+            let all = part.holes.iter().all(|h| self.drawing.callouts.iter().any(|c| c.feature == h.feature));
+            return if all {
+                "Every Hole feature is already called out".into()
+            } else {
+                "No front, top or side view looks along the holes' axes, so they cannot be called out".into()
+            };
+        }
+        let n = new.len();
+        for c in new {
+            self.drawing.add_callout(c);
+        }
+        format!("Added {n} hole callout{}", if n == 1 { "" } else { "s" })
+    }
+
+    /// Turns the drawing tools off.
+    fn tools_off(&mut self) {
+        self.tool = None;
+        self.section_tool = None;
+        self.detail_tool = None;
+    }
+
+    fn any_tool(&self) -> bool {
+        self.tool.is_some() || self.section_tool.is_some() || self.detail_tool.is_some()
+    }
+
+    /// Makes the section view the Section View tool has points for. Returns a status line.
+    fn finish_section(&mut self) -> String {
+        let Some(t) = self.section_tool.take() else { return String::new() };
+        let (Some(view), false) = (t.view, t.points.is_empty()) else {
+            self.section_tool = Some(t);
+            return "Section View: click a front, top, side or section view where the cutting line goes first".into();
+        };
+        let Some(o) = self.drawing.view_orientation(view) else { return String::new() };
+        let def = SectionDef::new(view, &o.axes(), t.horizontal, &t.points);
+        let id = self.drawing.add_section(def);
+        self.selected = Some(id);
+        self.refit = true;
+        let label = self.drawing.view(id).map(|v| v.label.clone()).unwrap_or_default();
+        self.start_update();
+        format!("Section {label}-{label} added; it is being cut. Flip its direction in the left pane")
+    }
+
     fn commit(&mut self) {
         if self.dragging {
             return;
@@ -346,11 +495,12 @@ impl Drop for DrawingSession {
     }
 }
 
-fn view_label(role: ViewRole, projection: Projection) -> &'static str {
-    role.orientation(projection).label()
-}
-
 fn view_icon(role: ViewRole, projection: Projection) -> Icon {
+    match role {
+        ViewRole::Section => return Icon::Section,
+        ViewRole::Detail => return Icon::DetailView,
+        _ => {}
+    }
     match role.orientation(projection) {
         anvil_drawing::Orientation::Front => Icon::ViewFront,
         anvil_drawing::Orientation::Top => Icon::ViewTop,
@@ -470,9 +620,13 @@ impl AnvilApp {
             if s.selected_dim.is_some_and(|id| s.drawing.dimension(id).is_none()) {
                 s.selected_dim = None;
             }
+            if s.selected_callout.is_some_and(|id| !s.drawing.callouts.iter().any(|c| c.id == id)) {
+                s.selected_callout = None;
+            }
             if part_changed
                 || s.projected_for != Some(s.drawing.sheet.projection)
                 || s.configured_for.as_ref() != Some(&s.drawing.configuration)
+                || s.derived_for.as_ref() != Some(&derived_key(&s.drawing))
             {
                 s.start_update();
             }
@@ -555,6 +709,7 @@ impl AnvilApp {
             anvil_drawing::export_pdf(&s.drawing, &s.geometry, s.part.as_ref(), &path, &s.name())
         };
         let left_out = s.picture().dims.iter().filter(|d| d.dangling).count();
+        let not_shown = s.failed.len();
         match result {
             Ok(()) if left_out > 0 => {
                 self.status = format!(
@@ -563,6 +718,14 @@ impl AnvilApp {
                     if left_out == 1 { "" } else { "s" },
                     if left_out == 1 { "es" } else { "" },
                     if left_out == 1 { "was" } else { "were" },
+                )
+            }
+            Ok(()) if not_shown > 0 => {
+                self.status = format!(
+                    "Exported {}; {not_shown} view{} that cannot be cut {} left out",
+                    path.display(),
+                    if not_shown == 1 { "" } else { "s" },
+                    if not_shown == 1 { "was" } else { "were" },
                 )
             }
             Ok(()) => self.status = format!("Exported {}", path.display()),
@@ -596,24 +759,87 @@ impl AnvilApp {
             return;
         };
         if s.tool.take().is_none() {
+            s.tools_off();
             s.tool = Some(DimTool::default());
             self.status =
-                "Reference Dimension: pick a line, circle, arc or point on a front, top or side view, then click where the value goes"
+                "Reference Dimension: pick a line, circle, arc or point on a view (not the isometric), then click where the value goes"
                     .into();
         } else {
             self.status = "Reference Dimension off".into();
         }
     }
 
-    /// Deletes the selected dimension (Delete). Returns true if there was one.
+    /// Deletes the selected dimension, callout, or section or detail view (Delete).
+    /// Returns true if there was one.
     pub(super) fn drawing_delete(&mut self) -> bool {
         let Some(s) = &mut self.drw else { return false };
         if s.delete_dimension() {
             self.status = "Dimension deleted".into();
             true
+        } else if s.delete_callout() {
+            self.status = "Hole callout deleted".into();
+            true
+        } else if let Some(m) = s.delete_view() {
+            self.status = m;
+            true
         } else {
             false
         }
+    }
+
+    /// Calls out the part's Hole features (Hole Callouts).
+    pub(super) fn drawing_hole_callouts(&mut self) {
+        let Some(s) = &mut self.drw else {
+            self.message = Some((
+                "Hole Callouts".into(),
+                "Open or start a drawing to call out its part's holes.".into(),
+            ));
+            return;
+        };
+        if s.job.is_some() {
+            self.status = "The views are still updating; Hole Callouts works once they are done".into();
+            return;
+        }
+        self.status = s.insert_hole_callouts();
+    }
+
+    /// Turns the Section View tool on or off.
+    pub(super) fn drawing_section_view(&mut self) {
+        let Some(s) = &mut self.drw else {
+            self.message =
+                Some(("Section View".into(), "Open or start a drawing to add a section view.".into()));
+            return;
+        };
+        if s.section_tool.is_some() {
+            s.section_tool = None;
+            self.status = "Section View off".into();
+            return;
+        }
+        s.tools_off();
+        s.section_tool = Some(SectionTool { horizontal: true, view: None, points: Vec::new() });
+        self.status =
+            "Section View: click on a front, top, side or section view where the cutting line goes; \
+            click more points for an offset section, then press Enter or Finish"
+                .into();
+    }
+
+    /// Turns the Detail View tool on or off.
+    pub(super) fn drawing_detail_view(&mut self) {
+        let Some(s) = &mut self.drw else {
+            self.message =
+                Some(("Detail View".into(), "Open or start a drawing to add a detail view.".into()));
+            return;
+        };
+        if s.detail_tool.is_some() {
+            s.detail_tool = None;
+            self.status = "Detail View off".into();
+            return;
+        }
+        s.tools_off();
+        s.detail_tool = Some(DetailTool::default());
+        self.status =
+            "Detail View: click the centre of the circle to show on a view, then a point on the circle"
+                .into();
     }
 
     /// Points the drawing at another part file.
@@ -666,7 +892,8 @@ impl AnvilApp {
         let projection = s.projected_for.is_some() && s.projected_for != Some(s.drawing.sheet.projection);
         let configuration =
             s.configured_for.is_some() && s.configured_for.as_ref() != Some(&s.drawing.configuration);
-        if s.job.is_none() && (projection || configuration) {
+        let derived = s.derived_for.is_some() && s.derived_for.as_ref() != Some(&derived_key(&s.drawing));
+        if (s.job.is_none() && (projection || configuration)) || derived {
             s.start_update();
         }
         s.commit();
@@ -676,9 +903,39 @@ impl AnvilApp {
         let busy = self.drw.as_ref().is_some_and(|s| s.job.is_some());
         let ready = self.drw.as_ref().is_some_and(|s| s.part.is_some() && s.job.is_none());
         let tool_on = self.drw.as_ref().is_some_and(|s| s.tool.is_some());
+        let section_on = self.drw.as_ref().is_some_and(|s| s.section_tool.is_some());
+        let detail_on = self.drw.as_ref().is_some_and(|s| s.detail_tool.is_some());
+        let mark = |ui: &egui::Ui, r: egui::Rect| {
+            ui.painter().rect_stroke(
+                r,
+                4.0_f32,
+                Stroke::new(1.5_f32, Palette::of(ui).accent),
+                egui::StrokeKind::Inside,
+            );
+        };
         theme::command_group(ui, "Views", |ui| {
             if theme::command_button(ui, Icon::Rebuild, "Update Views", None).clicked() {
                 self.update_views();
+            }
+            let r = ui.add_enabled_ui(ready, |ui| {
+                theme::command_button(ui, Icon::Section, "Section View", None)
+                    .on_hover_text("Cut a section view along a horizontal or vertical line on a view")
+            });
+            if section_on {
+                mark(ui, r.response.rect);
+            }
+            if r.inner.clicked() {
+                self.drawing_section_view();
+            }
+            let r = ui.add_enabled_ui(ready, |ui| {
+                theme::command_button(ui, Icon::DetailView, "Detail View", None)
+                    .on_hover_text("Show a circle of a view at a larger scale")
+            });
+            if detail_on {
+                mark(ui, r.response.rect);
+            }
+            if r.inner.clicked() {
+                self.drawing_detail_view();
             }
         });
         theme::group_rule(ui);
@@ -696,15 +953,17 @@ impl AnvilApp {
                 )
             });
             if tool_on {
-                ui.painter().rect_stroke(
-                    r.response.rect,
-                    4.0_f32,
-                    Stroke::new(1.5_f32, Palette::of(ui).accent),
-                    egui::StrokeKind::Inside,
-                );
+                mark(ui, r.response.rect);
             }
             if r.inner.clicked() {
                 self.drawing_reference_dimension();
+            }
+            let r = ui.add_enabled_ui(ready, |ui| {
+                theme::command_button(ui, Icon::HoleCallout, "Hole Callouts", None)
+                    .on_hover_text("Call out the part's Hole features: type, sizes and count")
+            });
+            if r.inner.clicked() {
+                self.drawing_hole_callouts();
             }
         });
         theme::group_rule(ui);
@@ -840,10 +1099,16 @@ impl AnvilApp {
         let projection = s.drawing.sheet.projection;
         let mut select = None;
         for v in &s.drawing.views {
-            let look = RowLook { selected: s.selected == Some(v.id), ..Default::default() };
-            if theme::tree_row(ui, view_icon(v.role, projection), view_label(v.role, projection), look)
-                .clicked()
-            {
+            let look = RowLook {
+                selected: s.selected == Some(v.id),
+                error: s.failed.contains_key(&v.id),
+                ..Default::default()
+            };
+            let mut row = theme::tree_row(ui, view_icon(v.role, projection), &v.title(projection), look);
+            if let Some(why) = s.failed.get(&v.id) {
+                row = row.on_hover_text(why);
+            }
+            if row.clicked() {
                 select = Some(v.id);
             }
         }
@@ -851,42 +1116,162 @@ impl AnvilApp {
             s.selected = if s.selected == Some(id) { None } else { Some(id) };
         }
 
-        if let Some(v) = s.selected.and_then(|id| s.drawing.view_mut(id)) {
-            ui.add_space(6.0);
-            theme::section_label(ui, &format!("{} view", view_label(v.role, projection)));
-            egui::Grid::new("drawing-view").num_columns(2).min_col_width(92.0).spacing([8.0, 6.0]).show(
-                ui,
-                |ui| {
-                    let name = ui.label("Display").id;
-                    egui::ComboBox::from_id_salt("view-display")
-                        .width(150.0)
-                        .selected_text(v.display.label())
-                        .show_ui(ui, |ui| {
-                            for d in DisplayStyle::ALL {
-                                ui.selectable_value(&mut v.display, d, d.label());
-                            }
-                        })
-                        .response
-                        .labelled_by(name);
-                    ui.end_row();
-                    let name = ui.label("Tangent edges").id;
-                    egui::ComboBox::from_id_salt("view-tangent")
-                        .width(150.0)
-                        .selected_text(v.tangent.label())
-                        .show_ui(ui, |ui| {
-                            for t in TangentEdges::ALL {
-                                ui.selectable_value(&mut v.tangent, t, t.label());
-                            }
-                        })
-                        .response
-                        .labelled_by(name);
-                    ui.end_row();
-                },
-            );
-        }
-
+        self.drawing_tool_pane(ui);
+        self.drawing_view_pane(ui);
         self.drawing_dimensions_pane(ui);
+        self.drawing_callouts_pane(ui);
         self.title_block_pane(ui);
+    }
+
+    /// The left pane's options for the Section View and Detail View tools, while one is on.
+    fn drawing_tool_pane(&mut self, ui: &mut egui::Ui) {
+        let pal = Palette::of(ui);
+        let Some(s) = &mut self.drw else { return };
+        let mut status = None;
+        if let Some(t) = &mut s.section_tool {
+            ui.add_space(6.0);
+            theme::section_label(ui, "Section View");
+            ui.horizontal(|ui| {
+                ui.label("Cutting line");
+                ui.selectable_value(&mut t.horizontal, true, "Horizontal");
+                ui.selectable_value(&mut t.horizontal, false, "Vertical");
+            });
+            ui.label(
+                RichText::new(match t.points.len() {
+                    0 => "Click on a front, top, side or section view where the line goes.".to_string(),
+                    1 => "One point: a full section. Click more points for the line to step through, or Finish.".to_string(),
+                    n => format!("{n} points: an offset section that steps between them."),
+                })
+                .color(pal.text_weak),
+            );
+            let mut finish = false;
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                finish = ui
+                    .add_enabled_ui(!t.points.is_empty(), |ui| theme::primary_button(ui, "Finish"))
+                    .inner
+                    .clicked();
+                cancel = theme::secondary_button(ui, "Cancel").clicked();
+            });
+            if cancel {
+                s.section_tool = None;
+                status = Some("Section View off".to_string());
+            } else if finish {
+                status = Some(s.finish_section());
+            }
+        } else if let Some(t) = &s.detail_tool {
+            ui.add_space(6.0);
+            theme::section_label(ui, "Detail View");
+            ui.label(
+                RichText::new(if t.centre.is_none() {
+                    "Click the centre of the circle to show, on any view."
+                } else {
+                    "Now click a point on the circle."
+                })
+                .color(pal.text_weak),
+            );
+            if theme::secondary_button(ui, "Cancel").clicked() {
+                s.detail_tool = None;
+                status = Some("Detail View off".to_string());
+            }
+        }
+        if let Some(m) = status {
+            self.status = m;
+        }
+    }
+
+    /// The left pane's section for the selected view: display, and for section and detail
+    /// views their letter, direction or scale, and Delete.
+    fn drawing_view_pane(&mut self, ui: &mut egui::Ui) {
+        let pal = Palette::of(ui);
+        let Some(s) = &mut self.drw else { return };
+        let projection = s.drawing.sheet.projection;
+        let failed = s.selected.and_then(|id| s.failed.get(&id).cloned());
+        let Some(v) = s.selected.and_then(|id| s.drawing.view_mut(id)) else { return };
+        ui.add_space(6.0);
+        theme::section_label(ui, &format!("{} view", v.title(projection)));
+        if let Some(why) = failed {
+            ui.label(RichText::new(format!("This view cannot be shown: {why}.")).color(pal.error));
+        }
+        let mut delete = false;
+        egui::Grid::new("drawing-view").num_columns(2).min_col_width(92.0).spacing([8.0, 6.0]).show(
+            ui,
+            |ui| {
+                let name = ui.label("Display").id;
+                egui::ComboBox::from_id_salt("view-display")
+                    .width(150.0)
+                    .selected_text(v.display.label())
+                    .show_ui(ui, |ui| {
+                        for d in DisplayStyle::ALL {
+                            ui.selectable_value(&mut v.display, d, d.label());
+                        }
+                    })
+                    .response
+                    .labelled_by(name);
+                ui.end_row();
+                let name = ui.label("Tangent edges").id;
+                egui::ComboBox::from_id_salt("view-tangent")
+                    .width(150.0)
+                    .selected_text(v.tangent.label())
+                    .show_ui(ui, |ui| {
+                        for t in TangentEdges::ALL {
+                            ui.selectable_value(&mut v.tangent, t, t.label());
+                        }
+                    })
+                    .response
+                    .labelled_by(name);
+                ui.end_row();
+                if v.role.is_derived() {
+                    let name = ui.label("Letter").id;
+                    let mut text = v.label.clone();
+                    let r =
+                        ui.add(egui::TextEdit::singleline(&mut text).desired_width(60.0)).labelled_by(name);
+                    let text: String = text.chars().filter(|c| c.is_ascii_alphanumeric()).take(3).collect();
+                    if r.changed() && !text.is_empty() {
+                        v.label = text.to_ascii_uppercase();
+                    }
+                    ui.end_row();
+                }
+                if let Some(sec) = &mut v.section {
+                    ui.label("Direction");
+                    if ui
+                        .button("Flip Direction")
+                        .on_hover_text("Look the other way along the cutting line")
+                        .clicked()
+                    {
+                        sec.flip();
+                    }
+                    ui.end_row();
+                }
+                if let Some(det) = &mut v.detail {
+                    let name = ui.label("Scale").id;
+                    let id = ui.id().with(("detail-scale", v.id));
+                    let mut text =
+                        ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| det.scale.to_string());
+                    let r =
+                        ui.add(egui::TextEdit::singleline(&mut text).desired_width(70.0)).labelled_by(name);
+                    if r.lost_focus() {
+                        if let Ok(sc) = Scale::parse(&text) {
+                            det.scale = sc;
+                        }
+                        ui.data_mut(|d| d.remove::<String>(id));
+                    } else if r.has_focus() {
+                        ui.data_mut(|d| d.insert_temp(id, text));
+                    }
+                    ui.end_row();
+                }
+            },
+        );
+        if v.role.is_derived() {
+            delete = theme::secondary_button(ui, "Delete View")
+                .on_hover_text("Delete this view, the views made from it, and their dimensions and callouts")
+                .clicked();
+        }
+        if delete {
+            if let Some(m) = s.delete_view() {
+                self.status = m;
+            }
+        }
     }
 
     /// The left pane's Dimensions section: counts, what no longer attaches, and the
@@ -950,6 +1335,49 @@ impl AnvilApp {
         );
         if theme::secondary_button(ui, "Delete").clicked() {
             s.delete_dimension();
+        }
+    }
+
+    /// The left pane's Hole callouts section, once the drawing has any.
+    fn drawing_callouts_pane(&mut self, ui: &mut egui::Ui) {
+        let pal = Palette::of(ui);
+        let Some(s) = &mut self.drw else { return };
+        if s.drawing.callouts.is_empty() {
+            return;
+        }
+        ui.add_space(6.0);
+        theme::section_label(ui, "Hole callouts");
+        let pic = s.picture();
+        let n = s.drawing.callouts.len();
+        ui.label(format!("{n} callout{}", if n == 1 { "" } else { "s" }));
+        let missing = pic.callouts_missing.len();
+        if missing > 0 && s.part.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{missing} callout{} no longer {} a hole in the part (suppressed, deleted, or not square to the view).",
+                        if missing == 1 { "" } else { "s" },
+                        if missing == 1 { "finds" } else { "find" },
+                    ))
+                    .color(pal.error),
+                );
+                if theme::secondary_button(ui, "Remove").clicked() {
+                    let gone = pic.callouts_missing.clone();
+                    s.drawing.callouts.retain(|c| !gone.contains(&c.id));
+                }
+            });
+        }
+        let Some(id) = s.selected_callout else { return };
+        let Some(c) = pic.callouts.iter().find(|c| c.id == id) else { return };
+        ui.add_space(4.0);
+        let text: Vec<&str> = c.text.iter().map(|n| n.text.as_str()).collect();
+        ui.label(RichText::new(format!("Hole callout: {}", text.join(" / "))).strong());
+        ui.label(
+            RichText::new("From the Hole feature; change it in the part. Drag its text to move it.")
+                .color(pal.text_weak),
+        );
+        if theme::secondary_button(ui, "Delete").clicked() {
+            s.delete_callout();
         }
     }
 
@@ -1057,37 +1485,55 @@ impl AnvilApp {
             }
         }
         let pic = s.picture();
-        let scale = s.drawing.sheet.scale.factor();
-        let projection = s.drawing.sheet.projection;
-        let dim_at = |p: DVec2| {
-            pic.dims
-                .iter()
-                .find(|d| {
-                    let (lo, hi) = d.text_box;
-                    p.x >= lo.x - 0.5 && p.x <= hi.x + 0.5 && p.y >= lo.y - 0.5 && p.y <= hi.y + 0.5
-                })
-                .map(|d| d.id)
+        let annotation_at = |p: DVec2| {
+            let inside = |(lo, hi): (DVec2, DVec2)| {
+                p.x >= lo.x - 0.5 && p.x <= hi.x + 0.5 && p.y >= lo.y - 0.5 && p.y <= hi.y + 0.5
+            };
+            pic.dims.iter().find(|d| inside(d.text_box)).map(|d| Annotation::Dim(d.id)).or_else(|| {
+                pic.callouts.iter().find(|c| inside(c.text_box)).map(|c| Annotation::Callout(c.id))
+            })
         };
-        // Drag a dimension's value to move it; drag anywhere else to pan.
-        if resp.drag_started() && s.tool.is_none() {
+        let placed = |id: u32| pic.views.iter().find(|v| v.id == id).copied();
+        // Drag a dimension's value or a callout's text to move it; drag anywhere else to pan.
+        if resp.drag_started() && !s.any_tool() {
             let origin = ctx.input(|i| i.pointer.press_origin());
-            if let Some(id) = origin.and_then(|m| dim_at(to_sheet(&sv, rect, m))) {
-                s.dragging = true;
-                s.selected_dim = Some(id);
-                s.selected = None;
+            match origin.and_then(|m| annotation_at(to_sheet(&sv, rect, m))) {
+                Some(Annotation::Dim(id)) => {
+                    s.dragging = true;
+                    s.selected_dim = Some(id);
+                    s.selected_callout = None;
+                    s.selected = None;
+                }
+                Some(Annotation::Callout(id)) => {
+                    s.dragging = true;
+                    s.selected_callout = Some(id);
+                    s.selected_dim = None;
+                    s.selected = None;
+                }
+                None => {}
             }
         }
         if resp.dragged() {
             let d = resp.drag_delta();
             let delta = DVec2::new(d.x as f64, -d.y as f64) / sv.zoom as f64;
-            match s.selected_dim.filter(|_| s.dragging) {
-                Some(id) => {
-                    let view = s.drawing.dimension(id).and_then(|x| s.drawing.view(x.view)).map(|v| v.role);
-                    if let (Some(role), Some(dim)) = (view, s.drawing.dimension_mut(id)) {
-                        dims::move_label(dim, role.orientation(projection), delta / scale);
-                    }
+            let dim = s.selected_dim.filter(|_| s.dragging);
+            let call = s.selected_callout.filter(|_| s.dragging);
+            if let Some(id) = dim {
+                let view = s.drawing.dimension(id).map(|x| x.view);
+                let o = view.and_then(|v| s.drawing.view_orientation(v));
+                let vs = view.and_then(placed).map_or(1.0, |p| p.scale);
+                if let (Some(o), Some(dim)) = (o, s.drawing.dimension_mut(id)) {
+                    dims::move_label(dim, o, delta / vs);
                 }
-                None => sv.centre -= delta,
+            } else if let Some(id) = call {
+                let view = s.drawing.callouts.iter().find(|c| c.id == id).map(|c| c.view);
+                let o = view.and_then(|v| s.drawing.view_orientation(v));
+                let vs = view.and_then(placed).map_or(1.0, |p| p.scale);
+                if let (Some(o), Some(c)) = (o, s.drawing.callout_mut(id)) {
+                    callout::move_text(c, o, delta / vs);
+                }
+            } else {
+                sv.centre -= delta;
             }
         }
         if resp.drag_stopped() {
@@ -1110,40 +1556,42 @@ impl AnvilApp {
 
         let zoom = sv.zoom;
         for st in &pic.strokes {
-            let pts: Vec<Pos2> = st.path.points(0.3 / zoom as f64).into_iter().map(&to_screen).collect();
-            let width = (st.pen.width() as f32 * zoom).max(if st.pen == Pen::Visible { 1.2 } else { 0.8 });
-            let stroke = Stroke::new(width, INK);
-            match st.pen.dash() {
-                Some((d, g)) => {
-                    painter.extend(egui::Shape::dashed_line(
-                        &pts,
-                        stroke,
-                        (d as f32 * zoom).max(2.0),
-                        (g as f32 * zoom).max(1.5),
-                    ));
-                }
-                None => {
-                    painter.add(egui::Shape::line(pts, stroke));
-                }
-            }
+            paint_path(&painter, &to_screen, &st.path, st.pen, zoom, INK);
         }
-        for n in &pic.notes {
+        for (_, t) in &pic.fills {
+            painter.add(egui::Shape::convex_polygon(
+                t.iter().map(|p| to_screen(*p)).collect(),
+                INK,
+                Stroke::NONE,
+            ));
+        }
+        for n in pic.notes.iter().chain(pic.labels.iter()) {
             paint_note(&painter, &to_screen, n, zoom, INK);
         }
 
         let pointer = resp.hover_pos();
-        let hover_dim = pointer.and_then(|m| dim_at(to_sheet(&sv, rect, m))).filter(|_| s.tool.is_none());
+        let hover_ann = pointer.and_then(|m| annotation_at(to_sheet(&sv, rect, m))).filter(|_| !s.any_tool());
         for d in &pic.dims {
             let colour = if s.selected_dim == Some(d.id) {
                 pal.select
             } else if d.dangling {
                 pal.error
-            } else if hover_dim == Some(d.id) {
+            } else if hover_ann == Some(Annotation::Dim(d.id)) {
                 pal.select.gamma_multiply(0.7)
             } else {
                 INK
             };
             paint_dim(&painter, &to_screen, d, zoom, colour);
+        }
+        for c in &pic.callouts {
+            let colour = if s.selected_callout == Some(c.id) {
+                pal.select
+            } else if hover_ann == Some(Annotation::Callout(c.id)) {
+                pal.select.gamma_multiply(0.7)
+            } else {
+                INK
+            };
+            paint_callout(&painter, &to_screen, c, zoom, colour);
         }
 
         // Which view the pointer is over.
@@ -1156,53 +1604,59 @@ impl AnvilApp {
                 })
                 .map(|v| v.id)
         });
+        // A point under the pointer on a view's plane (model millimetres).
+        let at_view = |id: u32, m: Pos2| placed(id).map(|v| (to_sheet(&sv, rect, m) - v.origin) / v.scale);
+        let orientation = |id: u32| s.drawing.view_orientation(id);
+        let pictorial = |id: u32| orientation(id).is_none_or(|o| o.is_pictorial());
 
-        // The Reference Dimension tool: highlight what can be picked, preview the
-        // dimension, and pick or place on click.
         let mut status = None;
         if s.tool.is_some() {
-            let tol = 6.0 / (zoom as f64 * scale);
-            let at_view = |id: u32, m: Pos2| {
-                pic.views.iter().find(|v| v.id == id).map(|v| (to_sheet(&sv, rect, m) - v.origin) / scale)
-            };
-            let role = |id: u32| s.drawing.view(id).map(|v| v.role);
+            // The Reference Dimension tool: highlight what can be picked, preview the
+            // dimension, and pick or place on click.
             let hover_pick = hover_view.zip(pointer).and_then(|(id, m)| {
-                if role(id) == Some(ViewRole::Isometric) {
+                if pictorial(id) {
                     return None;
                 }
+                let v = placed(id)?;
+                let tol = 6.0 / (zoom as f64 * v.scale);
                 let q = at_view(id, m)?;
                 dims::nearest(s.pickables.get(&id)?, q, tol).map(|p| (id, p))
             });
-            let origin_of = |id: u32| pic.views.iter().find(|v| v.id == id).map(|v| v.origin);
             let hi = Stroke::new(2.5_f32, pal.accent);
             if let Some((id, p)) = hover_pick {
-                if let Some(o) = origin_of(id) {
-                    paint_pick(&painter, &to_screen, &p, o, scale, hi);
+                if let Some(v) = placed(id) {
+                    paint_pick(&painter, &to_screen, &p, v.origin, v.scale, hi);
                 }
             }
             let tool = s.tool.as_ref();
             if let Some((id, t)) = tool.and_then(|t| t.view.map(|v| (v, t))) {
-                if let Some(o) = origin_of(id) {
+                if let (Some(v), Some(o)) = (placed(id), orientation(id)) {
                     for p in &t.picks {
-                        paint_pick(&painter, &to_screen, p, o, scale, Stroke::new(2.5_f32, pal.select));
+                        paint_pick(
+                            &painter,
+                            &to_screen,
+                            p,
+                            v.origin,
+                            v.scale,
+                            Stroke::new(2.5_f32, pal.select),
+                        );
                     }
                     // The dimension the picks make with its value at the pointer.
                     if hover_pick.is_none() && !t.picks.is_empty() {
-                        if let (Some(m), Some(r)) = (pointer, role(id)) {
-                            let orientation = r.orientation(projection);
+                        if let Some(m) = pointer {
                             let preview = at_view(id, m)
-                                .and_then(|q| dims::reference_dimension(id, orientation, &t.picks, q))
+                                .and_then(|q| dims::reference_dimension(id, o, &t.picks, q))
                                 .and_then(|d| {
                                     let cx = ViewContext {
                                         part: s.part.as_ref(),
                                         geometry: s.geometry.get(&id),
-                                        orientation,
-                                        scale,
+                                        orientation: o,
+                                        scale: v.scale,
                                     };
                                     dims::resolve(&d, &cx, s.pickables.get(&id))
                                 });
                             if let Some(r) = preview {
-                                let d = dims::picture(0, &r, true, o, scale);
+                                let d = dims::picture(0, &r, true, v.origin, v.scale);
                                 paint_dim(&painter, &to_screen, &d, zoom, pal.accent);
                             }
                         }
@@ -1210,46 +1664,170 @@ impl AnvilApp {
                 }
             }
             if resp.clicked() {
-                let iso = hover_view.and_then(role) == Some(ViewRole::Isometric);
-                let t = s.tool.get_or_insert_with(DimTool::default);
-                if let Some((id, p)) = hover_pick {
-                    if t.view != Some(id) || t.picks.len() >= anvil_sketch::dimension::MAX_PICKS {
-                        t.picks.clear();
-                    }
-                    t.view = Some(id);
-                    if !t.picks.contains(&p) {
-                        t.picks.push(p);
-                    }
-                    status =
-                        Some(format!("{} picked: pick more, or click where the value goes", t.picks.len()));
-                } else if iso && t.picks.is_empty() {
-                    status = Some(
-                        "Reference dimensions go on the front, top and side views; the isometric view is foreshortened"
-                            .into(),
-                    );
-                } else if let (Some(id), Some(m)) = (t.view.filter(|_| !t.picks.is_empty()), pointer) {
-                    let picks = std::mem::take(&mut t.picks);
-                    let made = role(id).zip(at_view(id, m)).and_then(|(r, q)| {
-                        dims::reference_dimension(id, r.orientation(projection), &picks, q)
-                    });
-                    match made {
-                        Some(d) => {
-                            let new = s.drawing.add_dimension(d);
-                            s.selected_dim = Some(new);
-                            status = Some("Reference dimension added; pick again for the next one".into());
+                let iso = hover_view.is_some_and(pictorial);
+                let made = match (&mut s.tool, hover_pick) {
+                    (Some(t), Some((id, p))) => {
+                        if t.view != Some(id) || t.picks.len() >= anvil_sketch::dimension::MAX_PICKS {
+                            t.picks.clear();
                         }
-                        None => status = Some("Those picks do not make a dimension; pick again".into()),
+                        t.view = Some(id);
+                        if !t.picks.contains(&p) {
+                            t.picks.push(p);
+                        }
+                        status = Some(format!(
+                            "{} picked: pick more, or click where the value goes",
+                            t.picks.len()
+                        ));
+                        None
+                    }
+                    (Some(t), None) if iso && t.picks.is_empty() => {
+                        status = Some(
+                            "Reference dimensions do not go on the isometric view; it is foreshortened"
+                                .into(),
+                        );
+                        None
+                    }
+                    (Some(t), None) => match (t.view.filter(|_| !t.picks.is_empty()), pointer) {
+                        (Some(id), Some(m)) => {
+                            let picks = std::mem::take(&mut t.picks);
+                            let d = orientation(id)
+                                .zip(at_view(id, m))
+                                .and_then(|(o, q)| dims::reference_dimension(id, o, &picks, q));
+                            if d.is_none() {
+                                status = Some("Those picks do not make a dimension; pick again".into());
+                            }
+                            d
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(d) = made {
+                    let new = s.drawing.add_dimension(d);
+                    s.selected_dim = Some(new);
+                    status = Some("Reference dimension added; pick again for the next one".into());
+                }
+            }
+        } else if s.section_tool.is_some() {
+            // The Section View tool: preview the cutting line through the points so far and
+            // the pointer, and add a point on click.
+            let target = s.section_tool.as_ref().and_then(|t| t.view).or(hover_view);
+            let usable =
+                |id: u32| s.drawing.view(id).is_some_and(|v| v.role != ViewRole::Detail) && !pictorial(id);
+            if let (Some(id), Some(m)) = (target.filter(|id| usable(*id)), pointer) {
+                if let (Some(v), Some(o), Some(q)) = (placed(id), orientation(id), at_view(id, m)) {
+                    if let Some(t) = &s.section_tool {
+                        let mut pts = t.points.clone();
+                        pts.push(q);
+                        let def = SectionDef::new(id, &o.axes(), t.horizontal, &pts);
+                        if let Some((lo, hi)) = s.geometry.get(&id).and_then(|g| g.bounds()) {
+                            let (line, _, _) = anvil_drawing::section::line_on_parent(
+                                &def,
+                                &o.axes(),
+                                lo,
+                                hi,
+                                4.0 / v.scale,
+                            );
+                            let path =
+                                Path2::Poly(line.into_iter().map(|p| v.origin + p * v.scale).collect());
+                            paint_path(&painter, &to_screen, &path, Pen::Chain, zoom, pal.accent);
+                        }
+                        for p in &t.points {
+                            painter.circle_filled(to_screen(v.origin + *p * v.scale), 3.5, pal.select);
+                        }
+                    }
+                }
+            }
+            if resp.clicked() {
+                if let (Some(t), Some(m)) = (&mut s.section_tool, pointer) {
+                    match hover_view {
+                        Some(id) if t.view.is_none_or(|v| v == id) && usable(id) => {
+                            if let Some(q) = at_view(id, m) {
+                                t.view = Some(id);
+                                t.points.push(q);
+                                status = Some(format!(
+                                    "{} point{} on the cutting line: click more for an offset section, or press Enter",
+                                    t.points.len(),
+                                    if t.points.len() == 1 { "" } else { "s" }
+                                ));
+                            }
+                        }
+                        Some(id) if t.view.is_some_and(|v| v != id) => {
+                            status = Some("The cutting line's points all go on one view".into());
+                        }
+                        Some(_) => {
+                            status = Some(
+                                "Section views are cut along a line on a front, top, side or section view"
+                                    .into(),
+                            );
+                        }
+                        None => {}
+                    }
+                }
+            }
+        } else if s.detail_tool.is_some() {
+            // The Detail View tool: the centre, then a point on the circle.
+            let centre = s.detail_tool.as_ref().and_then(|t| t.view.zip(t.centre));
+            if let (Some((id, c)), Some(m)) = (centre, pointer) {
+                if let (Some(v), Some(q)) = (placed(id), at_view(id, m)) {
+                    let r = c.distance(q) * v.scale;
+                    painter.circle_stroke(
+                        to_screen(v.origin + c * v.scale),
+                        r as f32 * zoom,
+                        Stroke::new(1.5_f32, pal.accent),
+                    );
+                }
+            }
+            if resp.clicked() {
+                if let (Some(t), Some(m)) = (&mut s.detail_tool, pointer) {
+                    match (t.view.zip(t.centre), hover_view) {
+                        (None, Some(id)) => {
+                            t.view = Some(id);
+                            t.centre = at_view(id, m);
+                            status = Some("Now click a point on the circle".into());
+                        }
+                        (None, None) => {}
+                        (Some((id, c)), _) => {
+                            let r = at_view(id, m).map_or(0.0, |q| q.distance(c));
+                            let o = orientation(id);
+                            if let (true, Some(o)) = (r > 1e-6, o) {
+                                let def = DetailDef {
+                                    parent: id,
+                                    centre: o.axes().lift(c).to_array(),
+                                    radius: r,
+                                    scale: detail::default_scale(s.drawing.view_scale(id)),
+                                };
+                                s.detail_tool = None;
+                                let new = s.drawing.add_detail(def);
+                                s.selected = Some(new);
+                                s.refit = true;
+                                let label = s.drawing.view(new).map(|v| v.label.clone()).unwrap_or_default();
+                                s.start_update();
+                                status = Some(format!("Detail {label} added"));
+                            } else {
+                                status = Some(
+                                    "Click a point away from the centre to give the circle a size".into(),
+                                );
+                            }
+                        }
                     }
                 }
             }
         } else if resp.clicked() {
-            match pointer.and_then(|m| dim_at(to_sheet(&sv, rect, m))) {
-                Some(id) => {
+            match pointer.and_then(|m| annotation_at(to_sheet(&sv, rect, m))) {
+                Some(Annotation::Dim(id)) => {
                     s.selected_dim = Some(id);
+                    s.selected_callout = None;
+                    s.selected = None;
+                }
+                Some(Annotation::Callout(id)) => {
+                    s.selected_callout = Some(id);
+                    s.selected_dim = None;
                     s.selected = None;
                 }
                 None => {
                     s.selected_dim = None;
+                    s.selected_callout = None;
                     s.selected = hover_view;
                 }
             }
@@ -1257,24 +1835,48 @@ impl AnvilApp {
 
         // Keys, when no text field has them.
         if !focused_text {
-            let (del, esc) =
-                ctx.input(|i| (i.key_pressed(egui::Key::Delete), i.key_pressed(egui::Key::Escape)));
-            if del && s.delete_dimension() {
-                status = Some("Dimension deleted".into());
+            let (del, esc, enter) = ctx.input(|i| {
+                (
+                    i.key_pressed(egui::Key::Delete),
+                    i.key_pressed(egui::Key::Escape),
+                    i.key_pressed(egui::Key::Enter),
+                )
+            });
+            if del {
+                if s.delete_dimension() {
+                    status = Some("Dimension deleted".into());
+                } else if s.delete_callout() {
+                    status = Some("Hole callout deleted".into());
+                } else if let Some(m) = s.delete_view() {
+                    status = Some(m);
+                }
+            }
+            if enter && s.section_tool.as_ref().is_some_and(|t| !t.points.is_empty()) {
+                status = Some(s.finish_section());
             }
             if esc {
-                match &mut s.tool {
-                    Some(t) if !t.picks.is_empty() => {
-                        t.picks.pop();
-                    }
-                    Some(_) => {
+                if let Some(t) = &mut s.tool {
+                    if t.picks.pop().is_none() {
                         s.tool = None;
                         status = Some("Reference Dimension off".into());
                     }
-                    None => {
-                        s.selected_dim = None;
-                        s.selected = None;
+                } else if let Some(t) = &mut s.section_tool {
+                    if t.points.pop().is_none() {
+                        s.section_tool = None;
+                        status = Some("Section View off".into());
+                    } else if t.points.is_empty() {
+                        t.view = None;
                     }
+                } else if let Some(t) = &mut s.detail_tool {
+                    t.view = None;
+                    if t.centre.take().is_none() {
+                        s.detail_tool = None;
+                        status = Some("Detail View off".into());
+                    }
+                } else {
+                    s.selected_dim = None;
+                    s.selected_callout = None;
+                    s.selected = None;
                 }
             }
         }
@@ -1284,9 +1886,12 @@ impl AnvilApp {
                 to_screen(v.lo - DVec2::splat(3.0)),
                 to_screen(v.hi + DVec2::splat(3.0)),
             );
+            if s.failed.contains_key(&v.id) {
+                painter.rect_stroke(r, 2.0_f32, Stroke::new(1.5_f32, pal.error), egui::StrokeKind::Outside);
+            }
             if s.selected == Some(v.id) {
                 painter.rect_stroke(r, 2.0_f32, Stroke::new(1.5_f32, pal.select), egui::StrokeKind::Outside);
-            } else if hover_view == Some(v.id) && hover_dim.is_none() {
+            } else if hover_view == Some(v.id) && hover_ann.is_none() {
                 painter.rect_stroke(
                     r,
                     2.0_f32,
@@ -1386,6 +1991,52 @@ fn paint_note(
         Align::Right => at.x - width,
     };
     painter.galley(egui::pos2(x, at.y - baseline), galley, colour);
+}
+
+/// Draws a line of the sheet with its pen's width and dashes.
+fn paint_path(
+    painter: &egui::Painter,
+    to_screen: &dyn Fn(DVec2) -> Pos2,
+    path: &Path2,
+    pen: Pen,
+    zoom: f32,
+    colour: Color32,
+) {
+    let pts: Vec<Pos2> = path.points(0.3 / zoom as f64).into_iter().map(to_screen).collect();
+    let thick = matches!(pen, Pen::Visible | Pen::CutEnds);
+    let width = (pen.width() as f32 * zoom).max(if thick { 1.2 } else { 0.8 });
+    let stroke = Stroke::new(width, colour);
+    match pen.dash() {
+        Some(dash) => {
+            // Dashes too short to see on screen are drawn at a readable size.
+            let on: Vec<f32> = dash.iter().step_by(2).map(|d| (*d as f32 * zoom).max(1.5)).collect();
+            let off: Vec<f32> = dash.iter().skip(1).step_by(2).map(|d| (*d as f32 * zoom).max(1.5)).collect();
+            painter.extend(egui::Shape::dashed_line_with_offset(&pts, stroke, &on, &off, 0.0));
+        }
+        None => {
+            painter.add(egui::Shape::line(pts, stroke));
+        }
+    }
+}
+
+fn paint_callout(
+    painter: &egui::Painter,
+    to_screen: &dyn Fn(DVec2) -> Pos2,
+    c: &CalloutPicture,
+    zoom: f32,
+    colour: Color32,
+) {
+    for p in &c.lines {
+        paint_path(painter, to_screen, p, Pen::Dim, zoom, colour);
+    }
+    painter.add(egui::Shape::convex_polygon(
+        c.arrow.iter().map(|p| to_screen(*p)).collect(),
+        colour,
+        Stroke::NONE,
+    ));
+    for n in &c.text {
+        paint_note(painter, to_screen, n, zoom, colour);
+    }
 }
 
 fn paint_dim(
@@ -1678,6 +2329,134 @@ mod tests {
             .collect();
         assert_eq!(dims.len(), 3);
         assert!(f.entities.iter().any(|e| e.get(1) == Some("B-31")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The block of [`block_part`] with a through counterbore for an M6 screw at (15, 10),
+    /// drilled into it from the Front plane.
+    pub(super) fn block_with_hole() -> Document {
+        use anvil_kernel::v2;
+        use anvil_model::hole::{Fit, Standard};
+        use anvil_model::{FeatureKind, HoleFeature, PlaneRef, SketchFeature};
+        let mut doc = block_part(30.0);
+        let mut pts = SketchFeature::new(PlaneRef::Front);
+        pts.sketch.add_point(v2(15.0, 10.0));
+        let ps = doc.add_feature(FeatureKind::Sketch(pts));
+        let mut h = HoleFeature::standard(ps, 1, Standard::IsoMetric, "M6", Fit::Normal).expect("M6");
+        h.reverse = true;
+        doc.add_feature(FeatureKind::Hole(h));
+        doc
+    }
+
+    #[test]
+    fn section_detail_and_callouts_save_reopen_undo_and_export() {
+        let ctx = egui::Context::default();
+        let mut app = AnvilApp::new(&ctx, None, None, None);
+        let dir = temp_dir("section");
+        let part = dir.join("h.anvprt");
+        let doc = block_with_hole();
+        doc.save(&part).expect("save");
+        let file = dir.join("h.anvdrw");
+        let mut d = Drawing::standard(String::new(), Sheet::default());
+        d.set_model(&part, Some(&file));
+        d.save(&file).expect("save drawing");
+        app.open_path(&file);
+        settle(&ctx, &mut app);
+
+        app.run_builtin(&ctx, "Hole Callouts").expect("command");
+        assert_eq!(app.status, "Added 1 hole callout");
+        step(&ctx, &mut app);
+        app.run_builtin(&ctx, "Hole Callouts").expect("command");
+        assert_eq!(app.status, "Every Hole feature is already called out");
+
+        // A section through the hole on the front view, made as the tool makes it.
+        app.run_builtin(&ctx, "Section View").expect("command");
+        let front = app.drw.as_ref().map(|s| s.drawing.views[0].id).expect("front");
+        if let Some(s) = &mut app.drw {
+            let t = s.section_tool.as_mut().expect("the tool is on");
+            t.view = Some(front);
+            t.points.push(DVec2::new(15.0, 10.0));
+            app.status = s.finish_section();
+        }
+        assert!(app.status.starts_with("Section A-A added"), "{}", app.status);
+        step(&ctx, &mut app);
+        settle(&ctx, &mut app);
+        let section = app.drw.as_ref().and_then(|s| s.selected).expect("the new view is selected");
+        {
+            let s = app.drw.as_ref().expect("drawing");
+            assert!(s.failed.is_empty(), "{:?}", s.failed);
+            assert!(!s.geometry[&section].hatch.is_empty(), "the cut faces are hatched");
+        }
+
+        // A detail of the section, added and committed as one step.
+        if let Some(s) = &mut app.drw {
+            let def = DetailDef {
+                parent: section,
+                centre: [15.0, 0.0, -5.0],
+                radius: 6.0,
+                scale: Scale { sheet: 2, model: 1 },
+            };
+            s.drawing.add_detail(def);
+        }
+        step(&ctx, &mut app);
+        settle(&ctx, &mut app);
+        let titles = |app: &AnvilApp| -> Vec<String> {
+            let s = app.drw.as_ref().expect("drawing");
+            s.picture().labels.iter().map(|n| n.text.clone()).collect()
+        };
+        for want in ["SECTION A-A", "DETAIL B"] {
+            assert!(titles(&app).contains(&want.to_string()), "{want} in {:?}", titles(&app));
+        }
+
+        // Save and reopen keep them.
+        app.save_drawing(false);
+        let saved = Drawing::load(&file).expect("saved");
+        assert_eq!((saved.views.len(), saved.callouts.len()), (6, 1));
+        app.leave_drawing();
+        app.open_path(&file);
+        settle(&ctx, &mut app);
+        assert_eq!(app.drw.as_ref().map(|s| s.picture().callouts.len()), Some(1));
+        assert!(titles(&app).contains(&"DETAIL B".to_string()));
+
+        // Delete the section: its detail goes with it; undo brings both back, projected.
+        if let Some(s) = &mut app.drw {
+            s.selected = Some(section);
+        }
+        app.run_builtin(&ctx, "Delete").expect("delete");
+        step(&ctx, &mut app);
+        assert_eq!(app.drw.as_ref().map(|s| s.drawing.views.len()), Some(4));
+        app.undo();
+        settle(&ctx, &mut app);
+        assert_eq!(app.drw.as_ref().map(|s| s.drawing.views.len()), Some(6));
+        assert!(titles(&app).contains(&"SECTION A-A".to_string()));
+
+        // Flipping the section looks the other way: projected again, still hatched.
+        if let Some(sec) =
+            app.drw.as_mut().and_then(|s| s.drawing.view_mut(section)).and_then(|v| v.section.as_mut())
+        {
+            sec.flip();
+        }
+        step(&ctx, &mut app);
+        settle(&ctx, &mut app);
+        {
+            let s = app.drw.as_ref().expect("drawing");
+            assert_eq!(s.drawing.view_orientation(section), Some(anvil_drawing::Orientation::Bottom));
+            assert!(!s.geometry[&section].hatch.is_empty());
+        }
+
+        // DXF export carries the hatching, the cutting line, the labels and the callout.
+        let out = dir.join("h.dxf");
+        app.queue_file_dialog(Some(out.clone()));
+        app.run_builtin(&ctx, "Export DXF").expect("export");
+        let f = anvil_drawing::dxf::read_dxf(&std::fs::read_to_string(&out).expect("written")).expect("dxf");
+        for layer in ["HATCH", "CUTTING_LINE", "LABELS"] {
+            assert!(f.entities.iter().any(|e| e.layer() == layer), "{layer}");
+        }
+        assert!(f.entities.iter().any(|e| e.get(1).is_some_and(|t| t.starts_with("CBORE"))));
+        let pdf = dir.join("h.pdf");
+        app.queue_file_dialog(Some(pdf.clone()));
+        app.run_builtin(&ctx, "Export PDF").expect("export");
+        assert!(std::fs::metadata(&pdf).is_ok_and(|m| m.len() > 1000));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

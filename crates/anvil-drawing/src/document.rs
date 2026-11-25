@@ -6,16 +6,20 @@
 //! is loaded or changes. Dimensions refer to views by id and to the part's features by
 //! id; their values come from the part every time the views update.
 
+use crate::callout::HoleCallout;
+use crate::detail::DetailDef;
 use crate::dims::Dimension;
 use crate::hlr::Orientation;
-use crate::sheet::{Projection, Sheet};
+use crate::section::SectionDef;
+use crate::sheet::{Projection, Scale, Sheet};
 use crate::title::TitleBlock;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const DRAWING_FORMAT: &str = "anvil-drawing";
-/// Version 2 added dimensions, the title block and the configuration shown.
-pub const DRAWING_FORMAT_VERSION: u32 = 2;
+/// Version 2 added dimensions, the title block and the configuration shown; version 3
+/// added section and detail views and hole callouts.
+pub const DRAWING_FORMAT_VERSION: u32 = 3;
 pub const DRAWING_EXT: &str = "anvdrw";
 
 /// What a view is for, which decides its direction and where it sits.
@@ -30,9 +34,15 @@ pub enum ViewRole {
     Side,
     /// An isometric view, in the corner the other views leave free.
     Isometric,
+    /// A section view cut along a line on another view ([`View::section`]).
+    Section,
+    /// A detail view of a circle on another view ([`View::detail`]).
+    Detail,
 }
 
 impl ViewRole {
+    /// The direction a standard view looks from. Section and detail views take theirs from
+    /// their cutting line and parent: use [`Drawing::view_orientation`] for any view.
     pub fn orientation(self, projection: Projection) -> Orientation {
         match (self, projection) {
             (ViewRole::Front, _) => Orientation::Front,
@@ -40,7 +50,12 @@ impl ViewRole {
             (ViewRole::Side, Projection::ThirdAngle) => Orientation::Right,
             (ViewRole::Side, Projection::FirstAngle) => Orientation::Left,
             (ViewRole::Isometric, _) => Orientation::Isometric,
+            (ViewRole::Section | ViewRole::Detail, _) => Orientation::Front,
         }
+    }
+
+    pub fn is_derived(self) -> bool {
+        matches!(self, ViewRole::Section | ViewRole::Detail)
     }
 }
 
@@ -98,6 +113,31 @@ pub struct View {
     pub role: ViewRole,
     pub display: DisplayStyle,
     pub tangent: TangentEdges,
+    /// A section view's cutting line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<SectionDef>,
+    /// A detail view's circle and scale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<DetailDef>,
+    /// A section or detail view's letter, as `A`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+}
+
+impl View {
+    /// The view this one is made from, for section and detail views.
+    pub fn parent(&self) -> Option<u32> {
+        self.section.as_ref().map(|s| s.parent).or(self.detail.as_ref().map(|d| d.parent))
+    }
+
+    /// What the view is called on the sheet and in the left pane.
+    pub fn title(&self, projection: Projection) -> String {
+        match self.role {
+            ViewRole::Section => format!("Section {0}-{0}", self.label),
+            ViewRole::Detail => format!("Detail {}", self.label),
+            r => r.orientation(projection).label().to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,6 +159,8 @@ pub struct Drawing {
     pub dimensions: Vec<Dimension>,
     #[serde(default)]
     pub title_block: TitleBlock,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub callouts: Vec<HoleCallout>,
 }
 
 #[derive(Debug)]
@@ -177,6 +219,7 @@ impl Drawing {
             configuration: None,
             dimensions: Vec::new(),
             title_block: TitleBlock::standard(),
+            callouts: Vec::new(),
         }
     }
 
@@ -197,8 +240,112 @@ impl Drawing {
     pub fn add_view(&mut self, role: ViewRole, display: DisplayStyle, tangent: TangentEdges) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        self.views.push(View { id, role, display, tangent });
+        self.views.push(View {
+            id,
+            role,
+            display,
+            tangent,
+            section: None,
+            detail: None,
+            label: String::new(),
+        });
         id
+    }
+
+    /// The next free letter for a section or detail view: A, B, C... without I, O and Q,
+    /// then AA, AB...
+    pub fn next_label(&self) -> String {
+        const LETTERS: &str = "ABCDEFGHJKLMNPRSTUVWXYZ";
+        let used = |l: &str| self.views.iter().any(|v| v.label.eq_ignore_ascii_case(l));
+        let one: Vec<String> = LETTERS.chars().map(String::from).collect();
+        let two = LETTERS.chars().flat_map(|a| LETTERS.chars().map(move |b| format!("{a}{b}")));
+        one.into_iter().chain(two).find(|l| !used(l)).unwrap_or_else(|| format!("V{}", self.next_id))
+    }
+
+    /// Adds a section view cut along `def`, with the next letter. Returns its id.
+    pub fn add_section(&mut self, def: SectionDef) -> u32 {
+        let label = self.next_label();
+        let id = self.add_view(ViewRole::Section, DisplayStyle::HiddenRemoved, TangentEdges::Removed);
+        if let Some(v) = self.view_mut(id) {
+            v.section = Some(def);
+            v.label = label;
+        }
+        id
+    }
+
+    /// Adds a detail view of `def`'s circle, with the next letter and its parent's display.
+    pub fn add_detail(&mut self, def: DetailDef) -> u32 {
+        let label = self.next_label();
+        let (display, tangent) = self
+            .view(def.parent)
+            .map_or((DisplayStyle::HiddenRemoved, TangentEdges::Removed), |p| (p.display, p.tangent));
+        let id = self.add_view(ViewRole::Detail, display, tangent);
+        if let Some(v) = self.view_mut(id) {
+            v.detail = Some(def);
+            v.label = label;
+        }
+        id
+    }
+
+    /// Removes a section or detail view, the views made from it, and their dimensions and
+    /// callouts. Standard views are kept. Returns how many views went.
+    pub fn remove_view(&mut self, id: u32) -> usize {
+        if !self.view(id).is_some_and(|v| v.role.is_derived()) {
+            return 0;
+        }
+        let mut gone = vec![id];
+        loop {
+            let more: Vec<u32> = self
+                .views
+                .iter()
+                .filter(|v| !gone.contains(&v.id) && v.parent().is_some_and(|p| gone.contains(&p)))
+                .map(|v| v.id)
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            gone.extend(more);
+        }
+        self.views.retain(|v| !gone.contains(&v.id));
+        self.dimensions.retain(|d| !gone.contains(&d.view));
+        self.callouts.retain(|c| !gone.contains(&c.view));
+        gone.len()
+    }
+
+    /// The direction any view looks from: a standard view's own, a section view's from its
+    /// cutting line, a detail view's from its parent. `None` for a view that is missing or
+    /// made from one that is.
+    pub fn view_orientation(&self, id: u32) -> Option<Orientation> {
+        let mut v = self.view(id)?;
+        for _ in 0..=self.views.len() {
+            match v.role {
+                ViewRole::Section => return v.section.as_ref()?.orientation(),
+                ViewRole::Detail => v = self.view(v.detail.as_ref()?.parent)?,
+                r => return Some(r.orientation(self.sheet.projection)),
+            }
+        }
+        None
+    }
+
+    /// The scale a view is drawn at: a detail view's own, otherwise the sheet's.
+    pub fn view_scale(&self, id: u32) -> Scale {
+        match self.view(id).and_then(|v| v.detail.as_ref()) {
+            Some(d) => d.scale,
+            None => self.sheet.scale,
+        }
+    }
+
+    /// Adds a hole callout and returns its id.
+    pub fn add_callout(&mut self, mut c: HoleCallout) -> u32 {
+        c.id = self.next_id;
+        self.next_id += 1;
+        let id = c.id;
+        self.callouts.push(c);
+        id
+    }
+
+    pub fn callout_mut(&mut self, id: u32) -> Option<&mut HoleCallout> {
+        self.callouts.iter_mut().find(|c| c.id == id)
     }
 
     pub fn view(&self, id: u32) -> Option<&View> {
@@ -265,7 +412,13 @@ impl Drawing {
             return Err(DrawingFileError::TooNew(ver));
         }
         let mut d: Drawing = serde_json::from_value(v)?;
-        let used = d.views.iter().map(|v| v.id).chain(d.dimensions.iter().map(|x| x.id)).max();
+        let used = d
+            .views
+            .iter()
+            .map(|v| v.id)
+            .chain(d.dimensions.iter().map(|x| x.id))
+            .chain(d.callouts.iter().map(|x| x.id))
+            .max();
         d.next_id = d.next_id.max(used.map_or(1, |m| m + 1));
         Ok(d)
     }
@@ -321,7 +474,7 @@ mod tests {
         d.title_block.fields[0].text = "{Description} ({PartNo})".into();
         let text = d.to_json().expect("json");
         assert!(text.contains("\"format\": \"anvil-drawing\""));
-        assert!(text.contains("\"format_version\": 2"));
+        assert!(text.contains("\"format_version\": 3"));
         assert_eq!(Drawing::from_json(&text).expect("read"), d);
     }
 
@@ -332,7 +485,7 @@ mod tests {
         let text = Drawing::default()
             .to_json()
             .expect("json")
-            .replace("\"format_version\": 2", "\"format_version\": 99");
+            .replace("\"format_version\": 3", "\"format_version\": 99");
         assert!(matches!(Drawing::from_json(&text), Err(DrawingFileError::TooNew(99))));
         assert!(matches!(Drawing::from_json("{"), Err(DrawingFileError::Json(_))));
     }
@@ -347,7 +500,33 @@ mod tests {
         assert_eq!(d.title_block, TitleBlock::standard());
         assert!(d.dimensions.is_empty());
         assert_eq!(d.configuration, None);
-        assert!(d.to_json().expect("json").contains("\"format_version\": 2"));
+        assert!(d.to_json().expect("json").contains("\"format_version\": 3"));
+    }
+
+    #[test]
+    fn section_and_detail_views_round_trip_and_go_with_their_parent() {
+        use glam::DVec2;
+        let mut d = Drawing::standard("p.anvprt".into(), Sheet::default());
+        let front = d.views[0].id;
+        let axes = Orientation::Front.axes();
+        let a = d.add_section(SectionDef::new(front, &axes, true, &[DVec2::new(0.0, 5.0)]));
+        let b =
+            d.add_detail(DetailDef { parent: a, centre: [1.0, 0.0, 2.0], radius: 4.0, scale: Scale::FULL });
+        d.add_callout(HoleCallout { id: 0, view: b, feature: 3, offset: [0.0; 3] });
+        assert_eq!(d.view(a).map(|v| v.label.as_str()), Some("A"));
+        assert_eq!(d.view(b).map(|v| v.title(d.sheet.projection)), Some("Detail B".into()));
+        assert_eq!(d.view_orientation(a), Some(Orientation::Top));
+        assert_eq!(d.view_orientation(b), Some(Orientation::Top), "a detail looks as its parent");
+        assert_eq!(d.view_scale(b), Scale::FULL);
+        let text = d.to_json().expect("json");
+        assert_eq!(Drawing::from_json(&text).expect("read"), d);
+        // Standard views stay; a section takes its detail and the detail's callout with it.
+        assert_eq!(d.remove_view(front), 0);
+        assert_eq!(d.remove_view(a), 2);
+        assert_eq!(d.views.len(), 4);
+        assert!(d.callouts.is_empty());
+        // Letters skip I, O and Q and are reused once free.
+        assert_eq!(d.next_label(), "A");
     }
 
     #[test]

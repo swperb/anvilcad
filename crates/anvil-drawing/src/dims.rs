@@ -564,13 +564,16 @@ pub fn model_dimensions(
     use crate::ViewRole;
     let projection = drawing.sheet.projection;
     let scale = drawing.sheet.scale.factor();
-    let mut views: Vec<&crate::View> =
-        drawing.views.iter().filter(|v| v.role != ViewRole::Isometric).collect();
+    let mut views: Vec<&crate::View> = drawing
+        .views
+        .iter()
+        .filter(|v| matches!(v.role, ViewRole::Front | ViewRole::Top | ViewRole::Side))
+        .collect();
     let rank = |r: ViewRole| match r {
         ViewRole::Front => 0,
         ViewRole::Top => 1,
         ViewRole::Side => 2,
-        ViewRole::Isometric => 3,
+        _ => 3,
     };
     views.sort_by_key(|v| rank(v.role));
     let mut out: Vec<Dimension> = Vec::new();
@@ -953,6 +956,8 @@ mod tests {
             path: Path2::Conic { c: DVec2::new(5.0, 5.0), u: DVec2::X * 2.0, v: DVec2::Y * 2.0, t0, t1 },
         };
         let g = ViewGeometry {
+            hatch: Vec::new(),
+            clip: None,
             lines: vec![
                 line(DVec2::ZERO, DVec2::new(10.0, 0.0), LineKind::Visible),
                 line(DVec2::new(10.0, 0.0), DVec2::new(30.0, 0.0), LineKind::Hidden),

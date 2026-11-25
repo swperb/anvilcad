@@ -7,26 +7,35 @@
 //! - [`sheet`]: paper sizes, scales and the projection method;
 //! - [`document`]: the `.anvdrw` drawing document and its views;
 //! - [`hlr`]: hidden-line projection of exact solids;
+//! - [`section`]: section views, cut from the part along a line, and hatching;
+//! - [`detail`]: detail views, a circle of another view at a larger scale;
+//! - [`callout`]: hole callouts from the Hole feature's data;
 //! - [`dims`]: model and reference dimensions, and how they are drawn;
 //! - [`title`]: the title block and its `{Name}` placeholders;
 //! - [`layout`]: placing the views on the sheet and choosing pens;
 //! - [`pdf`] and [`dxf`]: writing the laid-out sheet.
 
+pub mod callout;
+pub mod detail;
 pub mod dims;
 pub mod document;
 pub mod dxf;
 pub mod hlr;
 pub mod layout;
 pub mod pdf;
+pub mod section;
 pub mod sheet;
 pub mod title;
 
 pub use glam;
 
+pub use callout::{HoleCallout, HoleData, HoleType};
+pub use detail::DetailDef;
 pub use dims::{DimSource, Dimension, ModelItem, RefPick};
 pub use document::{DRAWING_EXT, DisplayStyle, Drawing, DrawingFileError, TangentEdges, View, ViewRole};
 pub use hlr::{LineKind, Orientation, Path2, Progress, ProjectError, ViewGeometry};
 pub use layout::{Pen, SheetPicture, layout};
+pub use section::{HatchPattern, SectionDef};
 pub use sheet::{Projection, Scale, Sheet, SheetSize};
 pub use title::{TitleBlock, TitleField};
 
@@ -89,6 +98,10 @@ pub struct PartData {
     /// Every configuration of the part, in the part's order.
     pub configurations: Vec<String>,
     pub material: Option<String>,
+    /// How section views hatch the part's material.
+    pub hatch: HatchPattern,
+    /// Every built Hole feature, in feature order.
+    pub holes: Vec<HoleData>,
     /// The part's file name without its extension.
     pub file_name: String,
 }
@@ -134,6 +147,7 @@ pub fn part_data(
     let bodies = part_bodies(&state)?;
     let mut sketches = Vec::new();
     let mut depths = Vec::new();
+    let mut holes = Vec::new();
     let limit = doc.rollback.unwrap_or(usize::MAX).min(doc.features.len());
     for f in doc.features.iter().take(limit) {
         if f.suppressed || state.errors.contains_key(&f.id) {
@@ -166,6 +180,11 @@ pub fn part_data(
                     mid_plane: ef.end == EndCondition::MidPlane,
                 });
             }
+            FeatureKind::Hole(h) => {
+                if let Some(hole) = hole_data(f.id, h, &doc, &state) {
+                    holes.push(hole);
+                }
+            }
             _ => {}
         }
     }
@@ -178,7 +197,72 @@ pub fn part_data(
         configuration: doc.active_configuration_name().to_string(),
         configurations: doc.configurations.iter().map(|c| c.name.clone()).collect(),
         material: doc.material.as_ref().map(|m| m.name.clone()),
+        hatch: HatchPattern::for_material(
+            doc.material.as_ref().map(|m| m.name.as_str()),
+            doc.material.as_ref().is_some_and(|m| m.class == anvil_model::material::MaterialClass::Plastic),
+        ),
+        holes,
         file_name: file_name.to_string(),
+    })
+}
+
+/// What a drawing needs from a built Hole feature: its resolved sizes, where its holes
+/// are, and which way they run.
+fn hole_data(
+    feature: u32,
+    h: &anvil_model::HoleFeature,
+    doc: &anvil_model::Document,
+    state: &anvil_model::BuildState,
+) -> Option<HoleData> {
+    use anvil_model::HoleKind;
+    let vars = &state.variables;
+    let sec = h.resolve(vars).ok()?;
+    let frame = state.frames.get(&h.sketch)?;
+    let sk = doc.features.iter().find(|f| f.id == h.sketch).and_then(|f| match &f.kind {
+        FeatureKind::Sketch(sf) => Some(&sf.sketch),
+        _ => None,
+    })?;
+    let d3 = |v: anvil_kernel::Vec3| glam::DVec3::new(v.x, v.y, v.z);
+    let out = if h.reverse { -frame.z } else { frame.z };
+    let centres: Vec<glam::DVec3> = anvil_model::hole::positions(sk)
+        .into_iter()
+        .map(|c| d3(frame.origin + frame.x * c.x + frame.y * c.y))
+        .collect();
+    if centres.is_empty() {
+        return None;
+    }
+    let kind = match &h.kind {
+        HoleKind::Simple => HoleType::Simple,
+        HoleKind::Counterbore { .. } => {
+            let (diameter, depth) = sec.counterbore?;
+            HoleType::Counterbore { diameter, depth }
+        }
+        HoleKind::Countersink(_) => {
+            let (diameter, angle) = sec.sink?;
+            HoleType::Countersink { diameter, angle }
+        }
+        HoleKind::Tapped { major, pitch, thread_depth } => {
+            let (m, p, t) = (major.eval(vars).ok()?, pitch.eval(vars).ok()?, thread_depth.eval(vars).ok()?);
+            HoleType::Tapped { thread: callout::thread_name(h.size.as_ref(), m, p), depth: t }
+        }
+    };
+    let near_sink = match h.kind {
+        HoleKind::Countersink(_) => None,
+        _ => sec.sink,
+    };
+    let outer = [Some(sec.diameter), sec.counterbore.map(|c| c.0), sec.sink.map(|s| s.0)]
+        .into_iter()
+        .flatten()
+        .fold(0.0, f64::max);
+    Some(HoleData {
+        feature,
+        kind,
+        diameter: sec.diameter,
+        depth: sec.depth,
+        near_sink,
+        centres,
+        axis: -d3(out),
+        outer_radius: 0.5 * outer,
     })
 }
 
@@ -191,31 +275,103 @@ pub fn load_part(path: &Path, configuration: Option<&str>) -> Result<PartData, P
     part_data(&doc, configuration, &name)
 }
 
-/// Projects every view of `drawing` from `bodies`, once per direction.
+/// The views of a drawing, projected: each view's lines by id, and why any view could not
+/// be made, in words for the user.
+#[derive(Debug, Clone, Default)]
+pub struct Projected {
+    pub geometry: HashMap<u32, ViewGeometry>,
+    pub failed: HashMap<u32, String>,
+}
+
+/// Projects every view of `drawing` from `bodies`: standard views once per direction,
+/// section views cut from the bodies (hatched with `hatch`), and detail views clipped from
+/// their parents.
 pub fn project_views(
     drawing: &Drawing,
     bodies: &[Solid],
+    hatch: HatchPattern,
     progress: &Progress,
-) -> Result<HashMap<u32, ViewGeometry>, ProjectError> {
-    let mut by_dir: HashMap<Orientation, ViewGeometry> = HashMap::new();
-    let mut out = HashMap::new();
+) -> Result<Projected, ProjectError> {
+    let projection = drawing.sheet.projection;
     let mut dirs: Vec<Orientation> = Vec::new();
+    let mut sections = 0;
     for v in &drawing.views {
-        let o = v.role.orientation(drawing.sheet.projection);
-        if !dirs.contains(&o) {
-            dirs.push(o);
+        match v.role {
+            ViewRole::Section => sections += 1,
+            ViewRole::Detail => {}
+            r => {
+                let o = r.orientation(projection);
+                if !dirs.contains(&o) {
+                    dirs.push(o);
+                }
+            }
         }
     }
-    progress.set_stages(dirs.len());
+    progress.set_stages(dirs.len() + sections);
+    let mut stage = 0;
+    let mut by_dir: HashMap<Orientation, ViewGeometry> = HashMap::new();
+    let mut out = Projected::default();
     for v in &drawing.views {
-        let o = v.role.orientation(drawing.sheet.projection);
-        if !by_dir.contains_key(&o) {
-            progress.begin_stage(by_dir.len());
-            let g = hlr::project(bodies, &o.axes(), progress)?;
-            by_dir.insert(o, g);
+        match v.role {
+            ViewRole::Section | ViewRole::Detail => {}
+            r => {
+                let o = r.orientation(projection);
+                if let std::collections::hash_map::Entry::Vacant(e) = by_dir.entry(o) {
+                    progress.begin_stage(stage);
+                    stage += 1;
+                    e.insert(hlr::project(bodies, &o.axes(), progress)?);
+                }
+                if let Some(g) = by_dir.get(&o) {
+                    out.geometry.insert(v.id, g.clone());
+                }
+            }
         }
-        if let Some(g) = by_dir.get(&o) {
-            out.insert(v.id, g.clone());
+    }
+    for v in drawing.views.iter().filter(|v| v.role == ViewRole::Section) {
+        progress.begin_stage(stage);
+        stage += 1;
+        let Some(def) = &v.section else {
+            out.failed
+                .insert(v.id, "the section view has no cutting line; delete it and make it again".into());
+            continue;
+        };
+        match section::project_section(def, bodies, hatch, progress)? {
+            Ok(g) => {
+                out.geometry.insert(v.id, g);
+            }
+            Err(e) => {
+                out.failed.insert(v.id, e.0);
+            }
+        }
+    }
+    // Details of details need their parent first; each pass places those whose parent is in.
+    let mut left: Vec<&View> = drawing.views.iter().filter(|v| v.role == ViewRole::Detail).collect();
+    while !left.is_empty() {
+        let before = left.len();
+        left.retain(|v| {
+            let Some(def) = &v.detail else {
+                out.failed.insert(v.id, "the detail view has no circle; delete it and make it again".into());
+                return false;
+            };
+            if let Some(why) = out.failed.get(&def.parent).cloned() {
+                out.failed.insert(v.id, format!("its parent view cannot be shown: {why}"));
+                return false;
+            }
+            let (Some(parent), Some(o)) =
+                (out.geometry.get(&def.parent), drawing.view_orientation(def.parent))
+            else {
+                return true;
+            };
+            let (c, r) = def.circle(&o.axes());
+            let g = detail::detail_geometry(parent, c, r);
+            out.geometry.insert(v.id, g);
+            false
+        });
+        if left.len() == before {
+            for v in left {
+                out.failed.insert(v.id, "its parent view is missing; delete it".into());
+            }
+            break;
         }
     }
     Ok(out)
