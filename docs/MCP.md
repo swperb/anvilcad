@@ -3,8 +3,9 @@
 `anvilcad-agent mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server.
 Claude Code, Cursor, Claude Desktop and other MCP clients use it to model parts with no
 window: create or open a part, add sketches, extrusions, revolves, fillets, chamfers,
-shells, holes, patterns, mirrors, drafts and ribs, combine and split bodies, change
-dimensions and variables, measure the body, export STEP or STL and look at screenshots.
+shells, holes, patterns, mirrors, drafts and ribs, combine and split bodies, build
+assemblies with mates, change dimensions and variables, measure the body, export STEP or
+STL and look at screenshots.
 
 It is built on the [headless harness](AGENT_HARNESS.md), so it never opens a window, takes
 focus or touches your mouse and keyboard, and runs on macOS, Linux and Windows with no
@@ -68,6 +69,9 @@ server writes are created as needed.
 | `add_linear_pattern` | `features` (ids or names), `direction` (`"x"`, `"y"`, `"z"` or `[dx, dy, dz]`), `spacing`, `count`; `direction2`, `spacing2`, `count2` for a grid | copies features in a row; counts include the original |
 | `add_circular_pattern` | `features`, `axis` (`"x"`, `"y"`, `"z"` or `[dx, dy, dz]`), `through` `[x, y, z]` (default the origin), `count`, `angle` (default 360) | copies features round the axis through `through` |
 | `add_mirror` | `features`, `plane` (`"front"`, `"top"`, `"right"`, or `[x, y, z]` on a flat face) | mirrors features about the plane |
+| `new_assembly` | `force` | starts a new, empty assembly; save it with `save_part` and a `.anvasm` path |
+| `insert_component` | `path`, `at` `[x, y, z]` | inserts a saved part; the first is fixed at the origin; returns its id and the assembly |
+| `add_mate` | `kind` (`coincident`, `concentric`, `parallel`, `perpendicular`, `tangent`, `distance`, `angle`), `a`, `b` (each `{ "face": [x, y, z] }` or `{ "plane": "front", "component": id or name }`), `value`, `flip`, `align` | constrains two components and solves; a mate that cannot hold with the others is refused and nothing changes; returns the mate id and each component's placement and definition |
 | `add_plane` | `from` (`"front"`, `"top"`, `"right"`, a plane's id or name, or `[x, y, z]` on a flat face), `offset`, `flip` | adds a reference plane parallel to `from`; sketch on it with `add_sketch` `on_feature`, or use its id wherever a plane is asked for |
 | `add_draft` | `neutral` (`"front"`, `"top"`, `"right"` or `[x, y, z]` on a flat face), `faces` `[[x, y, z], ...]`, `angle` | tilts the faces by the angle about the neutral plane |
 | `add_rib` | `sketch`, `thickness`, `flip` | grows a wall from the sketch's line until it meets the part, centred on the sketch's plane |

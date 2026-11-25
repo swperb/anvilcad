@@ -97,6 +97,9 @@ fn handshake_and_tool_list() {
         "add_circular_pattern",
         "add_hole",
         "add_plane",
+        "new_assembly",
+        "insert_component",
+        "add_mate",
         "add_draft",
         "add_rib",
         "combine_bodies",
@@ -600,4 +603,28 @@ fn reference_plane() {
     assert!(close(&ex["body"]["volume"], 500.0), "{ex}");
     // It starts on the plane, 25 from the front plane.
     assert!(close(&ex["body"]["bounds"]["min"][2], 25.0), "{ex}");
+}
+
+/// Issue #71: an assembly through MCP: two blocks, one mated against the other.
+#[test]
+fn assembly_with_a_mate() {
+    let mut s = server();
+    let dir = scratch("assembly");
+    std::fs::create_dir_all(&dir).expect("dir");
+    block(&mut s);
+    let part = dir.join("block.anvprt");
+    call(&mut s, "save_part", json!({ "path": part }));
+    call(&mut s, "new_assembly", json!({}));
+    call(&mut s, "insert_component", json!({ "path": part }));
+    let second = call(&mut s, "insert_component", json!({ "path": part, "at": [50, 0, 0] }));
+    assert_eq!(second["assembly"]["components"].as_array().map(Vec::len), Some(2), "{second}");
+    // The first block's end (z = 30) against the second's start (z = 0, at x 50..60).
+    let m = call(
+        &mut s,
+        "add_mate",
+        json!({ "kind": "coincident", "a": { "face": [5, 10, 30] }, "b": { "face": [55, 10, 0] } }),
+    );
+    let c = &m["assembly"]["components"][1];
+    assert_vec(&c["origin"], [50.0, 0.0, 30.0]);
+    let _ = std::fs::remove_dir_all(dir);
 }

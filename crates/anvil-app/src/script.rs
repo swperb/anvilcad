@@ -252,6 +252,12 @@ pub trait Host {
     fn add_split(&mut self, spec: &SplitSpec) -> Result<u32, String>;
     /// Adds a reference plane offset from another; returns its id.
     fn add_plane(&mut self, spec: &PlaneDef) -> Result<u32, String>;
+    /// Starts a new, empty assembly. Refuses if there are unsaved changes, unless `force`.
+    fn new_assembly(&mut self, force: bool) -> Result<(), String>;
+    /// Inserts a part into the open assembly; returns the component's id.
+    fn insert_component(&mut self, spec: &InsertSpec) -> Result<u32, String>;
+    /// Adds a mate between two components and solves; returns the mate's id.
+    fn add_mate(&mut self, spec: &MateSpec) -> Result<u32, String>;
     fn set_status(&mut self, text: &str);
 }
 
@@ -336,6 +342,39 @@ pub enum PlanePick {
     Face([f64; 3]),
     /// A reference plane feature, by id or name.
     Feature(String),
+}
+
+/// A component from `anvil.insert{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct InsertSpec {
+    /// The part file.
+    pub path: PathBuf,
+    /// Where its origin goes, in assembly coordinates (mm); beside the others if not given.
+    /// The first component is fixed at the assembly's origin.
+    pub at: Option<[f64; 3]>,
+}
+
+/// One side of a mate.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MateSide {
+    /// The component face through this point, in assembly coordinates (mm).
+    Face([f64; 3]),
+    /// A standard plane of a component (by id or name), or of the assembly when `None`.
+    Plane { component: Option<String>, plane: PlanePick },
+}
+
+/// A mate from `anvil.mate{...}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MateSpec {
+    /// coincident, concentric, parallel, perpendicular, tangent, distance or angle.
+    pub kind: String,
+    pub a: MateSide,
+    pub b: MateSide,
+    /// The distance (mm) or angle (degrees), for those kinds.
+    pub value: Option<f64>,
+    pub flip: bool,
+    /// aligned, anti-aligned or closest (the default).
+    pub align: Option<String>,
 }
 
 /// A reference plane from `anvil.plane{...}`: parallel to `from`, `offset` away.
@@ -725,6 +764,9 @@ impl Engine {
             "combine",
             "split",
             "plane",
+            "assembly",
+            "insert",
+            "mate",
             "status",
         ];
         let result = self.guarded(|lua| {
@@ -915,6 +957,27 @@ impl Engine {
                     scope.create_function(move |_, t: Table| {
                         let spec = read_plane(&t).map_err(fail)?;
                         h.borrow_mut().add_plane(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "assembly",
+                    scope.create_function(move |_, opts: Option<Table>| {
+                        let force = force_flag(opts.as_ref())?;
+                        h.borrow_mut().new_assembly(force).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "insert",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_insert(&t).map_err(fail)?;
+                        h.borrow_mut().insert_component(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "mate",
+                    scope.create_function(move |_, t: Table| {
+                        let spec = read_mate(&t).map_err(fail)?;
+                        h.borrow_mut().add_mate(&spec).map_err(fail)
                     })?,
                 )?;
                 anvil.set(
@@ -1334,6 +1397,55 @@ fn read_combine(t: &Table) -> Result<CombineSpec, String> {
         _ => return Err(format!("{what}: main is an id or a name")),
     };
     Ok(CombineSpec { how, main, bodies: names(t, "bodies", what, true)? })
+}
+
+fn read_insert(t: &Table) -> Result<InsertSpec, String> {
+    let path: String = t.get("path").map_err(|_| "anvil.insert: path = \"part.anvprt\"".to_string())?;
+    let at = match t.get::<Option<Table>>("at").map_err(lua_err)? {
+        Some(a) => Some(numbers(&a, "anvil.insert: at = {x, y, z}")?),
+        None => None,
+    };
+    Ok(InsertSpec { path: PathBuf::from(path), at })
+}
+
+/// `{ face = {x, y, z} }` or `{ plane = "front", component = id or name }`.
+fn mate_side(t: &Table, key: &str) -> Result<MateSide, String> {
+    let usage = format!(
+        "anvil.mate: {key} = {{ face = {{x, y, z}} }} or {{ plane = \"front\", component = <id or name> }}"
+    );
+    let side: Table = t.get(key).map_err(|_| usage.clone())?;
+    if let Some(p) = side.get::<Option<Table>>("face").map_err(lua_err)? {
+        return Ok(MateSide::Face(numbers(&p, &usage)?));
+    }
+    let plane = match side.get::<Value>("plane").map_err(lua_err)? {
+        Value::Nil => return Err(usage),
+        v => plane_pick(v, &format!("anvil.mate {key}.plane"))?,
+    };
+    let component = match side.get::<Value>("component").map_err(lua_err)? {
+        Value::Nil => None,
+        Value::Integer(i) => Some(i.to_string()),
+        Value::String(s) => Some(s.to_string_lossy()),
+        _ => return Err(usage),
+    };
+    Ok(MateSide::Plane { component, plane })
+}
+
+fn read_mate(t: &Table) -> Result<MateSpec, String> {
+    let kind: String = t.get("kind").map_err(|_| "anvil.mate: kind = \"coincident\", ...".to_string())?;
+    let value = match t.get::<Value>("value").map_err(lua_err)? {
+        Value::Nil => None,
+        Value::Integer(i) => Some(i as f64),
+        Value::Number(n) => Some(n),
+        _ => return Err("anvil.mate: value is a number".into()),
+    };
+    Ok(MateSpec {
+        kind,
+        a: mate_side(t, "a")?,
+        b: mate_side(t, "b")?,
+        value,
+        flip: t.get::<Option<bool>>("flip").map_err(lua_err)?.unwrap_or(false),
+        align: t.get::<Option<String>>("align").map_err(lua_err)?,
+    })
 }
 
 fn read_plane(t: &Table) -> Result<PlaneDef, String> {

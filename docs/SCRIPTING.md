@@ -171,6 +171,9 @@ made before the error, which Undo reverses.
 | `anvil.combine{ op, main, bodies }` | adds (the default), subtracts or keeps what is common to bodies; `op` is `"add"`, `"subtract"` or `"common"`; a subtraction takes `bodies` from `main` |
 | `anvil.split{ planes, bodies }` | cuts bodies apart along `planes` (each `"front"`, `"top"`, `"right"` or `{x, y, z}` on a flat face), each piece a body of its own; every body when `bodies` is left out |
 | `anvil.plane{ from, offset, flip }` | adds a reference plane parallel to `from` (`"front"`, `"top"`, `"right"`, another plane's id or name, or `{x, y, z}` on a flat face), `offset` mm away along its normal (`flip` for the other side); returns its id. Sketch on it with `plane = { on = id }`, or give its id or name wherever a plane is asked for |
+| `anvil.assembly([{ force = true }])` | starts a new, empty assembly (save it with `anvil.save("name.anvasm")`) |
+| `anvil.insert{ path, at }` | inserts a saved part into the open assembly and returns the component's id; the first component is fixed at the origin, later ones go at `at = {x, y, z}` or beside the others |
+| `anvil.mate{ kind, a, b, value, flip, align }` | constrains two components and returns the mate's id; `kind` is `"coincident"`, `"concentric"`, `"parallel"`, `"perpendicular"`, `"tangent"`, `"distance"` (`value` mm) or `"angle"` (`value` degrees); each side is `{ face = {x, y, z} }`, a point on a component's face in assembly coordinates, or `{ plane = "front", component = id or name }` (no component: the assembly's own plane); `align` is `"aligned"`, `"anti-aligned"` or `"closest"` (the default). It solves at once: a mate that cannot hold with the others is refused and nothing changes. `anvil.state().assembly` lists components (placement, how well each is defined) and mates |
 | `anvil.status(text)` | shows text in the status bar |
 
 Bodies are named as `anvil.state().bodies` lists them: by the feature that last changed each
