@@ -1,0 +1,231 @@
+{
+  "format": "anvil-assembly",
+  "format_version": 1,
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": "Fixture: assembly"
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": ""
+    }
+  ],
+  "components": [
+    {
+      "id": 1,
+      "name": "prismatic<1>",
+      "path": "prismatic.anvprt",
+      "placement": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "y": {
+          "x": 0.0,
+          "y": 1.0,
+          "z": 0.0
+        },
+        "z": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        }
+      },
+      "fixed": true,
+      "hidden": false
+    },
+    {
+      "id": 2,
+      "name": "configured<1>",
+      "path": "configured.anvprt",
+      "configuration": "Long",
+      "placement": {
+        "origin": {
+          "x": 100.00000000000003,
+          "y": 1.369703827611891e-14,
+          "z": 6.848580143715305e-15
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "y": {
+          "x": 0.0,
+          "y": 1.0,
+          "z": 0.0
+        },
+        "z": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        }
+      },
+      "fixed": false,
+      "hidden": false
+    },
+    {
+      "id": 3,
+      "name": "turned<1>",
+      "path": "turned.anvprt",
+      "placement": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 40.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "y": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": -1.0
+        },
+        "z": {
+          "x": 0.0,
+          "y": 1.0,
+          "z": 0.0
+        }
+      },
+      "fixed": false,
+      "hidden": false
+    }
+  ],
+  "mates": [
+    {
+      "id": 4,
+      "name": "Coincident1",
+      "kind": "Coincident",
+      "alignment": "Aligned",
+      "a": {
+        "component": 1,
+        "entity": {
+          "Face": {
+            "feature": 2,
+            "index": 0
+          }
+        }
+      },
+      "b": {
+        "component": 2,
+        "entity": {
+          "Face": {
+            "feature": 2,
+            "index": 0
+          }
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": 5,
+      "name": "Coincident2",
+      "kind": "Coincident",
+      "alignment": "Aligned",
+      "a": {
+        "component": 1,
+        "entity": {
+          "Plane": "Top"
+        }
+      },
+      "b": {
+        "component": 2,
+        "entity": {
+          "Plane": "Top"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": 6,
+      "name": "Distance1",
+      "kind": {
+        "Distance": {
+          "value": 100.0,
+          "flip": false
+        }
+      },
+      "alignment": "Aligned",
+      "a": {
+        "component": 1,
+        "entity": {
+          "Plane": "Right"
+        }
+      },
+      "b": {
+        "component": 2,
+        "entity": {
+          "Plane": "Right"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": 7,
+      "name": "Lock1",
+      "kind": {
+        "Lock": {
+          "relative": {
+            "origin": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": 40.0
+            },
+            "x": {
+              "x": 1.0,
+              "y": 0.0,
+              "z": 0.0
+            },
+            "y": {
+              "x": 0.0,
+              "y": 0.0,
+              "z": -1.0
+            },
+            "z": {
+              "x": 0.0,
+              "y": 1.0,
+              "z": 0.0
+            }
+          }
+        }
+      },
+      "alignment": "Closest",
+      "a": {
+        "component": 1,
+        "entity": {
+          "Plane": "Front"
+        }
+      },
+      "b": {
+        "component": 3,
+        "entity": {
+          "Plane": "Front"
+        }
+      },
+      "suppressed": false
+    }
+  ],
+  "next_id": 8
+}

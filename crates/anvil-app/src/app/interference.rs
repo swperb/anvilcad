@@ -29,7 +29,7 @@ struct Job {
     thread: Option<std::thread::JoinHandle<()>>,
     /// The assembly being checked.
     checked: Assembly,
-    skipped: Vec<(u32, String)>,
+    skipped: Vec<(Vec<u32>, String)>,
 }
 
 impl Drop for Job {
@@ -46,6 +46,8 @@ pub(super) struct InterferenceOptions {
     /// The clearance as typed, in mm.
     pub clearance: String,
     pub include_hidden: bool,
+    /// Check each top-level subassembly as one component.
+    pub whole_subassemblies: bool,
 }
 
 impl Default for InterferenceOptions {
@@ -55,6 +57,7 @@ impl Default for InterferenceOptions {
             clearance_on: false,
             clearance: "0.5".into(),
             include_hidden: false,
+            whole_subassemblies: false,
         }
     }
 }
@@ -76,6 +79,7 @@ impl InterferenceOptions {
             touching: self.touching,
             include_hidden: self.include_hidden,
             components: Vec::new(),
+            whole_subassemblies: self.whole_subassemblies,
         })
     }
 }
@@ -171,7 +175,7 @@ impl InterferenceTool {
     }
 
     /// Takes in a finished check. Returns a status line when there is news.
-    fn poll(&mut self, names: &dyn Fn(u32) -> String) -> Option<String> {
+    fn poll(&mut self, names: &dyn Fn(&[u32]) -> String) -> Option<String> {
         let j = self.job.as_ref()?;
         let result = match j.rx.try_recv() {
             Ok(r) => r,
@@ -197,7 +201,7 @@ impl InterferenceTool {
 }
 
 /// One line saying what a report found, such as "2 overlaps, 1 touching".
-pub(super) fn summary(r: &Report, names: &dyn Fn(u32) -> String) -> String {
+pub(super) fn summary(r: &Report, names: &dyn Fn(&[u32]) -> String) -> String {
     let count = |want: fn(&FindingKind) -> bool| r.findings.iter().filter(|f| want(&f.kind)).count();
     let overlaps = count(|k| matches!(k, FindingKind::Overlap { .. }));
     let touching = count(|k| matches!(k, FindingKind::Touching));
@@ -219,8 +223,8 @@ pub(super) fn summary(r: &Report, names: &dyn Fn(u32) -> String) -> String {
         parts.join(", ")
     };
     if !r.skipped.is_empty() {
-        let who: Vec<String> = r.skipped.iter().map(|(c, _)| names(*c)).collect();
-        line.push_str(&format!("; not checked: {} (part not loaded)", who.join(", ")));
+        let who: Vec<String> = r.skipped.iter().map(|(c, _)| names(c)).collect();
+        line.push_str(&format!("; not checked: {} (file not loaded)", who.join(", ")));
     }
     line
 }
@@ -303,6 +307,7 @@ impl AnvilApp {
         let o = &mut s.interference_opts;
         o.touching = opts.touching;
         o.include_hidden = opts.include_hidden;
+        o.whole_subassemblies = opts.whole_subassemblies;
         o.clearance_on = opts.clearance.is_some();
         if let Some(c) = opts.clearance {
             o.clearance = format!("{c}");
@@ -311,7 +316,7 @@ impl AnvilApp {
         t.cancel();
         let report = s.asm.interference(&mut s.parts, opts, &Progress::new()).map_err(|_| "cancelled")?;
         t.show(report.clone(), s.asm.clone());
-        let line = summary(&report, &|c| s.component_label(c));
+        let line = summary(&report, &|c| s.path_label(c));
         self.status = format!("Interference: {line}");
         self.show_assembly_scene();
         Ok(report)
@@ -320,10 +325,9 @@ impl AnvilApp {
     /// Runs every frame in assembly mode: takes in a finished check.
     pub(super) fn assembly_tick(&mut self, ctx: &egui::Context) {
         let Some(s) = &mut self.asm else { return };
-        let names: Vec<(u32, String)> = s.asm.components.iter().map(|c| (c.id, c.name.clone())).collect();
+        let names = s.path_names.clone();
         let Some(t) = &mut s.interference else { return };
-        let name =
-            |id: u32| names.iter().find(|n| n.0 == id).map(|n| n.1.clone()).unwrap_or(format!("#{id}"));
+        let name = |p: &[u32]| super::assembly::label_of(&names, p);
         if let Some(msg) = t.poll(&name) {
             self.status = msg;
             self.show_assembly_scene();
@@ -376,6 +380,9 @@ impl AnvilApp {
                 ui.label("mm");
             });
             ui.checkbox(&mut o.include_hidden, "Include hidden components");
+            ui.checkbox(&mut o.whole_subassemblies, "Treat subassemblies as one component").on_hover_text(
+                "Check each subassembly as a whole, leaving out interference between its own parts",
+            );
         });
         ui.add_space(6.0);
         let Some(t) = &s.interference else { return };
@@ -398,7 +405,7 @@ impl AnvilApp {
         }
         if let Some(r) = &t.report {
             theme::section_label(ui, "Results");
-            let names = |id: u32| s.component_label(id);
+            let names = |p: &[u32]| s.path_label(p);
             ui.label(RichText::new(summary(r, &names)).color(pal.text_weak));
             ui.add_space(2.0);
             for (k, f) in r.findings.iter().enumerate() {
@@ -412,7 +419,7 @@ impl AnvilApp {
                     error: matches!(f.kind, FindingKind::Overlap { .. }),
                     ..Default::default()
                 };
-                let text = format!("{}, {}: {}", names(f.a), names(f.b), amount(f));
+                let text = format!("{}, {}: {}", names(&f.a), names(&f.b), amount(f));
                 let how = if f.exact { "exact" } else { "approximate: a part is faceted" };
                 let tip = match f.kind {
                     FindingKind::Overlap { .. } => format!("They overlap by {} ({how})", amount(f)),
@@ -495,14 +502,15 @@ impl AnvilApp {
                 "touching": s.interference_opts.touching,
                 "clearance": s.interference_opts.clearance_on.then(|| s.interference_opts.clearance.clone()),
                 "include_hidden": s.interference_opts.include_hidden,
+                "whole_subassemblies": s.interference_opts.whole_subassemblies,
             },
-            "report": t.report.as_ref().map(|r| report_json(r, &|c| s.component_label(c))),
+            "report": t.report.as_ref().map(|r| report_json(r, &|c| s.path_label(c))),
         }))
     }
 }
 
 /// A report as scripts, MCP and the harness see it.
-pub(super) fn report_json(r: &Report, names: &dyn Fn(u32) -> String) -> serde_json::Value {
+pub(super) fn report_json(r: &Report, names: &dyn Fn(&[u32]) -> String) -> serde_json::Value {
     use serde_json::json;
     let xyz = |v: Vec3| json!([v.x, v.y, v.z]);
     let findings: Vec<_> = r
@@ -511,10 +519,12 @@ pub(super) fn report_json(r: &Report, names: &dyn Fn(u32) -> String) -> serde_js
         .map(|f| {
             json!({
                 "kind": f.label(),
-                "a": names(f.a),
-                "b": names(f.b),
-                "a_id": f.a,
-                "b_id": f.b,
+                "a": names(&f.a),
+                "b": names(&f.b),
+                "a_id": f.a.first(),
+                "b_id": f.b.first(),
+                "a_path": f.a,
+                "b_path": f.b,
                 "volume": f.volume(),
                 "distance": f.distance(),
                 "points": f.points.map(|(p, q)| json!([xyz(p), xyz(q)])),
@@ -523,6 +533,6 @@ pub(super) fn report_json(r: &Report, names: &dyn Fn(u32) -> String) -> serde_js
         })
         .collect();
     let skipped: Vec<_> =
-        r.skipped.iter().map(|(c, why)| json!({ "component": names(*c), "error": why })).collect();
+        r.skipped.iter().map(|(c, why)| json!({ "component": names(c), "error": why })).collect();
     json!({ "findings": findings, "pairs": r.pairs, "skipped": skipped, "summary": summary(r, names) })
 }

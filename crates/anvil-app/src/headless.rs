@@ -1557,6 +1557,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Issue #93: subassemblies from a script. A kit of two blocks saved as an assembly
+    /// goes in flexible beside a third block; the BOM counts each level and flexible can
+    /// be turned off again.
+    #[test]
+    fn lua_builds_an_assembly_with_a_subassembly() {
+        let dir = std::env::temp_dir().join(format!("anvil-lua-sub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("kit")).expect("temp dir");
+        let d = dir.display().to_string().replace('\\', "/");
+        let mut h = Headless::new();
+        let r = h.command(&json!({"cmd": "lua", "code": format!(r#"
+            local s = anvil.sketch{{ plane = "front", rects = {{ {{ 0, 0, 10, 10 }} }} }}
+            anvil.extrude{{ sketch = s, depth = 10 }}
+            anvil.save("{d}/kit/cube.anvprt")
+            anvil.assembly()
+            anvil.insert{{ path = "{d}/kit/cube.anvprt" }}
+            anvil.insert{{ path = "{d}/kit/cube.anvprt", at = {{20, 0, 0}} }}
+            anvil.save("{d}/kit/kit.anvasm")
+            anvil.assembly{{ force = true }}
+            anvil.insert{{ path = "{d}/kit/cube.anvprt" }}
+            anvil.insert{{ path = "{d}/kit/kit.anvasm", at = {{0, 50, 0}}, flexible = true }}
+            local parts = anvil.bom{{ view = "parts" }}
+            assert(#parts.rows == 1 and parts.rows[1].quantity == 3, "parts only")
+            local tree = anvil.bom{{ view = "indented" }}
+            assert(#tree.rows == 3 and tree.rows[3].number == "2.1" and tree.rows[3].quantity == 2, "indented")
+            assert(#anvil.bom().rows == 2, "top level")
+            anvil.flexible{{ component = "kit<1>", flexible = false }}
+        "#)}));
+        assert!(r.get("error").is_none(), "{r}");
+        let st = run(&mut h, json!({"cmd": "state"}));
+        let k = &st["state"]["assembly"]["components"][1];
+        assert_eq!((k["kind"].as_str(), k["flexible"].as_bool()), (Some("assembly"), Some(false)), "{st}");
+        assert!(dir.join("kit/kit.anvasm").exists());
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.flexible{ component = 'cube<1>' }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("only a subassembly can be flexible")), "{r}");
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.bom{ view = 'sideways' }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("not top, parts or indented")), "{r}");
+        let r = h.command(&json!({"cmd": "lua", "code": format!("anvil.insert{{ path = '{d}/kit/cube.anvprt', flexible = true }}")}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("flexible applies to an assembly")), "{r}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Issue #66: interference from a script. A 10.2 mm pin through a 10 mm hole in a
     /// 10 mm plate overlaps it by the ring between them; resting a block on the plate is
     /// touching, not an overlap.

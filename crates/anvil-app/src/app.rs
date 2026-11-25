@@ -703,7 +703,7 @@ impl AnvilApp {
         }
     }
 
-    /// The bodies a 3MF file holds: each visible component of an assembly, in place;
+    /// The bodies a 3MF file holds: each visible part of an assembly, at every depth, in place;
     /// each body of a multibody part; or the part's one body. Each carries its part's
     /// material, shown in the colour AnvilCAD draws bodies in.
     fn print_package(&mut self) -> anvil_io::threemf::Package {
@@ -714,12 +714,13 @@ impl AnvilApp {
         let title = self.part_name();
         if let Some(s) = &mut self.asm {
             let mut objects = Vec::new();
-            for c in s.asm.components.iter().filter(|c| !c.hidden) {
+            let (placed, _) = s.asm.placed_parts(&mut s.parts);
+            for p in placed.iter().filter(|p| !p.hidden) {
                 // Components that failed to load are listed in the assembly's errors already.
-                if let Ok(part) = s.parts.get(&c.path, c.configuration.as_deref()) {
+                if let Ok(part) = s.parts.get(&p.file, p.configuration.as_deref()) {
                     objects.push(Object {
-                        name: c.name.clone(),
-                        solid: part.state.body.transformed(&c.placement),
+                        name: p.name.clone(),
+                        solid: part.state.body.transformed(&p.placement),
                         material: material(&part.doc.material),
                     });
                 }

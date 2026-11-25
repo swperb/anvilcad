@@ -1,0 +1,26 @@
+{
+  "components": 3,
+  "format": "anvil-assembly",
+  "format_version": 1,
+  "geometry": {
+    "bbox_max": [
+      145.00000000000003,
+      25.0,
+      40.0
+    ],
+    "bbox_min": [
+      -40.0,
+      -25.0,
+      0.0
+    ],
+    "bodies": 3,
+    "faces": 30,
+    "surface_area": 25886.618061046454,
+    "volume": 86286.5515953973
+  },
+  "mates": 4,
+  "mates_satisfied": true,
+  "recorded_by": "a088f6d with the subassemblies change (#93), fixture_generator generate",
+  "resaves_unchanged": true,
+  "saved_by": "a088f6d with the subassemblies change (#93), fixture_generator generate"
+}

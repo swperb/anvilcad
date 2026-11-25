@@ -1,14 +1,19 @@
 //! Assembly mode: an assembly open in the main window instead of a part. The left pane
-//! lists the assembly's planes, its components and its mates; the command bar inserts
-//! components, adds mates and shows the bill of materials; the view shows every component
-//! where the mates put it. Behaviour follows `docs/re/assemblies-and-mates.md`.
+//! lists the assembly's planes, its components (with what is inside its subassemblies)
+//! and its mates; the command bar inserts parts and subassemblies, adds mates, makes a
+//! subassembly flexible or rigid and shows the bill of materials; the view shows every
+//! part, at every depth, where the mates put it. Behaviour follows
+//! `docs/re/assemblies-and-mates.md`, including "Subassemblies".
 
 use super::interference::{InterferenceOptions, InterferenceTool};
 use super::AnvilApp;
 use crate::file_error::{FileFailure, FileOp, Kind};
 use crate::theme::{self, Icon, Palette, RowLook};
 use anvil_kernel::{EdgeRef, FaceId, Frame, Mesh, ModelEdge, Solid, Vec3};
-use anvil_model::assembly::{Assembly, AssemblyStatus, MateEntity, MateRef, Parts, ASSEMBLY_EXT};
+use anvil_model::assembly::{
+    file_solid, is_assembly_path, Assembly, AssemblyStatus, BomView, LoadError, MateEntity, MateRef, Parts,
+    ASSEMBLY_EXT,
+};
 use anvil_model::mates::{Alignment, Definition, MateKind, MateState};
 use anvil_model::{BuildState, PlaneRef, PART_EXT};
 use eframe::egui::{self, RichText, Sense};
@@ -84,6 +89,53 @@ impl MateTool {
     }
 }
 
+/// A component inside a subassembly, as the tree lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct NestedRow {
+    /// The path of component ids from the top level.
+    pub path: Vec<u32>,
+    /// Its own instance name, as `link<2>`.
+    pub name: String,
+    pub assembly: bool,
+    pub flexible: bool,
+}
+
+/// The name of the component at `path`, from a session's names, or its ids.
+pub(super) fn label_of(names: &HashMap<Vec<u32>, String>, path: &[u32]) -> String {
+    names
+        .get(path)
+        .cloned()
+        .unwrap_or_else(|| path.iter().map(|id| format!("#{id}")).collect::<Vec<_>>().join("/"))
+}
+
+/// Lists the components inside `asm` (a subassembly at `prefix`), depth first.
+fn nested_rows(
+    asm: &Assembly,
+    parts: &mut Parts,
+    prefix: &[u32],
+    label: &str,
+    names: &mut HashMap<Vec<u32>, String>,
+    out: &mut Vec<NestedRow>,
+) {
+    for c in &asm.components {
+        let mut path = prefix.to_vec();
+        path.push(c.id);
+        let full = format!("{label}/{}", c.name);
+        names.insert(path.clone(), full.clone());
+        out.push(NestedRow {
+            path: path.clone(),
+            name: c.name.clone(),
+            assembly: c.is_assembly(),
+            flexible: c.flexible,
+        });
+        if c.is_assembly() && path.len() <= anvil_model::assembly::MAX_DEPTH {
+            if let Ok(sub) = parts.assembly(&c.path) {
+                nested_rows(&sub.asm, parts, &path, &full, names, out);
+            }
+        }
+    }
+}
+
 /// An assembly open in the window.
 pub(super) struct AsmSession {
     pub asm: Assembly,
@@ -99,15 +151,20 @@ pub(super) struct AsmSession {
     pub body: Solid,
     /// `body`, tessellated for the view.
     mesh: Mesh,
-    /// What each renamed face is: its component and its face in the part.
-    faces: Vec<(u32, FaceId)>,
-    /// Model edges in assembly coordinates, named by the component's own faces.
-    pub(super) edges: Vec<(u32, ModelEdge)>,
-    /// Components whose part could not be loaded, with why.
-    pub load_errors: Vec<(u32, String)>,
+    /// What each renamed face is: its part's component path and its face in the part.
+    faces: Vec<(Vec<u32>, FaceId)>,
+    /// Model edges in assembly coordinates, named by the part's own faces.
+    pub(super) edges: Vec<(Vec<u32>, ModelEdge)>,
+    /// Components, at any depth, whose file could not be loaded, with why.
+    pub load_errors: Vec<LoadError>,
+    /// Every component's name by its path, `arm<1>/link<2>` inside a subassembly.
+    pub path_names: HashMap<Vec<u32>, String>,
+    /// The components inside each subassembly, for the tree.
+    pub nested: Vec<NestedRow>,
     pub selection: AsmSelection,
     pub mate: Option<MateTool>,
     pub bom: bool,
+    pub bom_view: BomView,
     /// The Interference panel, while it is open.
     pub interference: Option<InterferenceTool>,
     /// Its options, kept while it is closed.
@@ -134,9 +191,12 @@ impl AsmSession {
             faces: Vec::new(),
             edges: Vec::new(),
             load_errors: Vec::new(),
+            path_names: HashMap::new(),
+            nested: Vec::new(),
             selection: AsmSelection::None,
             mate: None,
             bom: false,
+            bom_view: BomView::TopLevel,
             interference: None,
             interference_opts: InterferenceOptions::default(),
         }
@@ -154,48 +214,62 @@ impl AsmSession {
             .unwrap_or_else(|| "Assembly1".into())
     }
 
-    /// The component and part face behind a face of the combined body.
-    pub fn face(&self, f: FaceId) -> Option<(u32, FaceId)> {
-        f.feature.checked_sub(COMPONENT_FACE).and_then(|k| self.faces.get(k as usize)).copied()
+    /// The part's component path and part face behind a face of the combined body.
+    pub fn face(&self, f: FaceId) -> Option<(Vec<u32>, FaceId)> {
+        f.feature.checked_sub(COMPONENT_FACE).and_then(|k| self.faces.get(k as usize)).cloned()
     }
 
-    /// Solves the mates and rebuilds the combined body.
+    /// Solves the mates and rebuilds the combined body from every part at every depth.
     fn refresh(&mut self) {
         self.status = self.asm.solve(&mut self.parts);
+        let (placed, errors) = self.asm.placed_parts(&mut self.parts);
+        self.load_errors = errors;
+        self.path_names.clear();
+        self.nested.clear();
+        for c in &self.asm.components {
+            self.path_names.insert(vec![c.id], c.name.clone());
+            if c.is_assembly() {
+                if let Ok(sub) = self.parts.assembly(&c.path) {
+                    nested_rows(
+                        &sub.asm,
+                        &mut self.parts,
+                        &[c.id],
+                        &c.name,
+                        &mut self.path_names,
+                        &mut self.nested,
+                    );
+                }
+            }
+        }
         let mut polygons = Vec::new();
-        let mut index: HashMap<(u32, FaceId), u32> = HashMap::new();
+        let mut index: HashMap<(Vec<u32>, FaceId), u32> = HashMap::new();
         self.faces.clear();
         self.edges.clear();
-        self.load_errors.clear();
-        for c in &self.asm.components {
-            let part = match self.parts.get(&c.path, c.configuration.as_deref()) {
-                Ok(p) => p,
-                Err(e) => {
-                    self.load_errors.push((c.id, e));
-                    continue;
-                }
-            };
-            if c.hidden {
-                continue;
-            }
-            let placed = part.state.body.transformed(&c.placement);
+        for p in placed.iter().filter(|p| !p.hidden) {
+            let Ok(part) = self.parts.get(&p.file, p.configuration.as_deref()) else { continue };
+            let f = p.placement;
             for e in part.state.body.model_edges() {
-                let seg = [c.placement.to_world3(e.seg[0]), c.placement.to_world3(e.seg[1])];
-                self.edges.push((c.id, ModelEdge { seg, faces: e.faces }));
+                let seg = [f.to_world3(e.seg[0]), f.to_world3(e.seg[1])];
+                self.edges.push((p.path.clone(), ModelEdge { seg, faces: e.faces }));
             }
-            for mut p in placed.polygons {
-                let key = (c.id, p.tag.id);
+            for mut poly in part.state.body.transformed(&f).polygons {
+                let key = (p.path.clone(), poly.tag.id);
                 let n = self.faces.len() as u32;
-                let k = *index.entry(key).or_insert_with(|| {
+                let k = *index.entry(key.clone()).or_insert_with(|| {
                     self.faces.push(key);
                     n
                 });
-                p.tag.id = FaceId { feature: COMPONENT_FACE + k, index: 0 };
-                polygons.push(p);
+                poly.tag.id = FaceId { feature: COMPONENT_FACE + k, index: 0 };
+                polygons.push(poly);
             }
         }
         self.body = Solid::new(polygons);
         self.mesh = self.body.tessellate();
+    }
+
+    /// The load errors of the top-level component `id`: its own and those inside it.
+    pub fn errors_of(&self, id: u32) -> Vec<&LoadError> {
+        self.load_errors.iter().filter(|e| e.path.first() == Some(&id)).collect()
     }
 
     fn commit(&mut self) {
@@ -205,13 +279,14 @@ impl AsmSession {
         }
     }
 
-    /// The entity a click on a face or edge of the combined body picks.
-    fn pick_ref(&self, face: Option<FaceId>, edge: Option<(u32, EdgeRef)>) -> Option<MateRef> {
+    /// The entity a click on a face or edge of the combined body picks: on the part that
+    /// owns it, however deep inside subassemblies.
+    fn pick_ref(&self, face: Option<FaceId>, edge: Option<(Vec<u32>, EdgeRef)>) -> Option<MateRef> {
         if let Some((c, e)) = edge {
-            return Some(MateRef { component: Some(c), entity: MateEntity::Edge(e) });
+            return Some(MateRef::at(&c, MateEntity::Edge(e)));
         }
         let (c, f) = self.face(face?)?;
-        Some(MateRef { component: Some(c), entity: MateEntity::Face(f) })
+        Some(MateRef::at(&c, MateEntity::Face(f)))
     }
 
     /// Faces of the combined body to highlight (or, while the Interference panel shows
@@ -220,18 +295,18 @@ impl AsmSession {
         if self.interference.as_ref().is_some_and(InterferenceTool::shows_findings) {
             return Vec::new();
         }
-        let synthetic = |pred: &dyn Fn(u32, FaceId) -> bool| -> Vec<FaceId> {
+        let synthetic = |pred: &dyn Fn(&[u32], FaceId) -> bool| -> Vec<FaceId> {
             self.faces
                 .iter()
                 .enumerate()
-                .filter(|(_, (c, f))| pred(*c, *f))
+                .filter(|(_, (c, f))| pred(c, *f))
                 .map(|(k, _)| FaceId { feature: COMPONENT_FACE + k as u32, index: 0 })
                 .collect()
         };
         if let Some(t) = &self.mate {
             return synthetic(&|c, f| {
                 t.picks.iter().any(|r| {
-                    r.component == Some(c)
+                    r.path() == c
                         && match r.entity {
                             MateEntity::Face(g) | MateEntity::Plane(PlaneRef::Face(g)) => g == f,
                             _ => false,
@@ -240,11 +315,11 @@ impl AsmSession {
             });
         }
         match self.selection {
-            AsmSelection::Component(id) => synthetic(&|c, _| c == id),
+            AsmSelection::Component(id) => synthetic(&|c, _| c.first() == Some(&id)),
             AsmSelection::Mate(id) => match self.asm.mate(id) {
                 Some(m) => {
-                    let on = |r: &MateRef, c: u32, f: FaceId| {
-                        r.component == Some(c)
+                    let on = |r: &MateRef, c: &[u32], f: FaceId| {
+                        r.path() == c
                             && match r.entity {
                                 MateEntity::Face(g) => g == f,
                                 _ => false,
@@ -263,14 +338,14 @@ impl AsmSession {
     pub fn highlighted_edges(&self) -> Vec<[Vec3; 2]> {
         let refs: Vec<MateRef> = match (&self.mate, self.selection) {
             (Some(t), _) => t.picks.clone(),
-            (None, AsmSelection::Mate(id)) => self.asm.mate(id).map(|m| vec![m.a, m.b]).unwrap_or_default(),
+            (None, AsmSelection::Mate(id)) => {
+                self.asm.mate(id).map(|m| vec![m.a.clone(), m.b.clone()]).unwrap_or_default()
+            }
             _ => vec![],
         };
         self.edges
             .iter()
-            .filter(|(c, e)| {
-                refs.iter().any(|r| r.component == Some(*c) && r.entity == MateEntity::Edge(e.faces))
-            })
+            .filter(|(c, e)| refs.iter().any(|r| r.path() == *c && r.entity == MateEntity::Edge(e.faces)))
             .map(|(_, e)| e.seg)
             .collect()
     }
@@ -284,6 +359,11 @@ impl AsmSession {
     /// A component's instance name, as `bracket<1>`.
     pub fn component_label(&self, id: u32) -> String {
         self.component_name(Some(id))
+    }
+
+    /// The name of the component at `path`, as `arm<1>/link<2>` inside a subassembly.
+    pub fn path_label(&self, path: &[u32]) -> String {
+        label_of(&self.path_names, path)
     }
 
     /// Faces drawn red: the selected finding's overlap volume.
@@ -315,8 +395,48 @@ impl AsmSession {
             }
             MateEntity::Vertex(_) => "Vertex".to_string(),
         };
-        format!("{}: {what}", self.component_name(r.component))
+        let who = if r.component.is_none() { self.name() } else { self.path_label(&r.path()) };
+        format!("{who}: {what}")
     }
+}
+
+/// Why an assembly was not saved.
+#[derive(Debug)]
+pub(super) enum SaveRefused {
+    /// Saving there would be wrong: not an assembly file, or one of its own subassemblies.
+    Refused(String),
+    /// Writing the file failed.
+    File(Box<anvil_model::FileError>),
+}
+
+impl std::fmt::Display for SaveRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SaveRefused::Refused(e) => f.write_str(e),
+            SaveRefused::File(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// A bill of materials as scripts and MCP see it.
+pub(super) fn bom_json(view: BomView, rows: &[anvil_model::assembly::BomRow]) -> serde_json::Value {
+    use serde_json::json;
+    let rows: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "number": r.number,
+                "level": r.level,
+                "assembly": r.assembly,
+                "part_number": r.part_number,
+                "description": r.description,
+                "path": r.path,
+                "configuration": r.configuration,
+                "quantity": r.quantity,
+            })
+        })
+        .collect();
+    json!({ "view": view.key(), "rows": rows })
 }
 
 /// The tree prefix for how well a component is defined: `(f)` fixed, `(-)` under defined,
@@ -356,6 +476,19 @@ impl AnvilApp {
                 if let Some(s) = &mut self.asm {
                     s.saved = s.asm.clone();
                     s.committed = s.asm.clone();
+                    // Everything that loaded is open; say what did not.
+                    if !s.load_errors.is_empty() {
+                        let lines: Vec<String> =
+                            s.load_errors.iter().map(|e| format!("{}: {}", e.name, e.error)).collect();
+                        self.message = Some((
+                            "Some components could not be loaded".into(),
+                            format!(
+                                "The rest of the assembly is open. These components are marked in the tree and \
+                                 mates to them are unresolved until their files are back:\n\n{}",
+                                lines.join("\n")
+                            ),
+                        ));
+                    }
                 }
             }
             Err(e) => self.file_failure = Some(FileFailure::file(FileOp::Open, Kind::Assembly, p, &e)),
@@ -460,7 +593,40 @@ impl AnvilApp {
             }
         };
         let Some(path) = path else { return };
-        let Some(s) = &mut self.asm else { return };
+        match self.save_assembly_to(&path) {
+            Ok(()) => self.status = format!("Saved {}", path.display()),
+            Err(SaveRefused::File(e)) => {
+                self.file_failure = Some(FileFailure::file(FileOp::Save, Kind::Assembly, &path, &e))
+            }
+            Err(SaveRefused::Refused(e)) => self.message = Some(("Save failed".into(), e)),
+        }
+    }
+
+    /// Saves the open assembly as `path`, with its component paths made relative to it.
+    /// Refuses a path that is not an `.anvasm` file, or one of its own subassemblies.
+    pub(super) fn save_assembly_to(&mut self, path: &Path) -> Result<(), SaveRefused> {
+        let Some(s) = self.asm.as_mut() else {
+            return Err(SaveRefused::Refused("no assembly is open".into()));
+        };
+        if !is_assembly_path(&path.to_string_lossy()) {
+            return Err(SaveRefused::Refused(format!(
+                "{} is not an .{ASSEMBLY_EXT} file; an assembly saves as .{ASSEMBLY_EXT}",
+                path.display()
+            )));
+        }
+        // An assembly saved over one of its own subassemblies would contain itself.
+        let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let subs: Vec<String> =
+            s.asm.components.iter().filter(|c| c.is_assembly()).map(|c| c.path.clone()).collect();
+        for sub in subs {
+            if s.parts.assembly_files(&sub).contains(&target) {
+                return Err(SaveRefused::Refused(format!(
+                    "{} is a subassembly of this assembly, so saving over it would make the assembly \
+                     contain itself. Save under another name.",
+                    path.display()
+                )));
+            }
+        }
         // Component paths are kept relative to the assembly file where they can be.
         let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
         let old = s.parts.base.clone();
@@ -469,29 +635,29 @@ impl AnvilApp {
             let full = old.join(&c.path);
             c.path = relative_to(&full, &dir);
         }
-        match moved.save(&path) {
-            Ok(()) => {
-                if moved != s.asm {
-                    s.asm = moved;
-                    s.parts = Parts::for_file(&path);
-                }
-                s.path = Some(path.clone());
-                s.saved = s.asm.clone();
-                s.committed = s.asm.clone();
-                self.status = format!("Saved {}", path.display());
-                self.refresh_assembly();
-            }
-            Err(e) => self.file_failure = Some(FileFailure::file(FileOp::Save, Kind::Assembly, &path, &e)),
+        moved.save(path).map_err(|e| SaveRefused::File(Box::new(e)))?;
+        if moved != s.asm || s.path.as_deref() != Some(path) {
+            s.asm = moved;
+            s.parts = Parts::for_file(path);
         }
+        s.path = Some(path.to_path_buf());
+        s.saved = s.asm.clone();
+        s.committed = s.asm.clone();
+        self.refresh_assembly();
+        Ok(())
     }
 
-    /// Inserts a part as a new component, beside what is already there.
+    /// Inserts a part or a subassembly as a new component, beside what is already there.
     pub(super) fn insert_component(&mut self) {
         if self.asm.is_none() {
             self.new_assembly();
         }
         let Some(picked) = self.file_dialog("Insert Component", || {
-            rfd::FileDialog::new().add_filter("AnvilCAD part", &[PART_EXT]).pick_file()
+            rfd::FileDialog::new()
+                .add_filter("AnvilCAD part or assembly", &[PART_EXT, ASSEMBLY_EXT])
+                .add_filter("AnvilCAD part", &[PART_EXT])
+                .add_filter("AnvilCAD assembly", &[ASSEMBLY_EXT])
+                .pick_file()
         }) else {
             return;
         };
@@ -504,14 +670,17 @@ impl AnvilApp {
         }
     }
 
-    /// Inserts `file` as a component, at `at` or beside the others; returns its id.
+    /// Inserts `file` (a part or an assembly) as a component, at `at` or beside the
+    /// others; returns its id. An assembly that contains itself, or this assembly, is
+    /// refused.
     pub(super) fn insert_part_at(&mut self, file: &Path, at: Option<Vec3>) -> Result<u32, String> {
         let Some(s) = &mut self.asm else { return Err("no assembly is open".into()) };
         let path = match &s.path {
             Some(p) => relative_to(file, p.parent().unwrap_or(Path::new(""))),
             None => file.to_string_lossy().replace('\\', "/"),
         };
-        let size = s.parts.get(&path, None)?.state.body.bounds();
+        s.asm.check_insert(&mut s.parts, &path)?;
+        let size = file_solid(&mut s.parts, &path, None)?.bounds();
         // Beside the assembly so far, with a gap, so the new part does not overlap.
         let here = s.body.bounds();
         let at = at.unwrap_or(if here.is_empty() || size.is_empty() {
@@ -520,6 +689,10 @@ impl AnvilApp {
             anvil_kernel::v3(here.max.x + 0.25 * here.diagonal().max(10.0) - size.min.x, 0.0, 0.0)
         });
         let id = s.asm.add_component(&path, None, Frame { origin: at, ..Frame::WORLD });
+        if is_assembly_path(&path) {
+            self.status = format!("Inserted {} as a rigid subassembly", file.display());
+        }
+        let Some(s) = &mut self.asm else { return Err("no assembly is open".into()) };
         s.selection = AsmSelection::Component(id);
         s.commit();
         self.fit_pending = true;
@@ -527,8 +700,9 @@ impl AnvilApp {
         Ok(id)
     }
 
-    /// The component face through `p` (assembly coordinates), for a scripted mate.
-    pub(super) fn assembly_face_at(&self, p: Vec3) -> Result<(u32, FaceId), String> {
+    /// The face through `p` (assembly coordinates), for a scripted mate: the path of the
+    /// part's component, however deep, and the face on that part.
+    pub(super) fn assembly_face_at(&self, p: Vec3) -> Result<(Vec<u32>, FaceId), String> {
         let s = self.asm.as_ref().ok_or("no assembly is open")?;
         let f = super::scripting::face_through(&s.body, p)?;
         s.face(f).ok_or_else(|| "that face is not on a component".to_string())
@@ -595,7 +769,7 @@ impl AnvilApp {
         };
         s.mate = Some(MateTool {
             kind,
-            picks: vec![m.a, m.b],
+            picks: vec![m.a.clone(), m.b.clone()],
             alignment: m.alignment,
             flip,
             value,
@@ -639,7 +813,7 @@ impl AnvilApp {
         let Some(s) = &mut self.asm else { return Err("no assembly is open".into()) };
         let Some(t) = &s.mate else { return Err("the Mate panel is not open".into()) };
         let [a, b] = t.picks.as_slice() else { return Err("pick two entities".into()) };
-        let (a, b) = (*a, *b);
+        let (a, b) = (a.clone(), b.clone());
         if a.component.is_some() && a.component == b.component {
             return Err("pick entities on two different components".into());
         }
@@ -724,7 +898,7 @@ impl AnvilApp {
                 // Edges behind the face under the pointer cannot be picked.
                 let tol = 1e-3 * s.body.bounds().diagonal().max(1.0);
                 let front = hit.map(|h| h.t + tol).unwrap_or(f64::INFINITY);
-                let mut best: Option<(f32, (u32, EdgeRef))> = None;
+                let mut best: Option<(f32, (Vec<u32>, EdgeRef))> = None;
                 for (c, e) in &s.edges {
                     let (a, b) = (self.camera.project(e.seg[0], rect), self.camera.project(e.seg[1], rect));
                     let ab = b - a;
@@ -735,8 +909,8 @@ impl AnvilApp {
                     };
                     let d = (a + ab * t - m).length();
                     let depth = (e.seg[0].lerp(e.seg[1], t as f64) - o).dot(dir);
-                    if d < 4.0 && depth <= front && best.is_none_or(|(bd, _)| d < bd) {
-                        best = Some((d, (*c, e.faces)));
+                    if d < 4.0 && depth <= front && best.as_ref().is_none_or(|(bd, _)| d < *bd) {
+                        best = Some((d, (c.clone(), e.faces)));
                     }
                 }
                 best.map(|b| b.1)
@@ -745,8 +919,9 @@ impl AnvilApp {
                 self.mate_pick(r);
             }
         } else {
-            s.selection = match hover.and_then(|f| s.face(f)) {
-                Some((c, _)) => AsmSelection::Component(c),
+            // A part inside a subassembly selects the subassembly.
+            s.selection = match hover.and_then(|f| s.face(f)).and_then(|(c, _)| c.first().copied()) {
+                Some(c) => AsmSelection::Component(c),
                 None => AsmSelection::None,
             };
             self.scene_dirty = true;
@@ -787,6 +962,23 @@ impl AnvilApp {
                     self.assembly_commit();
                     self.refresh_assembly();
                 }
+                let sub = self.asm.as_ref().and_then(|s| s.asm.component(id)).filter(|c| c.is_assembly());
+                if let Some(flexible) = sub.map(|c| c.flexible) {
+                    let label = if flexible { "Make Rigid" } else { "Make Flexible" };
+                    let tip = if flexible {
+                        "Move the subassembly as one body again"
+                    } else {
+                        "Solve the subassembly's own mates here, so its parts can move within them"
+                    };
+                    if theme::command_button(ui, Icon::Assembly, label, Some(flexible))
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        if let Err(e) = self.set_flexible(id, !flexible) {
+                            self.status = e;
+                        }
+                    }
+                }
             } else {
                 ui.label(RichText::new("Select a component").size(11.5).weak());
             }
@@ -807,9 +999,24 @@ impl AnvilApp {
                 }
             }
             if theme::command_button(ui, Icon::Rebuild, "Rebuild", None).clicked() {
+                // Subassembly files are read again, so changes saved to them show.
+                if let Some(s) = &mut self.asm {
+                    s.parts.reload_assemblies();
+                }
                 self.refresh_assembly();
             }
         });
+    }
+
+    /// Makes a subassembly flexible or rigid and solves.
+    pub(super) fn set_flexible(&mut self, id: u32, flexible: bool) -> Result<(), String> {
+        let s = self.asm.as_mut().ok_or("no assembly is open")?;
+        s.asm.set_flexible(id, flexible)?;
+        let name = s.component_label(id);
+        self.assembly_commit();
+        self.refresh_assembly();
+        self.status = format!("{name} is now {}", if flexible { "flexible" } else { "rigid" });
+        Ok(())
     }
 
     pub(super) fn set_fixed(&mut self, id: u32, fixed: bool) {
@@ -858,7 +1065,7 @@ impl AnvilApp {
         };
         let is_picked = |r: &MateRef| s.mate.as_ref().is_some_and(|t| t.picks.contains(r));
         for (icon, e) in own {
-            let r = MateRef { component: None, entity: e };
+            let r = MateRef { inner: Vec::new(), component: None, entity: e };
             let look = RowLook { selected: is_picked(&r), ..Default::default() };
             if theme::tree_row(ui, icon, &label(&e), look).clicked() && picking {
                 picked = Some(r);
@@ -866,20 +1073,34 @@ impl AnvilApp {
         }
         for c in &s.asm.components {
             let def = s.status.component(c.id);
-            let error = s.load_errors.iter().any(|e| e.0 == c.id) || def == Some(Definition::OverDefined);
+            let errors = s.errors_of(c.id);
+            let error = !errors.is_empty() || def == Some(Definition::OverDefined);
             let look = RowLook {
                 selected: s.selection == AsmSelection::Component(c.id),
                 dimmed: c.hidden,
                 error,
                 indent: 0,
             };
-            let text = format!("{}{}", prefix(def), c.name);
-            let mut row = theme::tree_row(ui, Icon::Part, &text, look);
+            let flex = if c.flexible { " (flexible)" } else { "" };
+            let text = format!("{}{}{flex}", prefix(def), c.name);
+            let icon = if c.is_assembly() { Icon::Assembly } else { Icon::Part };
+            let mut row = theme::tree_row(ui, icon, &text, look);
             if let Some(Definition::UnderDefined(n)) = def {
                 row = row.on_hover_text(format!("Can still move {n} way(s)"));
             }
-            if let Some((_, e)) = s.load_errors.iter().find(|e| e.0 == c.id) {
-                row = row.on_hover_text(e);
+            if !errors.is_empty() {
+                let lines: Vec<String> =
+                    errors
+                        .iter()
+                        .map(|e| {
+                            if e.path.len() == 1 {
+                                e.error.clone()
+                            } else {
+                                format!("{}: {}", e.name, e.error)
+                            }
+                        })
+                        .collect();
+                row = row.on_hover_text(lines.join("\n"));
             }
             if row.clicked() {
                 select = Some(AsmSelection::Component(c.id));
@@ -889,11 +1110,31 @@ impl AnvilApp {
                 || (picking && s.selection == AsmSelection::Component(c.id))
             {
                 for (icon, e) in own {
-                    let r = MateRef { component: Some(c.id), entity: e };
+                    let r = MateRef { inner: Vec::new(), component: Some(c.id), entity: e };
                     let look = RowLook { selected: is_picked(&r), indent: 1, ..Default::default() };
                     if theme::tree_row(ui, icon, &label(&e), look).clicked() && picking {
                         picked = Some(r);
                     }
+                }
+            }
+            // What is inside a subassembly, read only: its own mates live in its file.
+            for n in s.nested.iter().filter(|n| n.path.first() == Some(&c.id)) {
+                let bad = s.load_errors.iter().find(|e| e.path == n.path);
+                let look = RowLook {
+                    selected: false,
+                    dimmed: c.hidden,
+                    error: bad.is_some(),
+                    indent: (n.path.len() - 1).min(8) as u8,
+                };
+                let flex = if n.flexible { " (flexible)" } else { "" };
+                let icon = if n.assembly { Icon::Assembly } else { Icon::Part };
+                let mut row = theme::tree_row(ui, icon, &format!("{}{flex}", n.name), look);
+                row = match bad {
+                    Some(e) => row.on_hover_text(&e.error),
+                    None => row.on_hover_text(format!("Inside {}; open its file to change it", c.name)),
+                };
+                if row.clicked() {
+                    select = Some(AsmSelection::Component(c.id));
                 }
             }
         }
@@ -1028,24 +1269,49 @@ impl AnvilApp {
         if !s.bom {
             return;
         }
-        let rows = s.asm.bill_of_materials(&mut s.parts);
+        let rows = s.asm.bom(&mut s.parts, s.bom_view);
         let mut open = true;
+        let mut view = s.bom_view;
         egui::Window::new("Bill of Materials").open(&mut open).resizable(true).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                for v in BomView::ALL {
+                    ui.selectable_value(&mut view, v, v.label());
+                }
+            });
+            ui.add_space(4.0);
             egui::Grid::new("bom").num_columns(5).striped(true).show(ui, |ui| {
                 for h in ["Item", "Part number", "Description", "Configuration", "Qty"] {
                     ui.strong(h);
                 }
                 ui.end_row();
                 for r in &rows {
-                    ui.label(r.item.to_string());
-                    ui.label(&r.part_number);
+                    ui.label(&r.number);
+                    ui.horizontal(|ui| {
+                        // One level lines up under the subassembly's name, past its icon.
+                        ui.add_space((14.0 + ui.spacing().item_spacing.x) * r.level as f32);
+                        if r.assembly {
+                            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), Sense::hover());
+                            let pal = Palette::of(ui);
+                            theme::paint_icon(ui.painter(), rect, Icon::Assembly, pal.text, pal.accent);
+                        }
+                        ui.label(&r.part_number);
+                    });
                     ui.label(&r.description);
-                    ui.label(r.configuration.as_deref().unwrap_or("Default"));
+                    // Assemblies have no configurations yet.
+                    ui.label(if r.assembly { "" } else { r.configuration.as_deref().unwrap_or("Default") });
                     ui.label(r.quantity.to_string());
                     ui.end_row();
                 }
             });
+            let note = match view {
+                BomView::TopLevel => "Parts and subassemblies of this assembly; not what is inside them.",
+                BomView::PartsOnly => "Every part at every depth, counted in the whole assembly.",
+                BomView::Indented => "Subassemblies with their parts below them, counted per subassembly.",
+            };
+            ui.add_space(4.0);
+            ui.label(RichText::new(note).size(11.5).weak());
         });
+        s.bom_view = view;
         if !open {
             s.bom = false;
         }
@@ -1061,10 +1327,19 @@ impl AnvilApp {
             .iter()
             .map(|c| {
                 let def = s.status.component(c.id);
+                let inside: Vec<_> = s
+                    .nested
+                    .iter()
+                    .filter(|n| n.path.first() == Some(&c.id))
+                    .map(|n| json!({ "path": n.path, "name": s.path_label(&n.path), "assembly": n.assembly }))
+                    .collect();
                 json!({
                     "id": c.id,
                     "name": c.name,
                     "path": c.path,
+                    "kind": if c.is_assembly() { "assembly" } else { "part" },
+                    "flexible": c.flexible,
+                    "inside": inside,
                     "fixed": c.fixed,
                     "hidden": c.hidden,
                     "origin": [c.placement.origin.x, c.placement.origin.y, c.placement.origin.z],
@@ -1093,11 +1368,18 @@ impl AnvilApp {
                 json!({ "id": m.id, "name": m.name, "kind": m.kind.label(), "suppressed": m.suppressed, "state": state })
             })
             .collect();
+        let errors: Vec<_> = s
+            .load_errors
+            .iter()
+            .map(|e| json!({ "path": e.path, "name": e.name, "error": e.error }))
+            .collect();
         Some(json!({
             "name": s.name(),
             "path": s.path,
             "components": comps,
             "mates": mates,
+            "load_errors": errors,
+            "bom": s.bom.then(|| s.bom_view.key()),
             "interference": self.interference_snapshot(),
             "mate_panel": s.mate.as_ref().map(|t| json!({
                 "type": MATE_TYPES.get(t.kind),
@@ -1165,6 +1447,12 @@ mod tests {
 
     /// The face of a component whose outward normal in the assembly is `n`, as a mate pick.
     fn face_facing(app: &AnvilApp, comp: u32, n: Vec3) -> MateRef {
+        face_on(app, &[comp], n)
+    }
+
+    /// The face of the part at `path` (inside subassemblies) whose outward normal in the
+    /// assembly is `n`, as a mate pick.
+    fn face_on(app: &AnvilApp, path: &[u32], n: Vec3) -> MateRef {
         let s = app.asm.as_ref().expect("assembly");
         let f = s
             .body
@@ -1172,10 +1460,98 @@ mod tests {
             .iter()
             .filter(|p| (p.normal - n).length() < 1e-9)
             .filter_map(|p| s.face(p.tag.id))
-            .find(|(c, _)| *c == comp)
+            .find(|(c, _)| c == path)
             .map(|(_, f)| f)
             .expect("face");
-        MateRef { component: Some(comp), entity: MateEntity::Face(f) }
+        MateRef::at(path, MateEntity::Face(f))
+    }
+
+    /// Issue #93: a subassembly goes in rigid, a mate here can pick a face inside it, it
+    /// can be made flexible, the BOM has its three views, a loop is refused and a missing
+    /// file is reported on open.
+    #[test]
+    fn subassemblies_in_the_app() {
+        let (ctx, mut app, dir) = harness();
+        std::fs::create_dir_all(dir.join("kit")).expect("kit dir");
+        let mut kit = Assembly::new();
+        let first = kit.add_component("../cube.anvprt", None, Frame::WORLD);
+        kit.add_component("../cube.anvprt", None, Frame { origin: v3(10.0, 0.0, 0.0), ..Frame::WORLD });
+        kit.save(&dir.join("kit/kit.anvasm")).expect("save kit");
+        app.new_assembly();
+        app.insert_part(&dir.join("base.anvprt"));
+        let k =
+            app.insert_part_at(&dir.join("kit/kit.anvasm"), Some(v3(0.0, 0.0, 30.0))).expect("kit goes in");
+        step(&ctx, &mut app);
+        let s = app.asm.as_ref().expect("assembly");
+        assert!(s.load_errors.is_empty(), "{:?}", s.load_errors);
+        let inside: Vec<String> = s.nested.iter().map(|n| s.path_label(&n.path)).collect();
+        assert_eq!(inside, ["kit<1>/cube<1>", "kit<1>/cube<2>"]);
+        let base = s.asm.components[0].id;
+
+        // The kit's first cube sits down on the base: the whole kit moves.
+        app.start_mate();
+        let (ra, rb) = (face_facing(&app, base, Vec3::Z), face_on(&app, &[k, first], -Vec3::Z));
+        assert_eq!(
+            app.asm
+                .as_ref()
+                .map(|s| s.ref_label(&rb))
+                .as_deref()
+                .map(|l| l.starts_with("kit<1>/cube<1>: Face")),
+            Some(true)
+        );
+        app.mate_pick(ra);
+        app.mate_pick(rb);
+        app.apply_mate().expect("mate applies");
+        let at =
+            app.asm.as_ref().and_then(|s| s.asm.component(k)).map(|c| c.placement.origin).unwrap_or_default();
+        assert!((at - v3(0.0, 0.0, 10.0)).length() < 1e-6, "{at:?}");
+
+        app.set_flexible(k, true).expect("a subassembly");
+        assert!(app.status.contains("kit<1> is now flexible"), "{}", app.status);
+        assert!(app.set_flexible(base, true).is_err());
+        let snap = app.assembly_snapshot().expect("snapshot");
+        assert_eq!(snap["components"][1]["kind"], "assembly");
+        assert_eq!(snap["components"][1]["flexible"], true);
+        assert_eq!(snap["components"][1]["inside"].as_array().map(Vec::len), Some(2));
+
+        if let Some(s) = &mut app.asm {
+            s.bom = true;
+            s.bom_view = BomView::Indented;
+        }
+        step(&ctx, &mut app);
+        let s = app.asm.as_mut().expect("assembly");
+        let rows: Vec<(String, String, usize)> = s
+            .asm
+            .bom(&mut s.parts, BomView::Indented)
+            .into_iter()
+            .map(|r| (r.number, r.part_number, r.quantity))
+            .collect();
+        let want = [("1", "base", 1), ("2", "kit", 1), ("2.1", "cube", 2)];
+        assert_eq!(rows, want.map(|(n, p, q)| (n.to_string(), p.to_string(), q)));
+
+        // An assembly that holds itself is refused, and nothing is added.
+        let mut lp = Assembly::new();
+        lp.add_component("loop.anvasm", None, Frame::WORLD);
+        lp.save(&dir.join("loop.anvasm")).expect("save loop");
+        let e = app.insert_part_at(&dir.join("loop.anvasm"), None).expect_err("refused");
+        assert_eq!(e, "loop.anvasm contains itself, so it cannot be a component of itself");
+        assert_eq!(app.asm.as_ref().map(|s| s.asm.components.len()), Some(2));
+
+        // A file whose subassembly lost a part opens, and says what is missing.
+        let mut broken = Assembly::new();
+        broken.add_component("base.anvprt", None, Frame::WORLD);
+        broken.add_component("kit/kit.anvasm", None, Frame::WORLD);
+        broken.save(&dir.join("broken.anvasm")).expect("save");
+        std::fs::remove_file(dir.join("cube.anvprt")).expect("remove cube");
+        app.open_assembly(&dir.join("broken.anvasm"));
+        step(&ctx, &mut app);
+        let s = app.asm.as_ref().expect("opened");
+        assert_eq!(s.load_errors.len(), 2, "{:?}", s.load_errors);
+        assert!(!s.body.is_empty(), "the base still shows");
+        let (title, text) = app.message.clone().expect("a report");
+        assert_eq!(title, "Some components could not be loaded");
+        assert!(text.contains("kit<1>/cube<1>: cube.anvprt is missing"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

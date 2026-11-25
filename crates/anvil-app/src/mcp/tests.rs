@@ -691,3 +691,80 @@ fn interference_and_clearance() {
     );
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Issue #93: subassemblies over MCP. Two overlapping blocks saved as a kit go into a new
+/// assembly, flexible; the BOM counts them at each level and the interference check sees
+/// through the kit unless asked to treat it whole.
+#[test]
+fn subassembly_bom_and_interference() {
+    let mut s = server();
+    let dir = scratch("subassembly");
+    std::fs::create_dir_all(&dir).expect("dir");
+    block(&mut s);
+    let part = dir.join("block.anvprt");
+    call(&mut s, "save_part", json!({ "path": part }));
+    call(&mut s, "new_assembly", json!({}));
+    call(&mut s, "insert_component", json!({ "path": part }));
+    call(&mut s, "insert_component", json!({ "path": part, "at": [5, 0, 0] }));
+    let kit = dir.join("kit.anvasm");
+    call(&mut s, "save_part", json!({ "path": kit }));
+    call(&mut s, "new_assembly", json!({ "force": true }));
+    call(&mut s, "insert_component", json!({ "path": part }));
+    let r = call(&mut s, "insert_component", json!({ "path": kit, "at": [100, 0, 0], "flexible": true }));
+    let k = &r["assembly"]["components"][1];
+    assert_eq!((k["kind"].as_str(), k["flexible"].as_bool()), (Some("assembly"), Some(true)), "{r}");
+    let inside: Vec<&str> = k["inside"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|n| n["name"].as_str()).collect())
+        .unwrap_or_default();
+    assert_eq!(inside, ["kit<1>/block<1>", "kit<1>/block<2>"]);
+
+    let rows = |v: &Value| -> Vec<(String, String, u64)> {
+        v["rows"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|r| {
+                        let t = |k: &str| r[k].as_str().unwrap_or_default().to_string();
+                        (t("number"), t("part_number"), r["quantity"].as_u64().unwrap_or(0))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let own = |w: &[(&str, &str, u64)]| -> Vec<(String, String, u64)> {
+        w.iter().map(|(n, p, q)| (n.to_string(), p.to_string(), *q)).collect()
+    };
+    let top = call(&mut s, "bill_of_materials", json!({}));
+    assert_eq!(rows(&top), own(&[("1", "block", 1), ("2", "kit", 1)]), "{top}");
+    let flat = call(&mut s, "bill_of_materials", json!({ "view": "parts" }));
+    assert_eq!(rows(&flat), own(&[("1", "block", 3)]), "{flat}");
+    let tree = call(&mut s, "bill_of_materials", json!({ "view": "indented" }));
+    assert_eq!(rows(&tree), own(&[("1", "block", 1), ("2", "kit", 1), ("2.1", "block", 2)]), "{tree}");
+    assert!(call_err(&mut s, "bill_of_materials", json!({ "view": "flat" }))
+        .contains("not top, parts or indented"));
+
+    let r = call(&mut s, "check_interference", json!({}));
+    assert_eq!(r["pairs"], 3, "{r}");
+    let f = r["findings"].as_array().cloned().unwrap_or_default();
+    assert_eq!(f.len(), 1, "{r}");
+    assert_eq!((f[0]["a"].as_str(), f[0]["b"].as_str()), (Some("kit<1>/block<1>"), Some("kit<1>/block<2>")));
+    assert!(f[0]["volume"].as_f64().is_some_and(|v| (v - 3000.0).abs() < 1e-7 * 3000.0), "{r}");
+    let whole = call(&mut s, "check_interference", json!({ "whole_subassemblies": true }));
+    assert_eq!(
+        (whole["pairs"].as_u64(), whole["findings"].as_array().map(Vec::len)),
+        (Some(1), Some(0)),
+        "{whole}"
+    );
+
+    let r = call(&mut s, "set_flexible", json!({ "component": "kit<1>", "flexible": false }));
+    assert_eq!(r["assembly"]["components"][1]["flexible"], false);
+    assert!(call_err(&mut s, "set_flexible", json!({ "component": "block<1>" }))
+        .contains("only a subassembly can be flexible"));
+    // The kit cannot go inside itself.
+    call(&mut s, "new_assembly", json!({ "force": true }));
+    call(&mut s, "open_part", json!({ "path": kit }));
+    let e = call_err(&mut s, "insert_component", json!({ "path": kit }));
+    assert!(e.contains("kit.anvasm contains itself"), "{e}");
+    let _ = std::fs::remove_dir_all(dir);
+}

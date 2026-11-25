@@ -1,0 +1,666 @@
+{
+  "format": "anvil-part",
+  "format_version": 1,
+  "material": null,
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": "Fixture: multibody"
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Finish",
+      "kind": "Text",
+      "value": ""
+    }
+  ],
+  "variables": [],
+  "features": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 10.0,
+                "y": 0.0
+              },
+              {
+                "x": 10.0,
+                "y": 10.0
+              },
+              {
+                "x": 0.0,
+                "y": 10.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Boss-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 1,
+          "end": "Blind",
+          "depth": {
+            "Value": 10.0
+          },
+          "reverse": false,
+          "op": "Boss",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": false
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Sketch2",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 5.0,
+                "y": 0.0
+              },
+              {
+                "x": 15.0,
+                "y": 0.0
+              },
+              {
+                "x": 15.0,
+                "y": 10.0
+              },
+              {
+                "x": 5.0,
+                "y": 10.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Boss-Extrude2",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 3,
+          "end": "Blind",
+          "depth": {
+            "Value": 10.0
+          },
+          "reverse": false,
+          "op": "Boss",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": false
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Combine1",
+      "suppressed": false,
+      "kind": {
+        "Combine": {
+          "op": "Add",
+          "bodies": [
+            {
+              "feature": 2,
+              "index": 1
+            },
+            {
+              "feature": 4,
+              "index": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Sketch3",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 20.0,
+                "y": 0.0
+              },
+              {
+                "x": 30.0,
+                "y": 0.0
+              },
+              {
+                "x": 30.0,
+                "y": 10.0
+              },
+              {
+                "x": 20.0,
+                "y": 10.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Boss-Extrude3",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 6,
+          "end": "Blind",
+          "depth": {
+            "Value": 10.0
+          },
+          "reverse": false,
+          "op": "Boss",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": false
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Body-Move/Copy1",
+      "suppressed": false,
+      "kind": {
+        "MoveCopy": {
+          "bodies": [
+            {
+              "feature": 7,
+              "index": 1
+            }
+          ],
+          "copies": 1,
+          "translate": [
+            {
+              "Value": 0.0
+            },
+            {
+              "Value": 20.0
+            },
+            {
+              "Value": 0.0
+            }
+          ],
+          "rotate": [
+            {
+              "Value": 0.0
+            },
+            {
+              "Value": 0.0
+            },
+            {
+              "Value": 0.0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Sketch4",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 40.0,
+                "y": 0.0
+              },
+              {
+                "x": 60.0,
+                "y": 0.0
+              },
+              {
+                "x": 60.0,
+                "y": 10.0
+              },
+              {
+                "x": 40.0,
+                "y": 10.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Boss-Extrude4",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 9,
+          "end": "Blind",
+          "depth": {
+            "Value": 10.0
+          },
+          "reverse": false,
+          "op": "Boss",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Plane1",
+      "suppressed": false,
+      "kind": {
+        "Plane": {
+          "base": "Right",
+          "offset": {
+            "Value": 48.0
+          },
+          "flip": false,
+          "kind": "Offset",
+          "flip_normal": false
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Split1",
+      "suppressed": false,
+      "kind": {
+        "Split": {
+          "planes": [
+            {
+              "Feature": 11
+            }
+          ],
+          "bodies": [
+            {
+              "feature": 10,
+              "index": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Delete Body1",
+      "suppressed": false,
+      "kind": {
+        "DeleteBody": {
+          "bodies": [
+            {
+              "feature": 12,
+              "index": 2
+            }
+          ],
+          "keep": false
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Scale1",
+      "suppressed": false,
+      "kind": {
+        "Scale": {
+          "bodies": [
+            {
+              "feature": 7,
+              "index": 1
+            }
+          ],
+          "about": "Centroid",
+          "factors": [
+            {
+              "Value": 0.5
+            },
+            {
+              "Value": 0.5
+            },
+            {
+              "Value": 0.5
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "next_id": 15,
+  "rollback": null,
+  "configurations": [
+    {
+      "id": 1,
+      "name": "Default",
+      "suppress_new_features": false
+    }
+  ],
+  "active_configuration": 1
+}

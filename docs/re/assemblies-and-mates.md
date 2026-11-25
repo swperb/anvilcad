@@ -435,7 +435,7 @@ diagnostics** panel, not a copy of any SOLIDWORKS tool.
   these, transformed by the component's current placement. Mates are on infinite geometry
   (S22).
 - **Decision.** Subassemblies are rigid by default: one component with one transform.
-  Flexible subassemblies are later work.
+  A subassembly can be made flexible; see "Subassemblies" below.
 - **Decision.** Inserting a component puts it at the point clicked, unrotated, or at the
   assembly origin with identity rotation if dropped there (S7). The first component is
   fixed; later ones float (S4, S5).
@@ -606,6 +606,175 @@ AnvilCAD's names: **Interference** for the command and its panel; each result is
   bodies are not part of the first version. Subassemblies (#93) will be checked as their
   leaf components, with an option to treat one as a single component.
 
+## Subassemblies
+
+What AnvilCAD's subassemblies should do: an assembly placed as a component of another,
+rigid or flexible, with mates in the parent that reach geometry inside it, and bills of
+materials that list it at the top level, as its parts, or indented. It was written for
+issue #93 and studied the same way as the rest of this file: published help only,
+retrieved and paraphrased as described under "How this was studied", with REA's method of
+marking each finding (`rea-agents` 6.10.1, `third_party/rea` at `3fc0075`). REA's analysis
+tools were not run, because the inputs are prose; no SOLIDWORKS file was read. Sources S47
+to S60 were read on 2026-11-25.
+
+| # | Topic | URL | Version |
+|---|---|---|---|
+| S47 | Subassemblies (section index) | A + `c_Subassemblies_Intro.htm` | 2025 |
+| S48 | Working with subassemblies (creating, nesting) | A + `c_Working_with_Sub-assemblies.htm` | 2025 |
+| S49 | Flexible subassemblies; making a subassembly flexible | A + `c_Flexible_Sub-Assemblies.htm` | 2025 |
+| S50 | Effects of assembly structure editing (where mates live) | A + `c_Effects_of_Assembly_Structure_Editing.htm` | 2025 |
+| S51 | Forming a new assembly from existing components | A + `t_forming_new_assembly.htm` | 2025 |
+| S52 | The design tree in an assembly; component icons | A + `c_featuremanager_design_tree_assembly.htm`, `c_component_icons_fmdt.htm` | 2025 |
+| S53 | Search routine for referenced documents | A + `c_Search_Routine_for_Referenced_Documents.htm` | 2025 |
+| S54 | Bill of Materials PropertyManager (BOM type, numbering) | A + `HIDD_DVE_INSERT_BOM.htm` | 2025 |
+| S55 | Bill of Materials overview; table-based BOMs; default BOMs | A + `c_Bill_of_Materials1.htm`, `c_table_based_bom_top.htm`, `c_Default_BOMS.htm` | 2025 |
+| S56 | Indented BOMs; item numbers; expanding and collapsing | A + `c_indented_boms.htm`, `t_setting_item_numbers_boms.htm`, `t_expanding_assemblies_bom.htm` | 2025 |
+| S57 | Component Options dialog box (child components show, hide, promote) | A + `HIDD_BOM_COMPONENT_OPTIONS.htm` | 2025 |
+| S58 | `IComponent2::Solving`, `IComponent2::GetChildren` | B + `IComponent2~Solving`, `IComponent2~GetChildren` | 2024 |
+| S59 | `swComponentSolvingOption_e` | C + `swComponentSolvingOption_e` | 2024 |
+| S60 | `swBomType_e`, `swNumberingType_e` | C + `swBomType_e`, `swNumberingType_e` | 2024 |
+
+### Inserting an assembly
+
+- **Observed (S47, S48).** An assembly that is a component of another is a subassembly.
+  Subassemblies nest to any number of levels. One way to make one is to save an assembly
+  on its own and insert it into a higher-level assembly as a component.
+- **Observed (S1, S3).** As with parts, the component links to the subassembly's file;
+  changes to that file show in the parent.
+- **Observed (S32, S58).** Through the API a component's children are listed
+  (`GetChildren`), and a component inside a subassembly is named by its path from the
+  top (`subAssem1-2/Part1-1`).
+- **Observed (S52).** The tree shows subassemblies and parts together under the top-level
+  assembly, each expandable, with its own icon for a subassembly and another for a
+  flexible one.
+- **Observed (S51).** Forming a subassembly from components already in the assembly moves
+  those components down one level. **Decision.** Forming, dissolving and reorganising are
+  later work.
+- **Unknown.** What SOLIDWORKS does when an assembly is inserted into itself, directly or
+  through another subassembly. Nothing read describes it. **Inferred.** Such a structure
+  has no finite expansion, so it cannot be opened, and must be refused.
+
+### Missing files
+
+- **Observed (S53).** When a referenced document cannot be found where it was saved, a
+  fixed search order is tried: open documents of the same name, a list of configured
+  folders, the active document's folder and the folders around it, the last folder used,
+  then the saved path with and without its drive, and finally the user is asked to browse.
+  A file that is found has its new path written into the parent on the next save.
+- **Unknown.** What the assembly shows for a component whose file is never found.
+- **Decision.** AnvilCAD looks for a component's file only at its path relative to the
+  assembly (paths are relative, so moving a whole project keeps working). A missing file
+  never stops the assembly opening: the component stays in the tree marked with an error
+  that names the missing file, everything else loads and solves, and mates to the missing
+  component are reported as unresolved. The same holds at every level of nesting. The
+  search routine and a "find it" prompt are later work.
+
+### Rigid and flexible
+
+- **Observed (S49, S58, S59).** A subassembly is solved either *rigid* (0) or *flexible*
+  (1); the setting applies to subassembly components only (a part reports −1). It is set
+  per component in the parent, and per configuration.
+- **Inferred (S17, S49).** Rigid means the subassembly moves as one body: its own mates
+  are solved inside it and its components keep their positions relative to it.
+- **Observed (S49).** In a flexible subassembly, its mates are solved at the same time as
+  the parent's, so its components can move within their own degrees of freedom inside the
+  parent without breaking the subassembly's mates or the parent's.
+- **Observed (S49).** Several instances of one subassembly can be in the same parent; some
+  can be rigid and others flexible, and flexible instances can hold different positions
+  of their components.
+- **Inferred.** So the positions of a flexible instance's components belong to the parent,
+  not to the subassembly's file, which keeps its own positions for when it is opened on its
+  own or used rigid.
+- **Observed (S32).** Seen from the root, a subassembly's fixed or floating flags are read
+  from the subassembly's own document.
+- **Inferred.** A component fixed in the subassembly is fixed relative to the
+  subassembly's frame, which itself moves with the subassembly component in the parent.
+- **Unknown.** Whether a flexible subassembly nested in a flexible subassembly is also
+  solved in the top-level assembly, and how the solve treats a fixed component inside a
+  flexible subassembly. **Decision** below.
+
+### Mates to geometry inside a subassembly
+
+- **Observed (S50).** A mate lives in the mates folder of the lowest common parent of the
+  components it joins: a mate between components in two different branches lives in the
+  top-level assembly.
+- **Inferred (S50, S31).** So a mate in a parent can pick a face, edge or plane of a part
+  nested inside a subassembly, and the mate entity's reference component is that nested
+  part, not the subassembly.
+- **Inferred.** Against a rigid subassembly, such a mate moves the whole subassembly; it
+  cannot move the nested part on its own. Against a flexible one, it moves the nested part
+  within its freedom in the subassembly.
+
+### Bills of materials
+
+- **Observed (S54, S60).** The BOM types are *top-level only* (2), *parts only* (1) and
+  *indented* (3), plus a *flattened* option for indented BOMs.
+  - *Top-level only* lists the parts and subassemblies of the assembly itself, but not the
+    components of its subassemblies.
+  - *Parts only* lists subassembly components as items of their own and does not list
+    subassemblies.
+  - *Indented* lists subassemblies, with their components indented below them. Item
+    numbering for indented BOMs is none (0), detailed (1) or flat (2).
+- **Observed (S55).** The default BOM has the columns item number, part number,
+  description and quantity.
+- **Observed (S54, S55).** Quantity is the number of instances, unless a custom property
+  is chosen as a multiplier. Quantities are per configuration.
+- **Observed (S56).** In an indented BOM, a subassembly can be collapsed to show only its
+  own row.
+- **Observed (S57).** A subassembly's child components can be shown, hidden (the
+  subassembly is one item) or promoted (the subassembly row is dissolved and its children
+  move up a level).
+- **Unknown.** What *detailed* and *flat* numbering look like (the help shows them as
+  pictures), and whether the quantity on an indented child row counts per parent or in
+  all. **Decision** below.
+
+### AnvilCAD decisions
+
+AnvilCAD's names: a **subassembly** is a component whose file is an `.anvasm`; it is
+**rigid** or **flexible**. The BOM views are **Top level**, **Parts only** and
+**Indented**.
+
+- **Decision.** A component's file can be an `.anvasm` as well as an `.anvprt`, with the
+  same relative path, configuration-free for now (assemblies have no configurations yet).
+  Its placement places the subassembly's own frame (its origin and planes). A nested
+  component's path is resolved relative to the file of the assembly that holds it.
+- **Decision.** Opening or inserting an assembly that contains itself, at any depth, is
+  refused with a message that names the chain of files ("a.anvasm contains itself through
+  b.anvasm"). The rest of the assembly still opens; the offending component is marked like
+  a missing file.
+- **Decision.** A subassembly is solved when it is loaded, with the mates in its own file,
+  and is then rigid in the parent. A rigid subassembly is one body to the parent's solver.
+- **Decision.** A flexible subassembly's direct components are solved in the parent, with
+  the subassembly's own mates. The subassembly component itself stands for the
+  subassembly's frame: components fixed in the subassembly's file are held to that frame,
+  and mates in the subassembly to its own planes or origin use it. The solved positions
+  of the flexible instance's components are stored in the parent, per instance, relative
+  to the subassembly's frame; the subassembly's file is not changed. One level is
+  flexible: a subassembly nested inside a flexible subassembly is rigid within it.
+- **Decision.** A mate side names a component of the assembly and, when the entity is
+  inside a subassembly, the path of component ids down to the part that owns it. Against a
+  rigid subassembly the entity's shape is carried up through the nested placements, so the
+  mate moves the subassembly; against a flexible one it acts on the nested part.
+- **Decision.** The tree lists a subassembly's components under it, indented and read
+  only (their own mates are edited in the subassembly's file). Hiding a subassembly hides
+  all of it.
+- **Decision.** The BOM has three views. *Top level* is the existing parts list, now with
+  subassemblies as rows of their own. *Parts only* lists every part at every depth, one
+  row per file and configuration, with the total quantity in the whole assembly.
+  *Indented* lists the top level, with each subassembly's rows below it, indented one
+  level per depth, numbered in detailed style (`2`, `2.1`, `2.2`), and the quantity on a
+  child row counts it per one of its parent subassembly. Rows group identical files within
+  one parent. A subassembly's part number is its own `PartNo` property or its file name,
+  as for parts. Quantity multipliers, collapsing, hiding and promoting are later work.
+- **Decision.** The interference check sees through subassemblies: it checks the parts
+  inside them, at every depth, against each other and against everything else, and names
+  each by its path (`arm<1>/link<2>`). An option checks each top-level subassembly as one
+  component instead, so interferences inside it are not reported (S37).
+- **Decision.** Assembly files move to format version 2: components gain a `flexible`
+  flag and the stored positions of a flexible instance's components, and mate sides an
+  optional path inside a subassembly. Version 1 files read unchanged; they hold no
+  subassemblies.
+
 ## Unknown or not covered
 
 1. How `.sldasm` files store components, transforms and mates. Nothing here was learnt
@@ -618,9 +787,14 @@ AnvilCAD's names: **Interference** for the command and its panel; each result is
 6. The row or column order of `IMathTransform::ArrayData`'s rotation.
 7. How SOLIDWORKS chooses among solutions when nothing (alignment, flip, reference entity)
    decides, beyond "nearest to the current position".
-8. Flexible subassemblies, component patterns, mirrored components, mate references and
-   automatic mates on dragging, none of which were studied.
+8. Component patterns, mirrored components, mate references and automatic mates on
+   dragging, none of which were studied. For subassemblies, see the unknowns under
+   "Subassemblies".
 9. Interference and clearance: the defaults of *Treat coincidence as interference* and
    *Ignore hidden bodies/components*, what a coincidence reports, what a possible
    interference is, and what clearance verification reports for touching or overlapping
    components (see "Interference and clearance").
+10. Subassemblies: what SOLIDWORKS does with an assembly inserted into itself, what it
+    shows for a component whose file is never found, how flexible subassemblies nest and
+    treat their fixed components, and what detailed and flat BOM numbering look like (see
+    "Subassemblies").

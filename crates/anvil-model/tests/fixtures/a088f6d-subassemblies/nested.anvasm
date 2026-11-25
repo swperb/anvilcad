@@ -1,0 +1,223 @@
+{
+  "format": "anvil-assembly",
+  "format_version": 2,
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": "Fixture: subassemblies"
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": ""
+    }
+  ],
+  "components": [
+    {
+      "id": 1,
+      "name": "prismatic<1>",
+      "path": "prismatic.anvprt",
+      "placement": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "y": {
+          "x": 0.0,
+          "y": 1.0,
+          "z": 0.0
+        },
+        "z": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        }
+      },
+      "fixed": true,
+      "hidden": false
+    },
+    {
+      "id": 2,
+      "name": "assembly<1>",
+      "path": "assembly.anvasm",
+      "placement": {
+        "origin": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": -100.0
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        "y": {
+          "x": 0.0,
+          "y": 1.0,
+          "z": 0.0
+        },
+        "z": {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 1.0
+        }
+      },
+      "fixed": false,
+      "hidden": false
+    },
+    {
+      "id": 3,
+      "name": "assembly<2>",
+      "path": "assembly.anvasm",
+      "placement": {
+        "origin": {
+          "x": 49.99999999999992,
+          "y": 200.0,
+          "z": 1.4227509016070755e-11
+        },
+        "x": {
+          "x": 1.0,
+          "y": 0.0,
+          "z": 3.896335629952561e-23
+        },
+        "y": {
+          "x": 0.0,
+          "y": 1.0,
+          "z": -0.0
+        },
+        "z": {
+          "x": -3.896335629952561e-23,
+          "y": 0.0,
+          "z": 1.0
+        }
+      },
+      "fixed": false,
+      "hidden": false,
+      "flexible": true,
+      "flex_placements": [
+        {
+          "component": 1,
+          "placement": {
+            "origin": {
+              "x": -1.1330765483541842e-47,
+              "y": 0.0,
+              "z": -2.908056841006738e-25
+            },
+            "x": {
+              "x": 1.0,
+              "y": 0.0,
+              "z": -2.8341875114113898e-24
+            },
+            "y": {
+              "x": 0.0,
+              "y": 1.0,
+              "z": 0.0
+            },
+            "z": {
+              "x": 2.8341875114113898e-24,
+              "y": 0.0,
+              "z": 1.0
+            }
+          }
+        },
+        {
+          "component": 2,
+          "placement": {
+            "origin": {
+              "x": 100.00000000000003,
+              "y": 0.0,
+              "z": -2.859006668988679e-22
+            },
+            "x": {
+              "x": 1.0,
+              "y": 0.0,
+              "z": -1.4859168998625253e-23
+            },
+            "y": {
+              "x": 0.0,
+              "y": 1.0,
+              "z": 0.0
+            },
+            "z": {
+              "x": 1.4859168998625253e-23,
+              "y": 0.0,
+              "z": 1.0
+            }
+          }
+        },
+        {
+          "component": 3,
+          "placement": {
+            "origin": {
+              "x": 1.5585342519810243e-21,
+              "y": 0.0,
+              "z": 40.0
+            },
+            "x": {
+              "x": 1.0,
+              "y": 0.0,
+              "z": -2.8695241412303124e-24
+            },
+            "y": {
+              "x": -2.8695241412303124e-24,
+              "y": 0.0,
+              "z": -1.0
+            },
+            "z": {
+              "x": 0.0,
+              "y": 1.0,
+              "z": 0.0
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "mates": [
+    {
+      "id": 4,
+      "name": "Distance1",
+      "kind": {
+        "Distance": {
+          "value": 150.0,
+          "flip": false
+        }
+      },
+      "alignment": "Aligned",
+      "a": {
+        "component": 1,
+        "entity": {
+          "Plane": "Right"
+        }
+      },
+      "b": {
+        "component": 3,
+        "inner": [
+          2
+        ],
+        "entity": {
+          "Plane": "Right"
+        }
+      },
+      "suppressed": false
+    }
+  ],
+  "next_id": 5
+}

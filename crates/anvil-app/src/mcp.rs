@@ -387,9 +387,26 @@ impl Server {
                         Some(n.and_then(|n| <[f64; 3]>::try_from(n).ok()).ok_or("at: [x, y, z]")?)
                     }
                 };
-                let spec = InsertSpec { path: a.path("path")?, at };
+                let spec = InsertSpec { path: a.path("path")?, at, flexible: a.bool("flexible")? };
                 let id = self.host(|h| h.insert_component(&spec))?;
                 json!({ "component": id, "assembly": self.h.app.snapshot()["assembly"] })
+            }
+            "set_flexible" => {
+                let component = match a.get("component") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Number(n)) => n.to_string(),
+                    _ => return Err("component: an id or a name such as \"arm<1>\"".into()),
+                };
+                let flexible = match a.get("flexible") {
+                    None | Some(Value::Null) => true,
+                    Some(v) => v.as_bool().ok_or("flexible is true or false")?,
+                };
+                self.host(|h| h.set_flexible(&component, flexible))?;
+                json!({ "assembly": self.h.app.snapshot()["assembly"] })
+            }
+            "bill_of_materials" => {
+                let view = a.str("view")?.unwrap_or("top").to_string();
+                self.host(|h| h.bom(&view))?
             }
             "add_mate" => {
                 let value = match a.get("value") {
@@ -417,6 +434,7 @@ impl Server {
                     touching: a.bool("touching")?,
                     hidden: a.bool("hidden")?,
                     components: name_list(a, "components")?,
+                    whole_subassemblies: a.bool("whole_subassemblies")?,
                 };
                 self.host(|h| h.interference(&spec))?
             }
@@ -1096,13 +1114,35 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "insert_component",
         title: "Insert component",
-        description: "Insert a saved part (.anvprt) into the open assembly. The first component is fixed at the assembly's origin; later ones go at `at` (assembly coordinates, mm) or beside the others. Returns the component id and the assembly's components and mates.",
+        description: "Insert a saved part (.anvprt) or assembly (.anvasm, as a subassembly) into the open assembly. The first component is fixed at the assembly's origin; later ones go at `at` (assembly coordinates, mm) or beside the others. A subassembly is rigid unless flexible is true. An assembly that contains itself, or the open assembly, is refused. Returns the component id and the assembly's components (with what is inside each subassembly) and mates.",
         properties: r#"{
-            "path": { "type": "string", "description": "The part file" },
-            "at": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Where the part's origin goes" }
+            "path": { "type": "string", "description": "The part or assembly file" },
+            "at": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3, "description": "Where the file's origin goes" },
+            "flexible": { "type": "boolean", "description": "For an assembly: solve its own mates here so its parts can move within them" }
         }"#,
         required: &["path"],
         read_only: false,
+    },
+    Tool {
+        name: "set_flexible",
+        title: "Make subassembly flexible or rigid",
+        description: "Make a subassembly of the open assembly flexible (its own mates are solved in this assembly, so its parts can move within them and mates here can move them) or rigid (it moves as one body). Solves at once. Returns the assembly.",
+        properties: r#"{
+            "component": { "type": ["string", "integer"], "description": "The subassembly's id or name, such as \"arm<1>\"" },
+            "flexible": { "type": "boolean", "description": "true for flexible (the default), false for rigid" }
+        }"#,
+        required: &["component"],
+        read_only: false,
+    },
+    Tool {
+        name: "bill_of_materials",
+        title: "Bill of materials",
+        description: "The open assembly's bill of materials. view top (the default) lists its own parts and subassemblies; parts lists every part at every depth with its total quantity; indented lists the top level with each subassembly's rows below it, numbered 2, 2.1, 2.2 and counted per subassembly. Each row has number, level, assembly, part_number, description, path, configuration and quantity.",
+        properties: r#"{
+            "view": { "type": "string", "enum": ["top", "parts", "indented"] }
+        }"#,
+        required: &[],
+        read_only: true,
     },
     Tool {
         name: "add_mate",
@@ -1127,7 +1167,8 @@ const TOOLS: &[Tool] = &[
             "clearance": { "type": "number", "description": "Also report pairs at most this far apart (mm)" },
             "touching": { "type": "boolean", "description": "Also report pairs that touch without overlapping" },
             "hidden": { "type": "boolean", "description": "Check hidden components too" },
-            "components": { "type": "array", "items": { "type": ["string", "integer"] }, "description": "Only these components (ids or names such as \"bracket<1>\"): with one, the pairs involving it; with several, the pairs among them" }
+            "components": { "type": "array", "items": { "type": ["string", "integer"] }, "description": "Only these components (ids or names such as \"bracket<1>\"): with one, the pairs involving it; with several, the pairs among them" },
+            "whole_subassemblies": { "type": "boolean", "description": "Check each subassembly as one component; by default the parts inside subassemblies are checked one by one, named by their path such as \"arm<1>/link<2>\"" }
         }"#,
         required: &[],
         read_only: true,

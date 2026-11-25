@@ -1,0 +1,27 @@
+{
+  "active_configuration": "Default",
+  "configurations": [
+    {
+      "bbox_max": [
+        40.0,
+        40.0,
+        21.0
+      ],
+      "bbox_min": [
+        0.0,
+        -1.850371707708594e-17,
+        0.0
+      ],
+      "bodies": 1,
+      "faces": 8,
+      "name": "Default",
+      "surface_area": 4963.757665780442,
+      "volume": 16397.086707143833
+    }
+  ],
+  "format": "anvil-part",
+  "format_version": 1,
+  "recorded_by": "a088f6d with the subassemblies change (#93), fixture_generator generate",
+  "resaves_unchanged": true,
+  "saved_by": "a088f6d with the subassemblies change (#93), fixture_generator generate"
+}

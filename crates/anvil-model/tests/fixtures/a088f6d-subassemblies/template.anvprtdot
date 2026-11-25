@@ -1,0 +1,214 @@
+{
+  "format": "anvil-part",
+  "format_version": 1,
+  "material": {
+    "name": "Plain Carbon Steel",
+    "density": 7.8,
+    "class": "Metal",
+    "yield_strength": 220.0,
+    "tensile_strength": 400.0,
+    "elastic_modulus": 210.0,
+    "thermal_conductivity": 50.0,
+    "min_wall": 0.8,
+    "min_bend_ratio": 1.0
+  },
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": "Fixture"
+    },
+    {
+      "name": "Finish",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Weight",
+      "kind": "Number",
+      "value": "0"
+    }
+  ],
+  "variables": [
+    {
+      "name": "wall",
+      "expr": "3",
+      "comment": ""
+    }
+  ],
+  "features": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": -25.0,
+                "y": -25.0
+              },
+              {
+                "x": 25.0,
+                "y": -25.0
+              },
+              {
+                "x": 25.0,
+                "y": 25.0
+              },
+              {
+                "x": -25.0,
+                "y": 25.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 2,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 1
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 3
+                  }
+                },
+                "construction": true
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 0
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 1
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 2
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 3
+                }
+              },
+              {
+                "Midpoint": {
+                  "p": 0,
+                  "line": 4
+                }
+              },
+              {
+                "Length": {
+                  "line": 0,
+                  "value": 50.0
+                }
+              },
+              {
+                "Length": {
+                  "line": 1,
+                  "value": 50.0
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Boss-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 1,
+          "end": "Blind",
+          "depth": {
+            "Expr": "wall"
+          },
+          "reverse": false,
+          "op": "Boss",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": true
+        }
+      }
+    }
+  ],
+  "next_id": 3,
+  "rollback": null,
+  "configurations": [
+    {
+      "id": 1,
+      "name": "Default",
+      "suppress_new_features": false
+    }
+  ],
+  "active_configuration": 1
+}

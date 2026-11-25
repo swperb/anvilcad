@@ -1,0 +1,337 @@
+{
+  "format": "anvil-part",
+  "format_version": 1,
+  "material": {
+    "name": "Brass",
+    "density": 8.5,
+    "class": "Metal",
+    "yield_strength": 310.0,
+    "tensile_strength": 385.0,
+    "elastic_modulus": 97.0,
+    "thermal_conductivity": 115.0,
+    "min_wall": 0.8,
+    "min_bend_ratio": 1.0
+  },
+  "custom_properties": [
+    {
+      "name": "Description",
+      "kind": "Text",
+      "value": "Fixture: turned sleeve"
+    },
+    {
+      "name": "PartNo",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Revision",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "DrawnBy",
+      "kind": "Text",
+      "value": ""
+    },
+    {
+      "name": "Finish",
+      "kind": "Text",
+      "value": ""
+    }
+  ],
+  "variables": [],
+  "features": [
+    {
+      "id": 1,
+      "name": "Sketch1",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Front",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 10.0
+              },
+              {
+                "x": 8.0,
+                "y": 0.0
+              },
+              {
+                "x": 15.0,
+                "y": 0.0
+              },
+              {
+                "x": 15.0,
+                "y": 30.0
+              },
+              {
+                "x": 8.0,
+                "y": 30.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Line": {
+                    "a": 1,
+                    "b": 2
+                  }
+                },
+                "construction": true
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 3,
+                    "b": 4
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 4,
+                    "b": 5
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 5,
+                    "b": 6
+                  }
+                },
+                "construction": false
+              },
+              {
+                "geom": {
+                  "Line": {
+                    "a": 6,
+                    "b": 3
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 1
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 2
+                }
+              },
+              {
+                "Horizontal": {
+                  "line": 3
+                }
+              },
+              {
+                "Vertical": {
+                  "line": 4
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Revolve1",
+      "suppressed": false,
+      "kind": {
+        "Revolve": {
+          "sketch": 1,
+          "axis": 0,
+          "angle": {
+            "Value": 360.0
+          },
+          "op": "Boss",
+          "kind": "OneDirection",
+          "reverse": false,
+          "flip_side": false
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Axis1",
+      "suppressed": false,
+      "kind": {
+        "Axis": {
+          "kind": {
+            "TwoPlanes": [
+              "Right",
+              "Front"
+            ]
+          },
+          "reverse": false
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Sketch2",
+      "suppressed": false,
+      "kind": {
+        "Sketch": {
+          "plane": "Right",
+          "sketch": {
+            "points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 15.0
+              }
+            ],
+            "entities": [
+              {
+                "geom": {
+                  "Circle": {
+                    "c": 1,
+                    "r": 2.0
+                  }
+                },
+                "construction": false
+              }
+            ],
+            "constraints": [
+              {
+                "Fix": {
+                  "p": 0,
+                  "x": 0.0,
+                  "y": 0.0
+                }
+              },
+              {
+                "Diameter": {
+                  "entity": 0,
+                  "value": 4.0
+                }
+              }
+            ]
+          },
+          "driven": []
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Cut-Extrude1",
+      "suppressed": false,
+      "kind": {
+        "Extrude": {
+          "sketch": 4,
+          "end": "ThroughAll",
+          "depth": {
+            "Value": 0.0
+          },
+          "reverse": false,
+          "op": "Cut",
+          "start_flip": false,
+          "flip_side": false,
+          "merge": true
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "CirPattern1",
+      "suppressed": false,
+      "kind": {
+        "CircularPattern": {
+          "features": [
+            5
+          ],
+          "axis": {
+            "Feature": 3
+          },
+          "total_angle": {
+            "Value": 360.0
+          },
+          "count": {
+            "Value": 4.0
+          },
+          "equal_spacing": true,
+          "reverse": false
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Point1",
+      "suppressed": false,
+      "kind": {
+        "Point": "CenterOfMass"
+      }
+    },
+    {
+      "id": 8,
+      "name": "Coordinate System1",
+      "suppressed": false,
+      "kind": {
+        "CoordSys": {
+          "origin": null,
+          "position": [
+            0.0,
+            30.0,
+            0.0
+          ],
+          "axes": [
+            null,
+            null,
+            null
+          ],
+          "reverse": [
+            false,
+            false,
+            false
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            90.0
+          ]
+        }
+      }
+    }
+  ],
+  "next_id": 9,
+  "rollback": null,
+  "configurations": [
+    {
+      "id": 1,
+      "name": "Default",
+      "suppress_new_features": false
+    }
+  ],
+  "active_configuration": 1
+}
