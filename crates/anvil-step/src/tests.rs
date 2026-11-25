@@ -698,8 +698,7 @@ fn pinched_tori_round_trip_exactly() {
         let text = export::write(std::slice::from_ref(&s), "pinched");
         match outer {
             Some(o) => assert!(
-                text.contains("DEGENERATE_TOROIDAL_SURFACE('',")
-                    && text.contains(&format!("3.,5.,{o})")),
+                text.contains("DEGENERATE_TOROIDAL_SURFACE('',") && text.contains(&format!("3.,5.,{o})")),
                 "{text}"
             ),
             None => assert!(text.contains("TOROIDAL_SURFACE('',") && !text.contains("DEGENERATE"), "{text}"),
