@@ -2102,6 +2102,84 @@ fn build(nodes: &mut Vec<Node>, idx: &mut [usize], start: usize, bounds: &[(DVec
     me
 }
 
+// ---------------------------------------------------------------------------------------
+// Distances between whole solids, for the assembly interference check.
+
+/// The boundary of a solid, ready for [`body_gap`]: every face as a patch, on the exact
+/// surfaces when the solid is exact.
+pub struct BodyGeo(Geo);
+
+impl BodyGeo {
+    /// The boundary of an exact solid, or `None` if it cannot be tessellated.
+    pub fn exact(solid: &brep::Solid) -> Option<BodyGeo> {
+        let mesh = brep::tess::tessellate(solid, &brep::tess::TessParams::default()).ok()?;
+        let patches: Vec<Patch> =
+            (0..solid.faces.len()).filter_map(|fi| exact_patch(solid, fi, &mesh).map(|p| p.0)).collect();
+        (!patches.is_empty()).then_some(BodyGeo(Geo::Face(patches)))
+    }
+
+    /// The boundary of a faceted solid: its polygons as triangles.
+    pub fn faceted(solid: &Solid) -> BodyGeo {
+        let mut tris = Vec::new();
+        for poly in &solid.polygons {
+            let Some((&v0, rest)) = poly.verts.split_first() else { continue };
+            for w in rest.windows(2) {
+                tris.push([d3(v0), d3(w[0]), d3(w[1])]);
+            }
+        }
+        BodyGeo(Geo::Face(vec![Patch::new(None, tris, Vec::new())]))
+    }
+}
+
+/// The smallest distance between the boundaries of two solids and the points where it is
+/// found, on `a` and on `b`. It is found on the tessellations and refined on the exact
+/// surfaces, as for two picked faces, so it is exact for planes, cylinders and spheres. A
+/// solid inside the other is not at distance zero: the boundaries are apart.
+pub fn body_gap(a: &BodyGeo, b: &BodyGeo) -> Option<(f64, Vec3, Vec3)> {
+    let (_, pa, pb) = min_distance(&a.0, &b.0)?;
+    let (d, p, q) = refine_extrapolated(&a.0, &b.0, pa, pb);
+    Some((d, v3(p), v3(q)))
+}
+
+/// Alternating closest-point projections, as [`refine`], sped up where they crawl (two
+/// nearly concentric cylinders close in on their gap by a fixed fraction each step): when
+/// three steps shrink by a steady ratio, the point is pushed to where that series ends,
+/// projected back onto both entities, and kept only if the distance gets shorter.
+fn refine_extrapolated(a: &Geo, b: &Geo, mut pa: DVec3, mut pb: DVec3) -> (f64, DVec3, DVec3) {
+    let scale = 1.0 + pa.abs().max_element().max(pb.abs().max_element());
+    let mut history: Vec<DVec3> = Vec::with_capacity(3);
+    for _ in 0..2000 {
+        let Some(na) = a.closest(pb) else { break };
+        let Some(nb) = b.closest(na) else { break };
+        let moved = (na - pa).length() + (nb - pb).length();
+        pa = na;
+        pb = nb;
+        if moved <= 1e-14 * scale {
+            break;
+        }
+        history.push(pb);
+        if let [x0, x1, x2] = history.as_slice() {
+            let (d1, d2) = (*x1 - *x0, *x2 - *x1);
+            let ratio = d2.length() / d1.length().max(f64::MIN_POSITIVE);
+            if ratio > 0.3 && ratio < 0.9999 && d1.dot(d2) > 0.0 {
+                let guess = *x2 + d2 * (ratio / (1.0 - ratio));
+                let jumped = b.closest(guess).and_then(|g| {
+                    let ga = a.closest(g)?;
+                    Some((ga, b.closest(ga)?))
+                });
+                if let Some((ja, jb)) = jumped {
+                    if (jb - ja).length() < (pb - pa).length() {
+                        pa = ja;
+                        pb = jb;
+                    }
+                }
+            }
+            history.clear();
+        }
+    }
+    ((pb - pa).length(), pa, pb)
+}
+
 #[cfg(test)]
 mod tests {
     //! Testable statements 1 to 19 of `docs/re/measure-and-section.md`, on parts built

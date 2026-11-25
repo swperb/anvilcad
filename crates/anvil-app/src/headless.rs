@@ -1533,6 +1533,63 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Issue #66: interference from a script. A 10.2 mm pin through a 10 mm hole in a
+    /// 10 mm plate overlaps it by the ring between them; resting a block on the plate is
+    /// touching, not an overlap.
+    #[test]
+    fn lua_checks_an_assembly_for_interference() {
+        let dir = std::env::temp_dir().join(format!("anvil-lua-intf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let d = dir.display().to_string().replace('\\', "/");
+        let mut h = Headless::new();
+        let r = h.command(&json!({"cmd": "lua", "code": format!(r#"
+            local s = anvil.sketch{{ plane = "top", rects = {{ {{ -20, -20, 20, 20 }} }}, circles = {{ {{ 0, 0, 5 }} }} }}
+            anvil.extrude{{ sketch = s, depth = 10 }}
+            anvil.save("{d}/plate.anvprt")
+            anvil.new()
+            local p = anvil.sketch{{ plane = "top", circles = {{ {{ 0, 0, 5.1 }} }} }}
+            anvil.extrude{{ sketch = p, depth = 30 }}
+            anvil.save("{d}/pin.anvprt")
+            anvil.new()
+            local b = anvil.sketch{{ plane = "top", rects = {{ {{ 10, 10, 18, 18 }} }} }}
+            anvil.extrude{{ sketch = b, depth = 5 }}
+            anvil.save("{d}/block.anvprt")
+            anvil.assembly()
+            anvil.insert{{ path = "{d}/plate.anvprt" }}
+            anvil.insert{{ path = "{d}/pin.anvprt", at = {{0, -10, 0}} }}
+            anvil.insert{{ path = "{d}/block.anvprt", at = {{0, 10, 0}} }}
+            local r = anvil.interference{{ touching = true }}
+            assert(#r.findings == 2 and r.findings[1].kind == "overlap" and r.pairs == 3)
+        "#)}));
+        assert!(r.get("error").is_none(), "{r}");
+        let st = run(&mut h, json!({"cmd": "state"}));
+        let found = &st["state"]["assembly"]["interference"]["report"];
+        let f = found["findings"].as_array().cloned().unwrap_or_default();
+        assert_eq!(f.len(), 2, "{r}");
+        let ring = std::f64::consts::PI * (5.1 * 5.1 - 25.0) * 10.0;
+        assert_eq!(
+            (f[0]["kind"].as_str(), f[0]["a"].as_str(), f[0]["b"].as_str()),
+            (Some("overlap"), Some("plate<1>"), Some("pin<1>")),
+            "{r}"
+        );
+        assert!(f[0]["volume"].as_f64().is_some_and(|v| (v - ring).abs() < 1e-7 * ring), "{r}");
+        assert_eq!(
+            (f[1]["kind"].as_str(), f[1]["a"].as_str(), f[1]["b"].as_str()),
+            (Some("touching"), Some("plate<1>"), Some("block<1>")),
+            "{r}"
+        );
+        // A bad clearance and an unknown component say what is wrong.
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.interference{ clearance = 0 }"}));
+        assert!(r["error"].as_str().is_some_and(|e| e.contains("more than 0 mm")), "{r}");
+        let r = h.command(&json!({"cmd": "lua", "code": "anvil.interference{ components = { 'nut<1>' } }"}));
+        assert!(
+            r["error"].as_str().is_some_and(|e| e.contains("the components are plate<1>, pin<1>, block<1>")),
+            "{r}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     const PLATE: &str = r#"
         anvil.var("t", 10)
         local s = anvil.sketch{ plane = "top", rects = { { -50, -30, 50, 30 } } }

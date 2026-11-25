@@ -16,6 +16,7 @@ mod assembly;
 mod autosave;
 mod configs;
 mod drawing;
+mod interference;
 use configs::{ConfigUi, Manager};
 mod navigation;
 mod scripting;
@@ -3152,8 +3153,16 @@ impl AnvilApp {
                 }
             };
             let hover = if self.sketch.is_some() { None } else { self.hover_face };
-            let failed: Vec<FaceId> = self.editing_failure().map_or_else(Vec::new, |e| e.faces.clone());
-            let colors = crate::theme::scene_colors(ui.ctx());
+            let failed: Vec<FaceId> = match &self.asm {
+                Some(s) => s.failed_faces(),
+                None => self.editing_failure().map_or_else(Vec::new, |e| e.faces.clone()),
+            };
+            let mut colors = crate::theme::scene_colors(ui.ctx());
+            if self.asm.as_ref().is_some_and(|s| s.wireframe()) {
+                // Edges drawn on the background, not on a body: they need its contrast.
+                let c = pal.text_weak;
+                colors.edge = [c.r(), c.g(), c.b()].map(|v| f32::from(v) / 255.0);
+            }
             let data = SceneData::build(&self.mesh, &self.edges, hover, &selected, &failed, &colors);
             self.renderer.lock().unwrap_or_else(std::sync::PoisonError::into_inner).set_scene(data);
             self.scene_dirty = false;
@@ -3179,6 +3188,7 @@ impl AnvilApp {
                 let (a, b) = (self.camera.project(seg[0], rect), self.camera.project(seg[1], rect));
                 painter.line_segment([a, b], stroke);
             }
+            self.draw_interference(&painter, rect, &pal);
         }
 
         // Sketch interaction.
@@ -5161,6 +5171,7 @@ impl AnvilApp {
         }
 
         self.autosave_tick(ctx);
+        self.assembly_tick(ctx);
 
         let title = self.title();
         if title != self.last_title {

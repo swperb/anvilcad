@@ -485,6 +485,127 @@ diagnostics** panel, not a copy of any SOLIDWORKS tool.
 - **Decision.** A new mate that conflicts asks, as in S21, whether to keep it and break the
   older mate or leave the new one unsolved.
 
+## Interference and clearance
+
+What AnvilCAD's interference check should do: find components whose bodies overlap, with
+the volume of each overlap, and optionally pairs that are closer than a clearance. It was
+written for issue #66 and `crates/anvil-model/src/interference.rs`, and studied the same
+way as the rest of this file (published help only, retrieved and paraphrased as described
+under "How this was studied", REA's method of marking each finding, REA's analysis tools
+not run because the inputs are prose). Sources S36 to S46 were read on 2026-11-25.
+
+| # | Topic | URL | Version |
+|---|---|---|---|
+| S36 | Interference Detection (overview) | A + `c_interference_detection.htm` | 2025 |
+| S37 | Interference Detection PropertyManager | A + `HIDD_DVE_INTERFERENCE.htm` | 2025 |
+| S38 | Detecting interferences between assembly components | A + `t_detecting_interferences.htm` | 2025 |
+| S39 | Excluding components and bodies | A + `c_Excluding_Components_and_Bodies.htm` | 2025 |
+| S40 | Ignoring selected interferences | A + `t_interference_detection_wn.htm` | 2025 |
+| S41 | Clearance Verification (overview) | A + `c_Clearance_Verification_SWassy.htm` | 2025 |
+| S42 | Clearance Verification PropertyManager | A + `HIDD_DVE_CLEARANCE.htm` | 2025 |
+| S43 | Checking static clearances between components | A + `t_Clearances_verifying_in_assemblies.htm` | 2025 |
+| S44 | Component suppression states | A + `c_Component_Suppression_States_SWassy.htm` | 2025 |
+| S45 | `IInterference` members, `Volume`, `IsPossibleInterference` | B + `IInterference_members`, `IInterference~Volume`, `IInterference~IsPossibleInterference` | 2024 |
+| S46 | `IInterferenceDetectionMgr` members, `TreatCoincidenceAsInterference`, `IgnoreHiddenBodies` | B + `IInterferenceDetectionMgr_members`, `IInterferenceDetectionMgr~<member>` | 2024 |
+
+### What is checked
+
+- **Observed (S37).** By default the whole top-level assembly is checked. With one
+  component selected, only interferences involving it are reported; with two or more,
+  only those between the selected components.
+- **Observed (S37, S39).** Components can also be excluded from the check.
+- **Observed (S37, S36).** Interferences between bodies of one multibody part are reported
+  only when asked for. A subassembly can be treated as one component, so interferences
+  inside it are not reported.
+- **Observed (S37, S39).** *Ignore hidden bodies/components* leaves out interferences that
+  involve hidden components (including ones hidden by Isolate) and between a multibody
+  part's hidden bodies and other components. **Observed (S46).** The API calls it
+  `IgnoreHiddenBodies`; its setting does not persist between runs.
+- **Unknown.** Whether *Ignore hidden bodies/components* is on or off by default.
+- **Observed (S44).** A suppressed component is not loaded and is not a functional member
+  of the assembly; it cannot be seen or selected.
+- **Inferred.** So a suppressed component takes no part in an interference check.
+- **Observed (S37).** Surface bodies can be included, but their interferences have no
+  volume.
+- **Observed (S37).** The check can be cancelled while it runs (Cancel or Esc).
+
+### What is reported
+
+- **Observed (S36, S37, S38).** Each interference is listed with its volume. Expanding it
+  shows the two interfering components; a component view lists by component instead of
+  by interference number. **Observed (S45).** An interference has its components, a
+  volume, an ignore flag, a fastener flag and a "possible interference" flag, and its
+  interfering volume can be fetched as a body.
+- **Observed (S36, S37).** The true volume of interference can be shown as a shaded volume;
+  selecting an interference highlights it in red. The other components can be shown
+  wireframe, hidden, transparent or as they are, and the interfering ones transparent.
+- **Observed (S38, S40).** Results can be sorted by volume, zoomed to, ignored (ignores are
+  remembered between runs), and every interference smaller than a chosen one ignored.
+  They can be saved to a spreadsheet.
+- **Observed (S37).** Interferences between fasteners can go to a folder of their own.
+- **Observed (S37).** In its reduced large-design mode the check is approximate and has no
+  volumes, and curved faces that coincide or nearly touch can give false positives where
+  their facets collide.
+- **Inferred.** The full mode therefore works on the exact geometry, not on facets.
+
+### Coincident versus overlapping
+
+- **Observed (S36, S37, S46).** Coincidence (faces or other entities that touch without
+  material overlapping) is told apart from interference. *Treat coincidence as
+  interference* reports coincident entities as interferences as well.
+- **Unknown.** What volume a coincidence carries in the results (presumably none), how it
+  is drawn, and the option's default.
+- **Unknown.** What `IsPossibleInterference` (S45) means; it may be the coincidence case.
+
+### Clearance
+
+- **Observed (S41, S42).** Clearance verification is a separate tool. It measures the
+  minimum distance between components (or chosen faces), between the selected items or
+  between them and the rest of the assembly, and reports every clearance that is less
+  than or equal to a minimum acceptable value. An option drops the "equal" case.
+- **Observed (S42, S43).** Each failed clearance is listed with its value; selecting one
+  highlights it. Clearances can be ignored, and subassemblies treated as components.
+- **Unknown.** What clearance verification reports for components that touch or overlap.
+- **Unknown.** Whether the minimum distance is exact or found on facets.
+
+### AnvilCAD decisions
+
+AnvilCAD's names: **Interference** for the command and its panel; each result is a
+**finding** of kind **overlap**, **touching** or **clearance**.
+
+- **Decision.** One command checks both: overlaps always, touching pairs on request, and
+  pairs closer than a clearance when one is given. Each pair of components appears at
+  most once, as its most serious kind: overlap, then touching, then clearance.
+- **Decision.** An overlap's volume is the exact volume common to the two components,
+  from the exact kernel's boolean intersection and its exact mass integrals. Where a part
+  is only faceted, or the exact intersection fails, the faceted bodies are intersected
+  instead and the finding is marked approximate. A component's own bodies are not checked
+  against each other.
+- **Decision.** Two components *touch* when no volume above 1e-6 mm³ is common to them
+  and their boundaries are within 1e-6 mm. Touching is listed only when asked for (off by
+  default in the app, as the coincident faces of a mated assembly are expected), and
+  never as an overlap.
+- **Decision.** A clearance finding is a pair whose minimum distance is above the touching
+  tolerance and at most the clearance (inclusive, as S42). The distance is found on the
+  tessellations and refined on the exact surfaces, as Measure does
+  (`docs/re/measure-and-section.md`), so it is exact for planes, cylinders and spheres.
+  The two closest points are reported.
+- **Decision.** Hidden components are left out unless asked for. No component is ever
+  suppressed in AnvilCAD yet; when suppression comes it will leave the component out
+  (S44).
+- **Decision.** Like S37, the check covers every pair, or with a list of components, the
+  pairs involving one of them when one is given and the pairs among them when several are.
+- **Decision.** The check runs off the UI thread, in parallel over pairs, with progress and
+  Cancel. Results are dropped when the assembly changes, since they no longer describe
+  it.
+- **Decision.** In the view, while results are shown, components are drawn as wireframe
+  (S37's "wireframe" option; the renderer has no transparency) and overlap volumes shaded,
+  the selected one red. Touching and clearance findings show a line between their closest
+  points. Clicking a finding in the list or its volume in the view selects it.
+- **Decision.** Ignore lists, sorting, spreadsheet export, fastener folders and surface
+  bodies are not part of the first version. Subassemblies (#93) will be checked as their
+  leaf components, with an option to treat one as a single component.
+
 ## Unknown or not covered
 
 1. How `.sldasm` files store components, transforms and mates. Nothing here was learnt
@@ -499,3 +620,7 @@ diagnostics** panel, not a copy of any SOLIDWORKS tool.
    decides, beyond "nearest to the current position".
 8. Flexible subassemblies, component patterns, mirrored components, mate references and
    automatic mates on dragging, none of which were studied.
+9. Interference and clearance: the defaults of *Treat coincidence as interference* and
+   *Ignore hidden bodies/components*, what a coincidence reports, what a possible
+   interference is, and what clearance verification reports for touching or overlapping
+   components (see "Interference and clearance").

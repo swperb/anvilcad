@@ -11,8 +11,8 @@
 use crate::headless::Headless;
 use crate::script::{
     BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, ExtrudeSpec, HoleSpec, Host,
-    InsertSpec, MateSide, MateSpec, MirrorSpec, PatternRun, PatternSpec, PlaneDef, PlanePick, PlaneSpec,
-    RevolveSpec, RibSpec, ShellSpec, SketchSpec, SplitSpec,
+    InsertSpec, InterferenceSpec, MateSide, MateSpec, MirrorSpec, PatternRun, PatternSpec, PlaneDef,
+    PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec, SketchSpec, SplitSpec,
 };
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
@@ -406,6 +406,19 @@ impl Server {
                 };
                 let id = self.host(|h| h.add_mate(&spec))?;
                 json!({ "mate": id, "assembly": self.h.app.snapshot()["assembly"] })
+            }
+            "check_interference" => {
+                let clearance = match a.get("clearance") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_f64().ok_or("clearance is a number of mm")?),
+                };
+                let spec = InterferenceSpec {
+                    clearance,
+                    touching: a.bool("touching")?,
+                    hidden: a.bool("hidden")?,
+                    components: name_list(a, "components")?,
+                };
+                self.host(|h| h.interference(&spec))?
             }
             "add_plane" => {
                 let offset = match a.get("offset") {
@@ -1092,6 +1105,19 @@ const TOOLS: &[Tool] = &[
         }"#,
         required: &["kind", "a", "b"],
         read_only: false,
+    },
+    Tool {
+        name: "check_interference",
+        title: "Check interference",
+        description: "Check the open assembly for components whose bodies overlap, with the exact volume of each overlap (mm^3). Optionally also report components that touch without overlapping, and pairs closer than a clearance with their minimum distance (mm) and closest points. Hidden components are left out unless hidden is true. Each pair is reported once, as overlap, touching or clearance; exact is false where a part is faceted and the value approximate. Also shows the result in the Interference panel.",
+        properties: r#"{
+            "clearance": { "type": "number", "description": "Also report pairs at most this far apart (mm)" },
+            "touching": { "type": "boolean", "description": "Also report pairs that touch without overlapping" },
+            "hidden": { "type": "boolean", "description": "Check hidden components too" },
+            "components": { "type": "array", "items": { "type": ["string", "integer"] }, "description": "Only these components (ids or names such as \"bracket<1>\"): with one, the pairs involving it; with several, the pairs among them" }
+        }"#,
+        required: &[],
+        read_only: true,
     },
     Tool {
         name: "add_plane",

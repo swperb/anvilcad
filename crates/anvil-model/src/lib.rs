@@ -16,6 +16,7 @@ pub mod exact;
 mod extrude;
 pub mod failure;
 pub mod hole;
+pub mod interference;
 pub mod kernel;
 pub mod loft;
 pub mod material;

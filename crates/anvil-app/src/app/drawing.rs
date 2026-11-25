@@ -369,6 +369,9 @@ impl AnvilApp {
         if let Some(s) = &mut self.drw {
             s.finish_update();
         }
+        if let Some(t) = self.asm.as_mut().and_then(|s| s.interference.as_mut()) {
+            t.finish();
+        }
     }
 
     pub(super) fn in_drawing(&self) -> bool {

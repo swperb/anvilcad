@@ -3,9 +3,10 @@
 //! components, adds mates and shows the bill of materials; the view shows every component
 //! where the mates put it. Behaviour follows `docs/re/assemblies-and-mates.md`.
 
+use super::interference::{InterferenceOptions, InterferenceTool};
 use super::AnvilApp;
 use crate::theme::{self, Icon, Palette, RowLook};
-use anvil_kernel::{EdgeRef, FaceId, Frame, ModelEdge, Solid, Vec3};
+use anvil_kernel::{EdgeRef, FaceId, Frame, Mesh, ModelEdge, Solid, Vec3};
 use anvil_model::assembly::{Assembly, AssemblyStatus, MateEntity, MateRef, Parts, ASSEMBLY_EXT};
 use anvil_model::mates::{Alignment, Definition, MateKind, MateState};
 use anvil_model::{BuildState, PlaneRef, PART_EXT};
@@ -95,15 +96,21 @@ pub(super) struct AsmSession {
     /// The combined body of the visible components, in assembly coordinates, with each
     /// face renamed to a `COMPONENT_FACE` id.
     pub body: Solid,
+    /// `body`, tessellated for the view.
+    mesh: Mesh,
     /// What each renamed face is: its component and its face in the part.
     faces: Vec<(u32, FaceId)>,
     /// Model edges in assembly coordinates, named by the component's own faces.
-    edges: Vec<(u32, ModelEdge)>,
+    pub(super) edges: Vec<(u32, ModelEdge)>,
     /// Components whose part could not be loaded, with why.
     pub load_errors: Vec<(u32, String)>,
     pub selection: AsmSelection,
     pub mate: Option<MateTool>,
     pub bom: bool,
+    /// The Interference panel, while it is open.
+    pub interference: Option<InterferenceTool>,
+    /// Its options, kept while it is closed.
+    pub interference_opts: InterferenceOptions,
 }
 
 impl AsmSession {
@@ -122,12 +129,15 @@ impl AsmSession {
             parts,
             status: AssemblyStatus { mates: Vec::new(), components: Vec::new() },
             body: Solid::default(),
+            mesh: Mesh::default(),
             faces: Vec::new(),
             edges: Vec::new(),
             load_errors: Vec::new(),
             selection: AsmSelection::None,
             mate: None,
             bom: false,
+            interference: None,
+            interference_opts: InterferenceOptions::default(),
         }
     }
 
@@ -184,6 +194,7 @@ impl AsmSession {
             }
         }
         self.body = Solid::new(polygons);
+        self.mesh = self.body.tessellate();
     }
 
     fn commit(&mut self) {
@@ -202,8 +213,12 @@ impl AsmSession {
         Some(MateRef { component: Some(c), entity: MateEntity::Face(f) })
     }
 
-    /// Faces of the combined body to highlight.
+    /// Faces of the combined body to highlight (or, while the Interference panel shows
+    /// findings, of the overlap volumes).
     pub fn highlighted(&self) -> Vec<FaceId> {
+        if self.interference.as_ref().is_some_and(InterferenceTool::shows_findings) {
+            return Vec::new();
+        }
         let synthetic = |pred: &dyn Fn(u32, FaceId) -> bool| -> Vec<FaceId> {
             self.faces
                 .iter()
@@ -257,6 +272,26 @@ impl AsmSession {
             })
             .map(|(_, e)| e.seg)
             .collect()
+    }
+
+    /// True while the Interference panel shows findings: components are then drawn as
+    /// wireframe.
+    pub fn wireframe(&self) -> bool {
+        self.interference.as_ref().is_some_and(InterferenceTool::shows_findings)
+    }
+
+    /// A component's instance name, as `bracket<1>`.
+    pub fn component_label(&self, id: u32) -> String {
+        self.component_name(Some(id))
+    }
+
+    /// Faces drawn red: the selected finding's overlap volume.
+    pub fn failed_faces(&self) -> Vec<FaceId> {
+        self.interference
+            .as_ref()
+            .filter(|t| t.shows_findings())
+            .map(|t| t.selected_faces())
+            .unwrap_or_default()
     }
 
     fn component_name(&self, id: Option<u32>) -> String {
@@ -360,9 +395,9 @@ impl AnvilApp {
         s.refresh();
         self.state = BuildState::default();
         self.state.body = s.body.clone();
-        self.mesh = s.body.tessellate();
-        self.edges = s.edges.iter().map(|(_, e)| e.seg).collect();
-        self.scene_dirty = true;
+        self.interference_after_change();
+        self.show_assembly_scene();
+        let Some(s) = &self.asm else { return };
         let bad = s.status.mates.iter().filter(|m| !matches!(m.1, MateState::Satisfied)).count();
         let under = s.status.components.iter().filter(|c| matches!(c.1, Definition::UnderDefined(_))).count();
         self.status = if !s.load_errors.is_empty() {
@@ -376,6 +411,19 @@ impl AnvilApp {
         } else {
             "Mates solved; fully defined".into()
         };
+    }
+
+    /// Shows the assembly in the view: its components shaded, or while the Interference
+    /// panel shows findings, its components as wireframe and the overlap volumes shaded.
+    pub(super) fn show_assembly_scene(&mut self) {
+        let Some(s) = &self.asm else { return };
+        self.mesh = match s.interference.as_ref().filter(|t| t.shows_findings()) {
+            Some(t) => t.mesh().clone(),
+            None => s.mesh.clone(),
+        };
+        self.edges = s.edges.iter().map(|(_, e)| e.seg).collect();
+        self.hover_face = None;
+        self.scene_dirty = true;
     }
 
     pub(super) fn assembly_undo(&mut self, redo: bool) {
@@ -525,6 +573,9 @@ impl AnvilApp {
 
     /// Opens the Mate panel for a new mate, taking a selected component's nothing.
     pub(super) fn start_mate(&mut self) {
+        if self.asm.is_some() {
+            self.close_interference();
+        }
         if let Some(s) = &mut self.asm {
             s.mate = Some(MateTool::new());
             self.scene_dirty = true;
@@ -532,6 +583,7 @@ impl AnvilApp {
     }
 
     fn edit_mate(&mut self, id: u32) {
+        self.close_interference();
         let Some(s) = &mut self.asm else { return };
         let Some(m) = s.asm.mate(id) else { return };
         let kind = MATE_TYPES.iter().position(|t| *t == m.kind.label()).unwrap_or(0);
@@ -630,6 +682,27 @@ impl AnvilApp {
 
     /// Hover and clicks in the view while an assembly is open.
     pub(super) fn assembly_pointer(&mut self, resp: &egui::Response, rect: egui::Rect) {
+        // While findings are shown, the overlap volumes are what can be picked.
+        if let Some(t) =
+            self.asm.as_ref().and_then(|s| s.interference.as_ref()).filter(|t| t.shows_findings())
+        {
+            let hit = resp.hover_pos().and_then(|p| {
+                let (o, d) = self.camera.ray(p, rect);
+                t.regions.raycast(o, d)
+            });
+            let hover = hit.map(|h| h.tag.id);
+            let picked = hover.and_then(|f| t.finding_of_face(f));
+            if hover != self.hover_face {
+                self.hover_face = hover;
+                self.scene_dirty = true;
+            }
+            if resp.clicked_by(egui::PointerButton::Primary) {
+                if let Some(k) = picked {
+                    self.select_finding(Some(k));
+                }
+            }
+            return;
+        }
         let picking = self.asm.as_ref().is_some_and(|s| s.mate.is_some());
         let hit = resp.hover_pos().and_then(|p| {
             let (o, d) = self.camera.ray(p, rect);
@@ -719,6 +792,14 @@ impl AnvilApp {
         });
         theme::group_rule(ui);
         theme::command_group(ui, "Evaluate", |ui| {
+            let open = self.asm.as_ref().is_some_and(|s| s.interference.is_some());
+            if theme::command_button(ui, Icon::Interference, "Interference", Some(open)).clicked() {
+                if open {
+                    self.close_interference();
+                } else {
+                    self.open_interference();
+                }
+            }
             if theme::command_button(ui, Icon::Properties, "Bill of Materials", None).clicked() {
                 if let Some(s) = &mut self.asm {
                     s.bom = !s.bom;
@@ -742,6 +823,10 @@ impl AnvilApp {
     pub(super) fn assembly_tree(&mut self, ui: &mut egui::Ui) {
         if self.asm.as_ref().is_some_and(|s| s.mate.is_some()) {
             self.mate_panel(ui);
+            ui.add_space(10.0);
+            ui.separator();
+        } else if self.asm.as_ref().is_some_and(|s| s.interference.is_some()) {
+            self.interference_panel(ui);
             ui.add_space(10.0);
             ui.separator();
         }
@@ -1012,6 +1097,7 @@ impl AnvilApp {
             "path": s.path,
             "components": comps,
             "mates": mates,
+            "interference": self.interference_snapshot(),
             "mate_panel": s.mate.as_ref().map(|t| json!({
                 "type": MATE_TYPES.get(t.kind),
                 "picks": t.picks.iter().map(|r| s.ref_label(r)).collect::<Vec<_>>(),
@@ -1161,6 +1247,76 @@ mod tests {
         assert!(app.asm.as_ref().is_some_and(|s| s.asm.mates.is_empty()));
         app.assembly_undo(false);
         assert_eq!(app.asm.as_ref().map(|s| s.asm.mates.len()), Some(3));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Issue #66: the Interference panel checks in the background, shows the overlap and
+    /// drops results that no longer describe the assembly.
+    #[test]
+    fn interference_panel_finds_the_overlap_and_follows_changes() {
+        let (ctx, mut app, dir) = harness();
+        app.new_assembly();
+        app.insert_part(&dir.join("base.anvprt"));
+        app.insert_part(&dir.join("cube.anvprt"));
+        let cube = app.asm.as_ref().and_then(|s| s.asm.components.get(1)).map(|c| c.id).expect("cube");
+        let move_cube = |app: &mut AnvilApp, z: f64| {
+            if let Some(c) = app.asm.as_mut().and_then(|s| s.asm.component_mut(cube)) {
+                c.placement.origin = v3(5.0, 5.0, z);
+            }
+            app.assembly_commit();
+            app.refresh_assembly();
+        };
+        // Half the cube sinks into the base: 10 x 10 x 5.
+        move_cube(&mut app, 5.0);
+        let shaded = app.mesh.indices.len();
+        app.open_interference();
+        assert!(app.asm.as_ref().and_then(|s| s.interference.as_ref()).is_some_and(|t| t.running()));
+        app.finish_background_work();
+        step(&ctx, &mut app);
+        let snap = app.assembly_snapshot().expect("snapshot");
+        let r = &snap["interference"]["report"];
+        assert_eq!(r["findings"].as_array().map(Vec::len), Some(1), "{snap}");
+        assert_eq!(r["findings"][0]["kind"], "overlap");
+        assert_eq!(r["findings"][0]["a"], "base<1>");
+        assert_eq!(r["findings"][0]["b"], "cube<1>");
+        let v = r["findings"][0]["volume"].as_f64().unwrap_or(0.0);
+        assert!((v - 500.0).abs() < 1e-6 * 500.0, "{v}");
+        assert!(app.status.contains("1 overlap"), "{}", app.status);
+        // The view shows the overlap volume (a box: 12 triangles), selected and red.
+        assert_eq!(snap["interference"]["selected"], 0);
+        assert_eq!(app.mesh.indices.len(), 12);
+        let s = app.asm.as_ref().expect("asm");
+        assert_eq!(s.failed_faces().len(), 1);
+        assert!(s.highlighted().is_empty());
+
+        // Resting the cube on the base changes the assembly: the results go.
+        move_cube(&mut app, 10.0);
+        let t = app.asm.as_ref().and_then(|s| s.interference.as_ref()).expect("panel");
+        assert!(t.report.is_none() && t.note.as_deref().is_some_and(|n| n.contains("changed")));
+        assert_eq!(app.mesh.indices.len(), shaded);
+        // Now it only touches, which is reported when asked for.
+        if let Some(s) = &mut app.asm {
+            s.interference_opts.touching = true;
+        }
+        app.start_interference().expect("starts");
+        app.finish_background_work();
+        step(&ctx, &mut app);
+        let snap = app.assembly_snapshot().expect("snapshot");
+        assert_eq!(snap["interference"]["report"]["findings"][0]["kind"], "touching", "{snap}");
+        // A bad clearance is refused with a note, not a check.
+        if let Some(s) = &mut app.asm {
+            s.interference_opts.clearance_on = true;
+            s.interference_opts.clearance = "-1".into();
+        }
+        assert!(app.start_interference().is_err());
+        let t = app.asm.as_ref().and_then(|s| s.interference.as_ref()).expect("panel");
+        assert!(t.note.as_deref().is_some_and(|n| n.contains("more than 0")), "{:?}", t.note);
+        // Starting a mate closes the panel and the view shades the components again.
+        app.start_mate();
+        let s = app.asm.as_ref().expect("asm");
+        assert!(s.interference.is_none() && s.mate.is_some());
+        assert_eq!(app.mesh.indices.len(), shaded);
+        step(&ctx, &mut app);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
