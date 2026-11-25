@@ -261,6 +261,10 @@ pub trait Host {
     /// Checks the open assembly for interference and shows the result in the
     /// Interference panel; returns the findings (see `docs/SCRIPTING.md`).
     fn interference(&mut self, spec: &InterferenceSpec) -> Result<serde_json::Value, String>;
+    /// Makes a subassembly of the open assembly flexible or rigid and solves.
+    fn set_flexible(&mut self, component: &str, flexible: bool) -> Result<(), String>;
+    /// The open assembly's bill of materials in a view: `top`, `parts` or `indented`.
+    fn bom(&mut self, view: &str) -> Result<serde_json::Value, String>;
     fn set_status(&mut self, text: &str);
 }
 
@@ -356,11 +360,13 @@ pub enum PlanePick {
 /// A component from `anvil.insert{...}`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InsertSpec {
-    /// The part file.
+    /// The part (`.anvprt`) or assembly (`.anvasm`) file.
     pub path: PathBuf,
     /// Where its origin goes, in assembly coordinates (mm); beside the others if not given.
     /// The first component is fixed at the assembly's origin.
     pub at: Option<[f64; 3]>,
+    /// For an assembly: insert it flexible rather than rigid.
+    pub flexible: bool,
 }
 
 /// One side of a mate.
@@ -398,6 +404,8 @@ pub struct InterferenceSpec {
     /// Only these components (ids or names): the pairs involving the one given, or the
     /// pairs among several. Every pair when empty.
     pub components: Vec<String>,
+    /// Check each subassembly as one component instead of seeing through it.
+    pub whole_subassemblies: bool,
 }
 
 /// A reference plane from `anvil.plane{...}`: parallel to `from`, `offset` away.
@@ -791,6 +799,8 @@ impl Engine {
             "insert",
             "mate",
             "interference",
+            "flexible",
+            "bom",
             "status",
         ];
         let result = self.guarded(|lua| {
@@ -1010,6 +1020,24 @@ impl Engine {
                         let spec = read_interference(t.as_ref()).map_err(fail)?;
                         let found = h.borrow_mut().interference(&spec).map_err(fail)?;
                         lua.to_value(&found)
+                    })?,
+                )?;
+                anvil.set(
+                    "flexible",
+                    scope.create_function(move |_, t: Table| {
+                        let (component, flexible) = read_flexible(&t).map_err(fail)?;
+                        h.borrow_mut().set_flexible(&component, flexible).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "bom",
+                    scope.create_function(move |lua, t: Option<Table>| {
+                        let view = match &t {
+                            Some(t) => t.get::<Option<String>>("view").map_err(|e| fail(lua_err(e)))?,
+                            None => None,
+                        };
+                        let rows = h.borrow_mut().bom(view.as_deref().unwrap_or("top")).map_err(fail)?;
+                        lua.to_value(&rows)
                     })?,
                 )?;
                 anvil.set(
@@ -1400,7 +1428,20 @@ fn read_interference(t: Option<&Table>) -> Result<InterferenceSpec, String> {
         touching: t.get::<Option<bool>>("touching").map_err(lua_err)?.unwrap_or(false),
         hidden: t.get::<Option<bool>>("hidden").map_err(lua_err)?.unwrap_or(false),
         components: names(t, "components", what, false)?,
+        whole_subassemblies: t.get::<Option<bool>>("whole_subassemblies").map_err(lua_err)?.unwrap_or(false),
     })
+}
+
+/// `{ component = <id or name>, flexible = true | false }`; flexible defaults to true.
+fn read_flexible(t: &Table) -> Result<(String, bool), String> {
+    let usage = "anvil.flexible: component = <id or name>, flexible = true or false";
+    let component = match t.get::<Value>("component").map_err(lua_err)? {
+        Value::Integer(i) => i.to_string(),
+        Value::String(s) => s.to_string_lossy(),
+        _ => return Err(usage.into()),
+    };
+    let flexible = t.get::<Option<bool>>("flexible").map_err(|_| usage.to_string())?.unwrap_or(true);
+    Ok((component, flexible))
 }
 
 fn read_mirror(t: &Table) -> Result<MirrorSpec, String> {
@@ -1465,12 +1506,18 @@ fn read_combine(t: &Table) -> Result<CombineSpec, String> {
 }
 
 fn read_insert(t: &Table) -> Result<InsertSpec, String> {
-    let path: String = t.get("path").map_err(|_| "anvil.insert: path = \"part.anvprt\"".to_string())?;
+    let path: String = t
+        .get("path")
+        .map_err(|_| "anvil.insert: path = \"part.anvprt\" or \"assembly.anvasm\"".to_string())?;
     let at = match t.get::<Option<Table>>("at").map_err(lua_err)? {
         Some(a) => Some(numbers(&a, "anvil.insert: at = {x, y, z}")?),
         None => None,
     };
-    Ok(InsertSpec { path: PathBuf::from(path), at })
+    let flexible = t
+        .get::<Option<bool>>("flexible")
+        .map_err(|_| "anvil.insert: flexible = true or false".to_string())?
+        .unwrap_or(false);
+    Ok(InsertSpec { path: PathBuf::from(path), at, flexible })
 }
 
 /// `{ face = {x, y, z} }` or `{ plane = "front", component = id or name }`.

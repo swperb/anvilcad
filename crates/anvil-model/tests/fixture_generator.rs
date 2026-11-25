@@ -17,7 +17,11 @@
 //!
 //! To save fixtures with an older build, copy this file and `common/` into that build's
 //! `crates/anvil-model/tests/` and run the same command there. It uses only APIs the
-//! oldest such build (v0.1.0) has; keep it that way, or note what changed.
+//! oldest such build (v0.1.0) has; keep it that way, or note what changed:
+//!
+//! - `MateRef` gained `inner` with subassemblies (assembly format 2); for older builds,
+//!   drop `inner: Vec::new(),` from its literals and the `nested.anvasm` block, which
+//!   needs `Assembly::set_flexible` and `MateRef::at`.
 //!
 //! `rerecord_expected_values` measures committed fixtures again with this build, for a
 //! change that is meant to move rebuilt geometry; the files themselves never change.
@@ -29,7 +33,7 @@
 mod common;
 
 use anvil_kernel::{v2, v3, EdgeRef, FaceId, Frame};
-use anvil_model::assembly::{Assembly, MateEntity, MateRef, Parts, ASSEMBLY_FORMAT, ASSEMBLY_FORMAT_VERSION};
+use anvil_model::assembly::{Assembly, MateEntity, MateRef, Parts};
 use anvil_model::mates::{Alignment, MateKind};
 use anvil_model::*;
 use anvil_sketch::{Constraint, Geom, Sketch, ORIGIN};
@@ -529,6 +533,7 @@ fn part_expected(file: &Path, saved_by: &str, recorded_by: &str) -> Value {
 /// What an assembly file is expected to give when reopened and its mates solved.
 fn assembly_expected(file: &Path, saved_by: &str, recorded_by: &str) -> Value {
     let mut asm = Assembly::load(file).unwrap();
+    let raw: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
     let resaves = same_on_resave(file, |p| asm.save(p).unwrap());
     let mut parts = Parts::for_file(file);
     let status = asm.solve(&mut parts);
@@ -539,8 +544,8 @@ fn assembly_expected(file: &Path, saved_by: &str, recorded_by: &str) -> Value {
     json!({
         "saved_by": saved_by,
         "recorded_by": recorded_by,
-        "format": ASSEMBLY_FORMAT,
-        "format_version": ASSEMBLY_FORMAT_VERSION,
+        "format": raw["format"],
+        "format_version": raw["format_version"],
         "resaves_unchanged": resaves,
         "components": asm.components.len(),
         "mates": asm.mates.len(),
@@ -608,10 +613,16 @@ fn generate_fixtures() {
             z: v3(0.0, 1.0, 0.0),
         },
     );
-    let face =
-        |component: u32, face: FaceId| MateRef { component: c(component), entity: MateEntity::Face(face) };
-    let plane =
-        |component: u32, p: PlaneRef| MateRef { component: c(component), entity: MateEntity::Plane(p) };
+    let face = |component: u32, face: FaceId| MateRef {
+        inner: Vec::new(),
+        component: c(component),
+        entity: MateEntity::Face(face),
+    };
+    let plane = |component: u32, p: PlaneRef| MateRef {
+        inner: Vec::new(),
+        component: c(component),
+        entity: MateEntity::Plane(p),
+    };
     // The bottom faces meet, the Top planes line up and the Right planes are 100 apart.
     asm.add_mate(
         MateKind::Coincident,
@@ -638,6 +649,28 @@ fn generate_fixtures() {
     let status = asm.solve(&mut parts);
     assert!(status.ok(), "{status:?}");
     asm.save(&path).unwrap();
+    write_expected(&path, &assembly_expected(&path, &build, &build));
+
+    // Assembly format 2: the assembly above as a subassembly twice, one rigid and one
+    // flexible, with a mate here to a plane of a part inside the flexible one.
+    let mut top = Assembly::new();
+    top.custom_properties[0].value = "Fixture: subassemblies".into();
+    let base = top.add_component("prismatic.anvprt", None, Frame::WORLD);
+    top.add_component("assembly.anvasm", None, Frame { origin: v3(0.0, 0.0, -100.0), ..Frame::WORLD });
+    let flex =
+        top.add_component("assembly.anvasm", None, Frame { origin: v3(0.0, 200.0, 0.0), ..Frame::WORLD });
+    top.set_flexible(flex, true).unwrap();
+    top.add_mate(
+        MateKind::Distance { value: 150.0, flip: false },
+        Alignment::Aligned,
+        plane(base, PlaneRef::Right),
+        MateRef::at(&[flex, plate], MateEntity::Plane(PlaneRef::Right)),
+    );
+    let path = dir.join("nested.anvasm");
+    let mut parts = Parts::for_file(&path);
+    let status = top.solve(&mut parts);
+    assert!(status.ok(), "{status:?}");
+    top.save(&path).unwrap();
     write_expected(&path, &assembly_expected(&path, &build, &build));
 }
 

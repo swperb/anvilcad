@@ -27,8 +27,10 @@ pub const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("Reference Dimension", "Dimension the drawing views"),
     ("Export PDF", "Export the drawing as PDF"),
     ("Export DXF", "Export the drawing as DXF"),
-    ("Insert Component", "Place a part in the assembly"),
+    ("Insert Component", "Place a part or subassembly in the assembly"),
     ("Mate", "Add a mate between two components"),
+    ("Make Flexible", "Solve the selected subassembly's own mates in the assembly"),
+    ("Make Rigid", "Move the selected subassembly as one body"),
     ("Bill of Materials", "Show the assembly's parts list"),
     ("Interference", "Find components that overlap, touch or are too close"),
     ("Open", "Open a part, template, STEP or SOLIDWORKS file"),
@@ -207,6 +209,18 @@ impl AnvilApp {
             "New Assembly" => self.request(PendingAction::NewAssembly),
             "Insert Component" => self.insert_component(),
             "Mate" => self.start_mate(),
+            "Make Flexible" | "Make Rigid" => {
+                // Like the toolbar, which offers it only for a selected subassembly.
+                let sel = self.asm.as_ref().map(|s| s.selection);
+                match sel {
+                    Some(super::assembly::AsmSelection::Component(id)) => {
+                        if let Err(e) = self.set_flexible(id, *name == "Make Flexible") {
+                            self.status = format!("{name}: {e}");
+                        }
+                    }
+                    _ => self.status = format!("{name}: select a subassembly in an open assembly first"),
+                }
+            }
             "Interference" => self.open_interference(),
             "Bill of Materials" => {
                 if let Some(s) = &mut self.asm {
@@ -881,6 +895,19 @@ impl Host for AppHost<'_> {
     }
 
     fn save(&mut self, path: Option<&Path>) -> Result<(), String> {
+        if self.app.in_assembly() {
+            // The assembly is what is open, not the part behind it.
+            let path = path
+                .map(Path::to_path_buf)
+                .or_else(|| self.app.asm.as_ref().and_then(|s| s.path.clone()))
+                .ok_or_else(|| {
+                    "anvil.save: the assembly has no file yet; give a path, anvil.save(\"assembly.anvasm\")"
+                        .to_string()
+                })?;
+            self.app.save_assembly_to(&path).map_err(|e| format!("anvil.save: {e}"))?;
+            self.app.status = format!("Saved {}", path.display());
+            return Ok(());
+        }
         let path = path.map(Path::to_path_buf).or_else(|| self.app.path.clone()).ok_or_else(|| {
             "anvil.save: the part has no file yet; give a path, anvil.save(\"part.anvprt\")".to_string()
         })?;
@@ -1370,7 +1397,33 @@ impl Host for AppHost<'_> {
             return Err(format!("{what}: no assembly is open; start one with anvil.assembly()"));
         }
         let at = spec.at.map(|a| anvil_kernel::Vec3 { x: a[0], y: a[1], z: a[2] });
-        self.app.insert_part_at(&spec.path, at).map_err(|e| format!("{what}: {e}"))
+        let is_asm = anvil_model::assembly::is_assembly_path(&spec.path.to_string_lossy());
+        if spec.flexible && !is_asm {
+            return Err(format!("{what}: flexible applies to an assembly (.anvasm), not a part"));
+        }
+        let id = self.app.insert_part_at(&spec.path, at).map_err(|e| format!("{what}: {e}"))?;
+        if spec.flexible {
+            self.app.set_flexible(id, true).map_err(|e| format!("{what}: {e}"))?;
+        }
+        Ok(id)
+    }
+
+    fn set_flexible(&mut self, component: &str, flexible: bool) -> Result<(), String> {
+        let what = "anvil.flexible";
+        if !self.app.in_assembly() {
+            return Err(format!("{what}: no assembly is open; open one or start one with anvil.assembly()"));
+        }
+        let id = self.component_named(what, component)?;
+        self.app.set_flexible(id, flexible).map_err(|e| format!("{what}: {e}"))
+    }
+
+    fn bom(&mut self, view: &str) -> Result<serde_json::Value, String> {
+        let what = "anvil.bom";
+        let v = anvil_model::assembly::BomView::from_key(view)
+            .ok_or_else(|| format!("{what}: view \"{view}\" is not top, parts or indented"))?;
+        let s = self.app.asm.as_mut().ok_or(format!("{what}: no assembly is open"))?;
+        let rows = s.asm.bom(&mut s.parts, v);
+        Ok(super::assembly::bom_json(v, &rows))
     }
 
     fn add_mate(&mut self, spec: &MateSpec) -> Result<u32, String> {
@@ -1435,10 +1488,11 @@ impl Host for AppHost<'_> {
             touching: spec.touching,
             include_hidden: spec.hidden,
             components,
+            whole_subassemblies: spec.whole_subassemblies,
         };
         let report = self.app.run_interference(&opts).map_err(|e| format!("{what}: {e}"))?;
         let s = self.app.asm.as_ref().ok_or(format!("{what}: no assembly is open"))?;
-        Ok(super::interference::report_json(&report, &|c| s.component_label(c)))
+        Ok(super::interference::report_json(&report, &|c| s.path_label(c)))
     }
 
     fn set_status(&mut self, text: &str) {
@@ -1530,15 +1584,15 @@ impl AppHost<'_> {
     }
 
     /// One side of a mate: a component's face through a point, or a standard plane.
-    fn mate_ref(&self, side: &MateSide, what: &str, key: &str) -> Result<MateRef, String> {
+    fn mate_ref(&mut self, side: &MateSide, what: &str, key: &str) -> Result<MateRef, String> {
         match side {
             MateSide::Face(p) => {
                 let q = anvil_kernel::Vec3 { x: p[0], y: p[1], z: p[2] };
-                let (component, face) = self
+                let (path, face) = self
                     .app
                     .assembly_face_at(q)
                     .map_err(|e| format!("{what}: {key}: {e} at {{{}, {}, {}}}", p[0], p[1], p[2]))?;
-                Ok(MateRef { component: Some(component), entity: MateEntity::Face(face) })
+                Ok(MateRef::at(&path, MateEntity::Face(face)))
             }
             MateSide::Plane { component, plane } => {
                 let plane = match plane {
@@ -1547,11 +1601,11 @@ impl AppHost<'_> {
                     PlanePick::Right => PlaneRef::Right,
                     _ => return Err(format!("{what}: {key}.plane is \"front\", \"top\" or \"right\"")),
                 };
-                let component = match component {
-                    None => None,
-                    Some(c) => Some(self.component_named(what, c)?),
+                let path = match component {
+                    None => Vec::new(),
+                    Some(c) => self.component_path_named(what, c)?,
                 };
-                Ok(MateRef { component, entity: MateEntity::Plane(plane) })
+                Ok(MateRef::at(&path, MateEntity::Plane(plane)))
             }
         }
     }
@@ -1562,6 +1616,23 @@ impl AppHost<'_> {
         let found = comps.iter().find(|c| c.id.to_string() == name || c.name == name);
         found.map(|c| c.id).ok_or_else(|| {
             let have: Vec<_> = comps.iter().map(|c| c.name.clone()).collect();
+            format!("{what}: there is no component \"{name}\"; the components are {}", have.join(", "))
+        })
+    }
+
+    /// A component at any depth by its top-level id or name, or by instance names joined
+    /// by `/` for one inside a subassembly ("arm<1>/link<2>").
+    fn component_path_named(&mut self, what: &str, name: &str) -> Result<Vec<u32>, String> {
+        let s = self.app.asm.as_mut().ok_or("no assembly is open")?;
+        s.asm.path_named(&mut s.parts, name).ok_or_else(|| {
+            // In tree order: each component, then what is inside it.
+            let mut have = Vec::new();
+            for c in &s.asm.components {
+                have.push(c.name.clone());
+                have.extend(
+                    s.nested.iter().filter(|n| n.path.first() == Some(&c.id)).map(|n| s.path_label(&n.path)),
+                );
+            }
             format!("{what}: there is no component \"{name}\"; the components are {}", have.join(", "))
         })
     }

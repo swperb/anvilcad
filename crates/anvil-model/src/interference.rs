@@ -13,8 +13,11 @@
 //! - **clearance:** a minimum distance above the touching tolerance and at most the
 //!   clearance asked for.
 //!
-//! A component's own bodies are never checked against each other. The work is split over
-//! threads by pair and can be cancelled through [`Progress`].
+//! A component's own bodies are never checked against each other. Subassemblies are seen
+//! through: each part inside one, at any depth, is a component of its own here, named by
+//! its path of component ids, unless [`Options::whole_subassemblies`] asks for each
+//! top-level subassembly to be one component. The work is split over threads by pair and
+//! can be cancelled through [`Progress`].
 
 use crate::assembly::{Assembly, Parts};
 use crate::exact;
@@ -39,9 +42,12 @@ pub struct Options {
     pub touching: bool,
     /// Check hidden components too.
     pub include_hidden: bool,
-    /// Only these components: with one, the pairs involving it; with several, the pairs
-    /// among them. Every pair when empty.
+    /// Only these (top-level) components: with one, the pairs involving it or a part
+    /// inside it; with several, the pairs among them. Every pair when empty.
     pub components: Vec<u32>,
+    /// Check each top-level subassembly as one component, so that interferences between
+    /// its own parts are not reported.
+    pub whole_subassemblies: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -54,11 +60,12 @@ pub enum FindingKind {
     Clearance { distance: f64 },
 }
 
-/// One pair of components that overlap, touch or are too close.
+/// One pair of components that overlap, touch or are too close. Each is named by its
+/// path: the top-level component's id, then the ids inside subassemblies.
 #[derive(Clone, Debug)]
 pub struct Finding {
-    pub a: u32,
-    pub b: u32,
+    pub a: Vec<u32>,
+    pub b: Vec<u32>,
     pub kind: FindingKind,
     /// The closest points, on `a` and on `b`, for touching and clearance findings.
     pub points: Option<(Vec3, Vec3)>,
@@ -99,8 +106,8 @@ impl Finding {
 pub struct Report {
     /// Overlaps first, largest first; then touching pairs; then clearances, nearest first.
     pub findings: Vec<Finding>,
-    /// Components that could not be checked (their part did not load), with why.
-    pub skipped: Vec<(u32, String)>,
+    /// Components (by path) that could not be checked (their file did not load), with why.
+    pub skipped: Vec<(Vec<u32>, String)>,
     /// How many pairs of components were checked.
     pub pairs: usize,
 }
@@ -188,7 +195,8 @@ impl Body {
 
 /// The bodies of one component, placed in the assembly.
 pub struct ComponentBodies {
-    pub id: u32,
+    /// The top-level component's id, then the ids inside subassemblies.
+    pub path: Vec<u32>,
     pub bodies: Vec<Body>,
 }
 
@@ -218,35 +226,35 @@ fn near(a: &Aabb, b: &Aabb, pad: f64) -> bool {
 
 impl Assembly {
     /// The bodies of the components a check with `opts` looks at, placed in the assembly,
-    /// and the components whose part could not be loaded.
+    /// and the components whose file could not be loaded.
     pub fn check_bodies(
         &self,
         parts: &mut Parts,
         opts: &Options,
-    ) -> (Vec<ComponentBodies>, Vec<(u32, String)>) {
-        let mut out = Vec::new();
-        let mut skipped = Vec::new();
-        for c in &self.components {
-            if c.hidden && !opts.include_hidden {
+    ) -> (Vec<ComponentBodies>, Vec<(Vec<u32>, String)>) {
+        let (placed, errors) = self.placed_parts(parts);
+        let skipped = errors.into_iter().map(|e| (e.path, e.error)).collect();
+        let mut out: Vec<ComponentBodies> = Vec::new();
+        for p in placed {
+            if p.hidden && !opts.include_hidden {
                 continue;
             }
-            let part = match parts.get(&c.path, c.configuration.as_deref()) {
-                Ok(p) => p,
-                Err(e) => {
-                    skipped.push((c.id, e));
-                    continue;
-                }
-            };
+            let Ok(part) = parts.get(&p.file, p.configuration.as_deref()) else { continue };
             let st = &part.state;
-            let bodies = match st.exact.as_deref().filter(|b| !b.is_empty()) {
+            let bodies: Vec<Body> = match st.exact.as_deref().filter(|b| !b.is_empty()) {
                 Some(exact) => {
-                    let f = exact::frame(&c.placement);
+                    let f = exact::frame(&p.placement);
                     exact.iter().map(|b| Body::exact(b.transformed(&f))).collect()
                 }
                 None if st.body.is_empty() => Vec::new(),
-                None => vec![Body::faceted(st.body.transformed(&c.placement))],
+                None => vec![Body::faceted(st.body.transformed(&p.placement))],
             };
-            out.push(ComponentBodies { id: c.id, bodies });
+            let whole = opts.whole_subassemblies && p.path.len() > 1;
+            let path = if whole { p.path[..1].to_vec() } else { p.path };
+            match out.iter_mut().find(|c| whole && c.path == path) {
+                Some(c) => c.bodies.extend(bodies),
+                None => out.push(ComponentBodies { path, bodies }),
+            }
         }
         (out, skipped)
     }
@@ -268,7 +276,9 @@ impl Assembly {
 
 /// The pairs of components to check, as indices into `comps`.
 fn pairs(comps: &[ComponentBodies], opts: &Options) -> Vec<(usize, usize)> {
-    let chosen = |i: usize| comps.get(i).is_some_and(|c| opts.components.contains(&c.id));
+    let chosen = |i: usize| {
+        comps.get(i).is_some_and(|c| c.path.first().is_some_and(|id| opts.components.contains(id)))
+    };
     let mut out = Vec::new();
     for i in 0..comps.len() {
         for j in i + 1..comps.len() {
@@ -335,7 +345,7 @@ pub fn check(comps: &[ComponentBodies], opts: &Options, progress: &Progress) -> 
     findings.sort_by(|x, y| {
         let (kx, vx) = rank(x);
         let (ky, vy) = rank(y);
-        kx.cmp(&ky).then(vx.total_cmp(&vy)).then((x.a, x.b).cmp(&(y.a, y.b)))
+        kx.cmp(&ky).then(vx.total_cmp(&vy)).then((&x.a, &x.b).cmp(&(&y.a, &y.b)))
     });
     Ok(Report { findings, skipped: Vec::new(), pairs: todo.len() })
 }
@@ -390,8 +400,8 @@ fn check_pair(
     }
     if volume > VOLUME_TOLERANCE {
         return Some(Finding {
-            a: a.id,
-            b: b.id,
+            a: a.path.clone(),
+            b: b.path.clone(),
             kind: FindingKind::Overlap { volume },
             points: None,
             region: Solid::new(polygons),
@@ -429,7 +439,14 @@ fn check_pair(
             _ => return None,
         }
     };
-    Some(Finding { a: a.id, b: b.id, kind, points: Some((p, q)), region: Solid::default(), exact: e })
+    Some(Finding {
+        a: a.path.clone(),
+        b: b.path.clone(),
+        kind,
+        points: Some((p, q)),
+        region: Solid::default(),
+        exact: e,
+    })
 }
 
 #[cfg(test)]
@@ -501,7 +518,7 @@ mod tests {
         let r = run(&asm, &mut parts, &Options::default());
         assert_eq!(r.pairs, 1);
         let [f] = r.findings.as_slice() else { panic!("{:?}", r.findings) };
-        assert_eq!((f.a, f.b), (ids[0], ids[1]));
+        assert_eq!((&f.a[..], &f.b[..]), (&[ids[0]][..], &[ids[1]][..]));
         assert!(f.exact);
         assert!(same_volume(f.volume(), 125.0), "{:?}", f.volume());
         // The region shown in the view is the 5 mm cube at (15..20)^3.
@@ -555,7 +572,7 @@ mod tests {
         let r = run(&asm, &mut parts, &Options { touching: true, ..Default::default() });
         let [f] = r.findings.as_slice() else { panic!("{:?}", r.findings) };
         assert_eq!(f.kind, FindingKind::Touching);
-        assert_eq!((f.a, f.b), (ids[0], ids[1]));
+        assert_eq!((&f.a[..], &f.b[..]), (&[ids[0]][..], &[ids[1]][..]));
         let (p, q) = f.points.expect("closest points");
         assert!((p.z - 10.0).abs() < 1e-9 && (q.z - 10.0).abs() < 1e-9, "{p:?} {q:?}");
         // With a clearance, touching still wins over clearance.
@@ -633,7 +650,7 @@ mod tests {
         );
         let one = run(&asm, &mut parts, &Options { components: vec![ids[1]], ..Default::default() });
         assert_eq!(one.pairs, 2);
-        assert!(one.findings.iter().all(|f| f.a == ids[1] || f.b == ids[1]));
+        assert!(one.findings.iter().all(|f| f.a == [ids[1]] || f.b == [ids[1]]));
         let two = run(&asm, &mut parts, &Options { components: vec![ids[1], ids[2]], ..Default::default() });
         assert_eq!((two.pairs, two.findings.len()), (1, 1));
         if let Some(c) = asm.component_mut(ids[2]) {
@@ -666,5 +683,43 @@ mod tests {
         p.cancel();
         assert_eq!(check(&comps, &Options::default(), &p).err(), Some(Cancelled));
         assert_eq!(p.counts().0, 0);
+    }
+
+    #[test]
+    fn the_check_sees_through_subassemblies() {
+        // A kit of two 10 mm cubes overlapping by 5x10x10 inside it, placed so that its
+        // second cube also overlaps a 10 mm cube at the top level by 5x5x10.
+        let (mut asm, mut parts, _) = assembly(&[("cube.anvprt", block(10.0, 10.0, 10.0))], &[]);
+        parts.insert("kit/cube.anvprt", None, block(10.0, 10.0, 10.0));
+        let mut kit = Assembly::new();
+        let first = kit.add_component("cube.anvprt", None, Frame::WORLD);
+        let second = kit.add_component("cube.anvprt", None, at(5.0, 0.0, 0.0));
+        parts.insert_assembly("kit/kit.anvasm", kit);
+        let k = asm.add_component("kit/kit.anvasm", None, Frame::WORLD);
+        let ids = [asm.add_component("cube.anvprt", None, at(10.0, 5.0, 0.0))];
+        let r = run(&asm, &mut parts, &Options::default());
+        let got: Vec<(Vec<u32>, Vec<u32>, f64)> =
+            r.findings.iter().map(|f| (f.a.clone(), f.b.clone(), f.volume().unwrap_or(0.0))).collect();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((&got[0].0, &got[0].1), (&vec![k, first], &vec![k, second]));
+        assert!(same_volume(Some(got[0].2), 500.0), "{got:?}");
+        assert_eq!((&got[1].0, &got[1].1), (&vec![k, second], &vec![ids[0]]));
+        assert!(same_volume(Some(got[1].2), 250.0), "{got:?}");
+        // As one component, the kit's own overlap is not reported.
+        let whole = run(&asm, &mut parts, &Options { whole_subassemblies: true, ..Default::default() });
+        let [f] = whole.findings.as_slice() else { panic!("{:?}", whole.findings) };
+        assert_eq!((&f.a, &f.b), (&vec![k], &vec![ids[0]]));
+        assert!(same_volume(f.volume(), 250.0));
+        // Choosing the kit checks the pairs involving any part inside it.
+        let chosen = run(&asm, &mut parts, &Options { components: vec![k], ..Default::default() });
+        assert_eq!((chosen.pairs, chosen.findings.len()), (3, 2));
+        // A missing file inside the kit is skipped and named.
+        let mut lost = Assembly::new();
+        lost.add_component("gone.anvprt", None, Frame::WORLD);
+        parts.insert_assembly("kit/lost.anvasm", lost);
+        let l = asm.add_component("kit/lost.anvasm", None, Frame::WORLD);
+        let r = run(&asm, &mut parts, &Options::default());
+        assert_eq!(r.skipped.len(), 1);
+        assert_eq!(r.skipped[0].0, vec![l, 1]);
     }
 }
