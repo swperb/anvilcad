@@ -348,6 +348,9 @@ fn describe(d: Does, cause: Cause) -> Described {
             let how = match e {
                 OffsetError::NotAChain => "Pick curves that join end to end.",
                 OffsetError::Collapsed => "Try a smaller offset.",
+                OffsetError::Elliptic => {
+                    "Draw the offset curves with lines, arcs and circles instead of an ellipse."
+                }
             };
             (fragment(&e.to_string()), how.into(), None)
         }
@@ -464,10 +467,10 @@ mod tests {
                 ShellError::Invalid(_) | ShellError::TooThick | ShellError::FoldsOver { .. } => {}
             }
         }
-        let offset = [OffsetError::NotAChain, OffsetError::Collapsed];
+        let offset = [OffsetError::NotAChain, OffsetError::Collapsed, OffsetError::Elliptic];
         for o in &offset {
             match o {
-                OffsetError::NotAChain | OffsetError::Collapsed => {}
+                OffsetError::NotAChain | OffsetError::Collapsed | OffsetError::Elliptic => {}
             }
         }
         let kernel = [

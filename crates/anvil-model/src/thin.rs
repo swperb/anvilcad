@@ -85,7 +85,12 @@ pub fn chains(sk: &Sketch) -> Result<Vec<Chain>, crate::failure::Cause> {
                 closed: true,
             }),
             Geom::Circle { .. } => {}
-            Geom::Line { a, b } | Geom::Arc { a, b, .. } => edges.push((ei, r[a], r[b])),
+            Geom::Ellipse { .. } => {
+                out.extend(sk.segment_of(ei).map(|s| Chain { segs: vec![s], closed: true }))
+            }
+            Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => {
+                edges.push((ei, r[a], r[b]))
+            }
         }
     }
     let mut at: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -168,6 +173,12 @@ fn segment(sk: &Sketch, ei: usize, forward: bool) -> Seg2 {
             start: 0.0,
             sweep: std::f64::consts::TAU,
             source: ei as u32,
+        },
+        Geom::Ellipse { .. } | Geom::EllipseArc { .. } => match sk.segment_of(ei) {
+            Some(s) => s,
+            None => {
+                Seg2::Line { a: anvil_kernel::Vec2::ZERO, b: anvil_kernel::Vec2::ZERO, source: ei as u32 }
+            }
         },
     };
     if forward {

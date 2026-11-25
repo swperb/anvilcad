@@ -1,11 +1,13 @@
 //! Geometric constraint solver.
 //!
-//! Unknowns are every point coordinate plus each circle radius. Each constraint contributes
+//! Unknowns are every point coordinate plus each circle radius. Ellipses are held by their
+//! points alone (`docs/re/sketch-entities.md`, "Ellipses"). Each constraint contributes
 //! one or two residual equations. We minimise the residuals with a damped Gauss-Newton
 //! iteration in its minimum-norm form, dx = -J^T (J J^T + mu I)^-1 r, which moves the
 //! geometry as little as possible. That keeps under-defined sketches stable while the user
 //! drags them, the same way commercial sketchers behave.
 
+use crate::ellipse::Ellipse2;
 use crate::sketch::{arc_sweep, Constraint, Geom, PointId, Sketch};
 use anvil_kernel::{v2, Vec2};
 
@@ -126,8 +128,26 @@ impl Sketch {
         };
         let center = |e: usize| -> Vec2 {
             match self.entities[e].geom {
-                Geom::Circle { c, .. } | Geom::Arc { c, .. } => p(c),
+                Geom::Circle { c, .. }
+                | Geom::Arc { c, .. }
+                | Geom::Ellipse { c, .. }
+                | Geom::EllipseArc { c, .. } => p(c),
                 Geom::Line { a, b } => (p(a) + p(b)) * 0.5,
+            }
+        };
+        let ellipse = |e: usize| -> Option<Ellipse2> {
+            match self.entities[e].geom {
+                Geom::Ellipse { c, axis1, axis2 } | Geom::EllipseArc { c, axis1, axis2, .. } => {
+                    Some(Ellipse2::from_points(p(c), p(axis1), p(axis2)))
+                }
+                _ => None,
+            }
+        };
+        // The outward normal of a circle, arc or ellipse at a point on it.
+        let normal = |e: usize, q: Vec2| -> Vec2 {
+            match ellipse(e) {
+                Some(el) => el.normal_at(q),
+                None => q - center(e),
             }
         };
         let radius = |e: usize| -> f64 {
@@ -136,6 +156,7 @@ impl Sketch {
                 Geom::Circle { r, .. } => l.radius_var[e].map_or(r, |v| x[v]),
                 Geom::Arc { c, a, .. } => p(a).distance(p(c)),
                 Geom::Line { a, b } => p(a).distance(p(b)),
+                Geom::Ellipse { .. } | Geom::EllipseArc { .. } => 0.0,
             }
         };
         let size = |e: usize| -> f64 {
@@ -204,7 +225,10 @@ impl Sketch {
                     let d = b - a;
                     push(d.cross(p(i) - a) / d.length().max(1e-12));
                 }
-                PointOnCircle { p: i, entity } => push(p(i).distance(center(entity)) - radius(entity)),
+                PointOnCircle { p: i, entity } => match ellipse(entity) {
+                    Some(el) => push(el.residual(p(i))),
+                    None => push(p(i).distance(center(entity)) - radius(entity)),
+                },
                 Midpoint { p: i, line: e } => {
                     let (a, b) = line(e);
                     let m = (a + b) * 0.5;
@@ -219,10 +243,16 @@ impl Sketch {
                         // line. Written this way the residual has a useful gradient; the
                         // distance form below is flat at the solution (any point of the
                         // line is at least as far from the centre as the line is).
-                        Some(q) => push(norm_dot(p(q) - center(entity), d)),
+                        Some(q) => push(norm_dot(normal(entity, p(q)), d)),
                         None => {
                             let dist = (d.cross(center(entity) - a) / d.length().max(1e-12)).abs();
-                            push(dist - radius(entity));
+                            // An ellipse touches a line whose distance from its centre is
+                            // its support distance square to the line.
+                            let reach = match ellipse(entity) {
+                                Some(el) => el.support(d.perp() / d.length().max(1e-12)),
+                                None => radius(entity),
+                            };
+                            push(dist - reach);
                         }
                     }
                 }
@@ -274,7 +304,10 @@ impl Sketch {
                 TangentCircles { a, b, inside } => match self.shared_end(a, b) {
                     // Touching at a shared end point, both centres lie on one line through
                     // it (see Tangent above for why this form).
-                    Some(q) => push(norm_cross(center(a) - p(q), center(b) - p(q))),
+                    Some(q) => push(norm_cross(normal(a, p(q)), normal(b, p(q)))),
+                    // Ellipses touch other curves only at a shared end point; the tools
+                    // that add this relation refuse otherwise.
+                    None if ellipse(a).is_some() || ellipse(b).is_some() => push(0.0),
                     None => {
                         let dist = center(a).distance(center(b));
                         let (ra, rb) = (radius(a), radius(b));
@@ -326,11 +359,27 @@ impl Sketch {
                 }
             }
         }
-        // Arcs keep both endpoints on the same radius.
+        // Arcs keep both endpoints on the same radius; an ellipse keeps its second axis
+        // square to its first, and a partial ellipse keeps its ends on the curve.
         for e in &self.entities {
-            if let Geom::Arc { c, a, b } = e.geom {
-                out.push(p(a).distance(p(c)) - p(b).distance(p(c)));
-                owner.push(usize::MAX);
+            match e.geom {
+                Geom::Arc { c, a, b } => {
+                    out.push(p(a).distance(p(c)) - p(b).distance(p(c)));
+                    owner.push(usize::MAX);
+                }
+                Geom::Ellipse { c, axis1, axis2 } | Geom::EllipseArc { c, axis1, axis2, .. } => {
+                    let u = p(axis1) - p(c);
+                    out.push(u.dot(p(axis2) - p(c)) / u.length().max(1e-12));
+                    owner.push(usize::MAX);
+                    if let Geom::EllipseArc { a, b, .. } = e.geom {
+                        let el = Ellipse2::from_points(p(c), p(axis1), p(axis2));
+                        for q in [a, b] {
+                            out.push(el.residual(p(q)));
+                            owner.push(usize::MAX);
+                        }
+                    }
+                }
+                Geom::Line { .. } | Geom::Circle { .. } => {}
             }
         }
     }
@@ -338,11 +387,7 @@ impl Sketch {
     /// An end point two entities share, if any. It depends only on the entities, so it
     /// never changes between iterations.
     fn shared_end(&self, e: usize, f: usize) -> Option<PointId> {
-        let ends = |g: Geom| match g {
-            Geom::Line { a, b } | Geom::Arc { a, b, .. } => Some([a, b]),
-            Geom::Circle { .. } => None,
-        };
-        let (x, y) = (ends(self.entities[e].geom)?, ends(self.entities[f].geom)?);
+        let (x, y) = (self.entities[e].ends()?, self.entities[f].ends()?);
         x.into_iter().find(|p| y.contains(p))
     }
 
@@ -523,7 +568,10 @@ impl Sketch {
 
 fn center_point(g: Geom) -> PointId {
     match g {
-        Geom::Circle { c, .. } | Geom::Arc { c, .. } => c,
+        Geom::Circle { c, .. }
+        | Geom::Arc { c, .. }
+        | Geom::Ellipse { c, .. }
+        | Geom::EllipseArc { c, .. } => c,
         Geom::Line { a, .. } => a,
     }
 }

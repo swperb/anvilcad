@@ -149,6 +149,17 @@ fn facing(frame: &Frame, profiles: &[Profile], dir: Vec3) -> (Frame, Vec<Profile
                         sweep: -sweep,
                         source,
                     },
+                    // Mirrored, the first axis points at pi - rotation and the second axis
+                    // turns over, so the parameter runs backwards.
+                    Seg2::Ellipse { center, a, b, rotation, start, sweep, source } => Seg2::Ellipse {
+                        center: v2(-center.x, center.y),
+                        a,
+                        b,
+                        rotation: std::f64::consts::PI - rotation,
+                        start: -start,
+                        sweep: -sweep,
+                        source,
+                    },
                 })
                 .collect(),
         )
@@ -196,15 +207,21 @@ impl Document {
             .segs
             .iter()
             .map(|s| match *s {
-                Seg2::Line { a, b, .. } => PathSegment::Line { a: d(pf.to_world(a)), b: d(pf.to_world(b)) },
-                Seg2::Arc { center, radius, start, sweep, .. } => PathSegment::Arc {
+                Seg2::Line { a, b, .. } => {
+                    Ok(PathSegment::Line { a: d(pf.to_world(a)), b: d(pf.to_world(b)) })
+                }
+                Seg2::Arc { center, radius, start, sweep, .. } => Ok(PathSegment::Arc {
                     center: d(pf.to_world(center)),
                     axis: d(pf.z * sweep.signum()),
                     start: d(pf.to_world(center + Vec2::from_angle(start) * radius)),
                     angle: sweep.abs(),
-                },
+                }),
+                Seg2::Ellipse { .. } => Err(crate::failure::Cause::told(
+                    "its path has an ellipse, and sweeps follow only lines and arcs so far",
+                    "Edit the path's sketch and draw the path with lines and arcs.",
+                )),
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
         let empty_path = || {
             crate::failure::Cause::told(
                 "its path has no curves",
@@ -330,6 +347,9 @@ impl Document {
                             Seg2::Line { a, b, source } => Seg2::Line { a: a - o, b: b - o, source },
                             Seg2::Arc { center, radius, start, sweep, source } => {
                                 Seg2::Arc { center: center - o, radius, start, sweep, source }
+                            }
+                            Seg2::Ellipse { center, a, b, rotation, start, sweep, source } => {
+                                Seg2::Ellipse { center: center - o, a, b, rotation, start, sweep, source }
                             }
                         })
                         .collect(),

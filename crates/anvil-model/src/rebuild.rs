@@ -18,7 +18,7 @@ use anvil_kernel::blend::{blend_edges, check_fit, BlendError, EdgeTreatment};
 use anvil_kernel::build::revolve;
 use anvil_kernel::shell::shell;
 use anvil_kernel::{FaceId, FaceTag, Frame, MassProperties, Polygon, Solid, SurfaceKind, Vec3};
-use anvil_sketch::{Geom, SolveResult};
+use anvil_sketch::SolveResult;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// The exact kernel the rebuild builds on (see [`crate::kernel`]).
@@ -683,10 +683,7 @@ pub(crate) fn close_along_axis(
     let key = |p: anvil_kernel::Vec2| ((p.x * 1e6).round() as i64, (p.y * 1e6).round() as i64);
     let mut uses: HashMap<(i64, i64), (usize, usize)> = HashMap::new();
     for e in sk.entities.iter().filter(|e| !e.construction) {
-        let ends = match e.geom {
-            Geom::Line { a, b } | Geom::Arc { a, b, .. } => [a, b],
-            Geom::Circle { .. } => continue,
-        };
+        let Some(ends) = e.ends() else { continue };
         for p in ends {
             uses.entry(key(sk.pos(p))).or_insert((0, p)).0 += 1;
         }

@@ -79,10 +79,7 @@ fn line_points(sk: &Sketch, e: EntityId) -> Option<(PointId, PointId)> {
 }
 
 fn center_of(sk: &Sketch, e: EntityId) -> Option<PointId> {
-    match sk.entities.get(e)?.geom {
-        Geom::Circle { c, .. } | Geom::Arc { c, .. } => Some(c),
-        Geom::Line { .. } => None,
-    }
+    sk.entities.get(e)?.center()
 }
 
 fn is_axis(sk: &Sketch, e: EntityId) -> bool {
@@ -178,11 +175,17 @@ pub fn infer(sk: &Sketch, picks: &[Pick], at: Vec2) -> Option<Constraint> {
             },
             Geom::Circle { r, .. } => Some(Constraint::Diameter { entity: e, value: 2.0 * r }),
             Geom::Arc { .. } => Some(Constraint::Radius { entity: e, value: sk.radius(e) }),
+            // The semi-axis whose end is nearer the pick (sketch-entities.md, "Ellipses",
+            // "Dimensions").
+            Geom::Ellipse { c, axis1, axis2 } | Geom::EllipseArc { c, axis1, axis2, .. } => {
+                let q = if sk.pos(axis1).distance(at) <= sk.pos(axis2).distance(at) { axis1 } else { axis2 };
+                Some(Constraint::Distance { p: c, q, value: sk.pos(c).distance(sk.pos(q)) })
+            }
         },
         [P(p), P(q)] if p != q => point_distance(sk, p, q, at),
         [P(p), E(e)] | [E(e), P(p)] => match geom(e)? {
             Geom::Line { .. } => point_to_line(sk, p, e, at),
-            Geom::Circle { .. } | Geom::Arc { .. } => point_distance(sk, center_of(sk, e)?, p, at),
+            _ => point_distance(sk, center_of(sk, e)?, p, at),
         },
         [E(e), E(f)] if e != f => match (geom(e)?, geom(f)?) {
             (Geom::Line { .. }, Geom::Line { .. }) => {

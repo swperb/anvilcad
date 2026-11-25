@@ -1291,6 +1291,30 @@ mod tests {
         );
         let disc = vol(&mut h);
         assert!((disc - 250.0 * std::f64::consts::PI).abs() < 2e-3 * disc, "{disc}");
+
+        // Issue #69: an ellipse of radii 30 and 20 at 30°, and a half ellipse closed by
+        // its axis, both 10 thick: 6000 pi and 1500 pi.
+        for (code, want) in [
+            (r#"local s = anvil.sketch{ ellipses = { { 5, 5, 30, 20, 30 } } }"#, 6000.0),
+            (
+                r#"local s = anvil.sketch{ partial_ellipses = { { 0, 0, 15, 20, 0, 1, 0, -1, 0 } }, polylines = { { {-15, 0}, {15, 0} } } }"#,
+                1500.0,
+            ),
+        ] {
+            run(&mut h, json!({"cmd": "new"}));
+            let r = run(
+                &mut h,
+                json!({"cmd": "lua", "code": format!("{code}\nanvil.extrude{{ sketch = s, depth = 10 }}")}),
+            );
+            let v = vol(&mut h);
+            let want = want * std::f64::consts::PI;
+            assert!((v - want).abs() < 2e-3 * want, "{code}: {v} vs {want}; {r}");
+        }
+        run(&mut h, json!({"cmd": "new"}));
+        let r =
+            h.command(&json!({"cmd": "lua", "code": "anvil.sketch{ ellipses = { { 0, 0, 0, 20, 0 } } }"}));
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap_or("").contains("needs two positive radii"), "{r}");
     }
 
     /// Issue #71: holes at sketch points, linear and circular patterns, and mirrors from a

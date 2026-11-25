@@ -10,7 +10,7 @@ use crate::document::Dim;
 use crate::failure::Cause;
 use crate::refgeom::{num_text as n, value};
 use anvil_kernel::{v2, Vec2};
-use anvil_sketch::{Geom, Sketch, ORIGIN};
+use anvil_sketch::{Sketch, ORIGIN};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -473,12 +473,7 @@ pub fn positions(sketch: &Sketch) -> Vec<Vec2> {
         *u = true;
     }
     for e in &sketch.entities {
-        let ids: &[usize] = match &e.geom {
-            Geom::Line { a, b } => &[*a, *b],
-            Geom::Circle { c, .. } => &[*c],
-            Geom::Arc { c, a, b } => &[*c, *a, *b],
-        };
-        for &p in ids {
+        for p in e.points() {
             if let Some(u) = used.get_mut(p) {
                 *u = true;
             }

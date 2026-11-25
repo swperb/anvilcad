@@ -1,11 +1,12 @@
 //! AnvilCAD 2D sketcher.
 //!
-//! A [`Sketch`] holds points, entities (lines, circles, arcs) and constraints. Calling
+//! A [`Sketch`] holds points, entities (lines, circles, arcs, ellipses) and constraints. Calling
 //! [`Sketch::solve`] moves the geometry to satisfy the constraints, and
 //! [`Sketch::profiles`] extracts closed regions for the kernel to extrude or revolve.
 
 pub mod curve;
 pub mod dimension;
+pub mod ellipse;
 pub mod entities;
 pub mod regions;
 pub mod sketch;

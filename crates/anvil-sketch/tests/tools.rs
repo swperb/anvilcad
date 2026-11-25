@@ -41,21 +41,21 @@ fn line(s: &mut Sketch, a: Vec2, b: Vec2) -> EntityId {
 fn ends(s: &Sketch, e: EntityId) -> (Vec2, Vec2) {
     match s.entities[e].geom {
         Geom::Line { a, b } | Geom::Arc { a, b, .. } => (s.pos(a), s.pos(b)),
-        Geom::Circle { .. } => panic!("no ends"),
+        _ => panic!("no ends"),
     }
 }
 
 fn end_ids(s: &Sketch, e: EntityId) -> (PointId, PointId) {
     match s.entities[e].geom {
         Geom::Line { a, b } | Geom::Arc { a, b, .. } => (a, b),
-        Geom::Circle { .. } => panic!("no ends"),
+        _ => panic!("no ends"),
     }
 }
 
 fn centre(s: &Sketch, e: EntityId) -> Vec2 {
     match s.entities[e].geom {
         Geom::Arc { c, .. } | Geom::Circle { c, .. } => s.pos(c),
-        Geom::Line { .. } => panic!("no centre"),
+        _ => panic!("no centre"),
     }
 }
 
@@ -78,6 +78,7 @@ fn perimeter(s: &Sketch) -> f64 {
         .map(|seg| match *seg {
             Seg2::Line { a, b, .. } => a.distance(b),
             Seg2::Arc { radius, sweep, .. } => radius * sweep.abs(),
+            Seg2::Ellipse { .. } => panic!("no ellipses here"),
         })
         .sum()
 }

@@ -112,6 +112,46 @@ pub struct ArcIds {
     pub end: PointId,
 }
 
+/// What [`Sketch::add_ellipse`] and [`Sketch::add_partial_ellipse`] made. `start` and
+/// `end` are a partial ellipse's ends (counter-clockwise from `start`); a whole ellipse
+/// has none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EllipseIds {
+    pub ellipse: EntityId,
+    pub center: PointId,
+    pub axis1: PointId,
+    pub axis2: PointId,
+    pub ends: Option<(PointId, PointId)>,
+}
+
+/// The ellipse three picks describe (sketch-entities.md, "Ellipses", Decision): centre,
+/// first axis end, and a point whose distance from the first axis sets the second radius.
+/// Returns the centre and the two axis ends, the second on the side of the third pick, or
+/// `None` when a radius would be zero.
+pub fn ellipse_from_picks(c: Vec2, axis_end: Vec2, third: Vec2) -> Option<(Vec2, Vec2, Vec2)> {
+    let d = axis_end - c;
+    let r1 = d.length();
+    if r1 <= EPS || !r1.is_finite() {
+        return None;
+    }
+    let u = d / r1;
+    let side = u.cross(third - c);
+    let r2 = side.abs();
+    if r2 <= EPS * r1.max(1.0) || !r2.is_finite() {
+        return None;
+    }
+    Some((c, axis_end, c + u.perp() * side))
+}
+
+/// The ends of an ellipse's two semi-axes from its sizes.
+fn axis_ends(c: Vec2, r1: f64, r2: f64, rotation: f64) -> Result<(Vec2, Vec2), SketchError> {
+    if !(r1.is_finite() && r2.is_finite() && rotation.is_finite()) || r1 <= EPS || r2 <= EPS {
+        return Err(SketchError::Degenerate);
+    }
+    let u = Vec2::from_angle(rotation);
+    Ok((c + u * r1, c + u.perp() * r2))
+}
+
 /// The four intent zones of the tangent arc tool (sketch-entities.md, "Tangent arc").
 /// Forward and back make tangent arcs; left and right make normal arcs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -608,6 +648,86 @@ impl Sketch {
         Ok(if swept >= 0.0 { self.arc_from(center, start, end) } else { self.arc_from(center, end, start) })
     }
 
+    /// Ellipse from three picks (sketch-entities.md, "Ellipses"): the centre, the end of
+    /// the first axis, and a point setting the second radius.
+    pub fn add_ellipse(&mut self, c: Vec2, axis_end: Vec2, third: Vec2) -> Result<EllipseIds, SketchError> {
+        let (c, p1, p2) = ellipse_from_picks(c, axis_end, third).ok_or(SketchError::Degenerate)?;
+        let (pc, pa1, pa2) = (self.add_point(c), self.add_point(p1), self.add_point(p2));
+        let ellipse = self.add_entity(Geom::Ellipse { c: pc, axis1: pa1, axis2: pa2 });
+        Ok(EllipseIds { ellipse, center: pc, axis1: pa1, axis2: pa2, ends: None })
+    }
+
+    /// Partial ellipse from four picks (sketch-entities.md, "Ellipses"): the three of
+    /// [`Sketch::add_ellipse`], then the end. The start is the point of the ellipse in the
+    /// direction of the third pick from the centre, the end the point in the direction of
+    /// the fourth. `swept` is the signed angle the pointer turned through about the centre
+    /// after the third pick; when it is negative the arc runs clockwise, so it is stored
+    /// counter-clockwise from the end to the start.
+    pub fn add_partial_ellipse(
+        &mut self,
+        c: Vec2,
+        axis_end: Vec2,
+        third: Vec2,
+        end: Vec2,
+        swept: f64,
+    ) -> Result<EllipseIds, SketchError> {
+        let (c, p1, p2) = ellipse_from_picks(c, axis_end, third).ok_or(SketchError::Degenerate)?;
+        let (from, to) = if swept >= 0.0 { (third, end) } else { (end, third) };
+        self.elliptic_arc_from(c, p1, p2, from, to)
+    }
+
+    /// The part of the ellipse about `c` with semi-axes `r1` along the direction at
+    /// `rotation` radians and `r2` square to it that runs counter-clockwise from the point
+    /// in the direction of `start` from the centre to the point in the direction of `end`.
+    /// For scripts, which give an ellipse by its sizes.
+    pub fn add_elliptic_arc(
+        &mut self,
+        c: Vec2,
+        r1: f64,
+        r2: f64,
+        rotation: f64,
+        start: Vec2,
+        end: Vec2,
+    ) -> Result<EllipseIds, SketchError> {
+        let (p1, p2) = axis_ends(c, r1, r2, rotation)?;
+        self.elliptic_arc_from(c, p1, p2, start, end)
+    }
+
+    /// The whole ellipse about `c` with semi-axes `r1` along the direction at `rotation`
+    /// radians and `r2` square to it.
+    pub fn add_ellipse_sized(
+        &mut self,
+        c: Vec2,
+        r1: f64,
+        r2: f64,
+        rotation: f64,
+    ) -> Result<EllipseIds, SketchError> {
+        let (p1, p2) = axis_ends(c, r1, r2, rotation)?;
+        self.add_ellipse(c, p1, p2)
+    }
+
+    fn elliptic_arc_from(
+        &mut self,
+        c: Vec2,
+        p1: Vec2,
+        p2: Vec2,
+        from: Vec2,
+        to: Vec2,
+    ) -> Result<EllipseIds, SketchError> {
+        let el = crate::ellipse::Ellipse2::from_points(c, p1, p2);
+        if (from - c).length() <= EPS || (to - c).length() <= EPS {
+            return Err(SketchError::Degenerate);
+        }
+        let (s, e) = (el.project_radially(from), el.project_radially(to));
+        if s.distance(e) <= EPS * el.r1.max(el.r2).max(1.0) {
+            return Err(SketchError::Degenerate);
+        }
+        let (pc, pa1, pa2) = (self.add_point(c), self.add_point(p1), self.add_point(p2));
+        let (a, b) = (self.add_point(s), self.add_point(e));
+        let ellipse = self.add_entity(Geom::EllipseArc { c: pc, axis1: pa1, axis2: pa2, a, b });
+        Ok(EllipseIds { ellipse, center: pc, axis1: pa1, axis2: pa2, ends: Some((a, b)) })
+    }
+
     /// 3 point arc: from `start` to `end` through `through`.
     pub fn add_3pt_arc(&mut self, start: Vec2, end: Vec2, through: Vec2) -> Result<ArcIds, SketchError> {
         let (c, a, b) = three_point_arc(start, end, through).ok_or(SketchError::Degenerate)?;
@@ -615,10 +735,16 @@ impl Sketch {
     }
 
     /// The direction leaving entity `e` at its end point `at`: for a line, from its other
-    /// end towards `at`; for an arc, its tangent at `at` pointing away from the arc.
+    /// end towards `at`; for an arc or partial ellipse, its tangent at `at` pointing away
+    /// from it.
     pub fn leaving_direction(&self, e: EntityId, at: PointId) -> Option<Vec2> {
         let pos = |p: PointId| self.points.get(p).map(|q| q.pos());
         match self.entities.get(e)?.geom {
+            Geom::EllipseArc { a, b, .. } if at == a || at == b => {
+                let (el, t0, sweep) = crate::ellipse::of(self, e)?;
+                let d = if at == b { el.derivative(t0 + sweep) } else { -el.derivative(t0) };
+                Some(d.normalized())
+            }
             Geom::Line { a, b } if at == b => Some((pos(b)? - pos(a)?).normalized()),
             Geom::Line { a, b } if at == a => Some((pos(a)? - pos(b)?).normalized()),
             Geom::Arc { c, b, .. } if at == b => Some((pos(b)? - pos(c)?).normalized().perp()),
@@ -640,9 +766,12 @@ impl Sketch {
         end: Vec2,
         zone: TangentZone,
     ) -> Result<ArcIds, SketchError> {
-        let t = self
-            .leaving_direction(from, at)
-            .ok_or(SketchError::Unsupported("a tangent arc starts at the end of a line or arc"))?;
+        let t = self.leaving_direction(from, at).ok_or(SketchError::Unsupported(
+            "a tangent arc starts at the end of a line, arc or partial ellipse",
+        ))?;
+        if self.entities[from].is_ellipse() && !zone.is_tangent() {
+            return Err(SketchError::Unsupported("a normal arc cannot start from an ellipse yet"));
+        }
         let p = self.pos(at);
         let tau = match zone {
             TangentZone::Forward => t,
@@ -691,8 +820,8 @@ impl Sketch {
     /// radius (sketch-tools.md, "Every 2D relation", Decision).
     pub fn circles_inside(&self, a: EntityId, b: EntityId) -> bool {
         let centre = |e: EntityId| match self.entities[e].geom {
-            Geom::Circle { c, .. } | Geom::Arc { c, .. } => self.pos(c),
             Geom::Line { a, .. } => self.pos(a),
+            _ => self.entities[e].center().map_or(Vec2::ZERO, |c| self.pos(c)),
         };
         centre(a).distance(centre(b)) < self.radius(a).max(self.radius(b))
     }

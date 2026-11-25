@@ -17,6 +17,8 @@ pub enum OffsetError {
     NotAChain,
     /// The offset is so large that a segment shrinks away or turns inside out.
     Collapsed,
+    /// The chain has an ellipse, whose offset is not an ellipse.
+    Elliptic,
 }
 
 impl std::fmt::Display for OffsetError {
@@ -24,6 +26,7 @@ impl std::fmt::Display for OffsetError {
         match self {
             OffsetError::NotAChain => write!(f, "the curves do not form one chain"),
             OffsetError::Collapsed => write!(f, "the offset is larger than the curves allow"),
+            OffsetError::Elliptic => write!(f, "ellipses cannot be offset yet"),
         }
     }
 }
@@ -43,6 +46,10 @@ pub fn travel(s: &Seg2, at_end: bool) -> Vec2 {
         Seg2::Arc { start, sweep, .. } => {
             let t = if at_end { start + sweep } else { start };
             Vec2::from_angle(t).perp() * sweep.signum()
+        }
+        Seg2::Ellipse { a, b, rotation, start, sweep, .. } => {
+            let t = if at_end { start + sweep } else { start };
+            (crate::profile::ellipse_derivative(a, b, rotation, t) * sweep.signum()).normalized()
         }
     }
 }
@@ -67,6 +74,7 @@ fn support(s: &Seg2, d: f64) -> Result<Support, OffsetError> {
             }
             Ok(Support::Circle(center, r))
         }
+        Seg2::Ellipse { .. } => Err(OffsetError::Elliptic),
     }
 }
 
@@ -158,6 +166,7 @@ fn trimmed(s: &Seg2, d: f64, a: Vec2, b: Vec2) -> Result<Seg2, OffsetError> {
             }
             Ok(Seg2::Arc { center, radius: r, start, sweep: sw, source })
         }
+        Seg2::Ellipse { .. } => Err(OffsetError::Elliptic),
     }
 }
 
@@ -166,6 +175,9 @@ fn retag(s: Seg2, add: u32) -> Seg2 {
         Seg2::Line { a, b, source } => Seg2::Line { a, b, source: source.wrapping_add(add) },
         Seg2::Arc { center, radius, start, sweep, source } => {
             Seg2::Arc { center, radius, start, sweep, source: source.wrapping_add(add) }
+        }
+        Seg2::Ellipse { center, a, b, rotation, start, sweep, source } => {
+            Seg2::Ellipse { center, a, b, rotation, start, sweep, source: source.wrapping_add(add) }
         }
     }
 }
@@ -192,6 +204,9 @@ pub fn offset_chain(segs: &[Seg2], closed: bool, d: f64) -> Result<Vec<Seg2>, Of
     }
     if d == 0.0 {
         return Ok(segs.to_vec());
+    }
+    if segs.iter().any(|s| matches!(s, Seg2::Ellipse { .. })) {
+        return Err(OffsetError::Elliptic);
     }
     if closed && n == 1 {
         if let Seg2::Arc { center, radius, start, sweep, source } = segs[0] {

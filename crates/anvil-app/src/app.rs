@@ -5020,7 +5020,7 @@ fn default_near_sink(h: &HoleFeature) -> Option<hole::Sink> {
 }
 
 /// The sketch tools, in the order the sketch panel lists them.
-const SKETCH_TOOLS: [Tool; 33] = [
+const SKETCH_TOOLS: [Tool; 35] = [
     Tool::Select,
     Tool::Line,
     Tool::Centerline,
@@ -5036,6 +5036,8 @@ const SKETCH_TOOLS: [Tool; 33] = [
     Tool::Polygon,
     Tool::Circle,
     Tool::PerimeterCircle,
+    Tool::Ellipse,
+    Tool::PartialEllipse,
     Tool::Arc,
     Tool::TangentArc,
     Tool::Arc3,
@@ -5073,6 +5075,8 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Polygon => Icon::Polygon,
         Tool::Circle => Icon::Circle,
         Tool::PerimeterCircle => Icon::PerimeterCircle,
+        Tool::Ellipse => Icon::Ellipse,
+        Tool::PartialEllipse => Icon::PartialEllipse,
         Tool::Arc => Icon::Arc,
         Tool::TangentArc => Icon::TangentArc,
         Tool::Arc3 => Icon::Arc3,
@@ -5969,6 +5973,54 @@ mod ui_tests {
         let st = &h.app.sketch.as_ref().unwrap().status;
         assert!(st.converged && st.dof == 2, "{st:?}");
         assert!((profile_area(&h) - 259.808).abs() < 0.05);
+    }
+
+    /// sketch-entities.md, "Ellipses", statement 28: centre, first axis end, then a click
+    /// setting the second radius.
+    #[test]
+    fn ellipse_by_three_clicks() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Ellipse);
+        h.click_at(10.0, 10.0);
+        h.click_at(40.0, 10.0);
+        h.hover_at(25.0, 30.0);
+        h.click_at(25.0, 30.0);
+        let sk = h.sketch();
+        let e = sk.entities.iter().position(|e| e.is_ellipse()).expect("an ellipse");
+        let (el, _, _) = anvil_sketch::ellipse::of(sk, e).expect("ellipse geometry");
+        assert!((el.r1 - 30.0).abs() < 1e-3 && (el.r2 - 20.0).abs() < 1e-3, "{el:?}");
+        assert!((profile_area(&h) - 600.0 * std::f64::consts::PI).abs() < 0.2, "{}", profile_area(&h));
+        let st = &h.app.sketch.as_ref().unwrap().status;
+        assert!(st.converged && st.dof == 5, "a free ellipse has 5 freedoms: {st:?}");
+    }
+
+    /// The partial ellipse runs the way the pointer went round the centre after the third
+    /// click.
+    #[test]
+    fn partial_ellipse_follows_the_pointer() {
+        for (ccw, via) in [(true, [(10.0, 40.0), (-15.0, 30.0)]), (false, [(10.0, -20.0), (-15.0, -10.0)])] {
+            let mut h = Harness::new();
+            new_sketch(&mut h);
+            h.tool(Tool::PartialEllipse);
+            h.click_at(10.0, 10.0);
+            h.click_at(40.0, 10.0);
+            h.click_at(40.0, 30.0);
+            for (x, y) in via {
+                h.hover_at(x, y);
+            }
+            h.hover_at(-20.0, 10.0);
+            h.click_at(-20.0, 10.0);
+            let sk = h.sketch();
+            let e = sk.entities.iter().position(|e| e.is_ellipse()).expect("a partial ellipse");
+            let Geom::EllipseArc { a, b, .. } = sk.entities[e].geom else { panic!("not partial") };
+            let (el, t0, sweep) = anvil_sketch::ellipse::of(sk, e).expect("geometry");
+            let mid = el.at(t0 + 0.5 * sweep);
+            assert_eq!(mid.y > 10.0, ccw, "{mid:?}");
+            let end = if ccw { sk.pos(b) } else { sk.pos(a) };
+            assert!(end.distance(v2(-20.0, 10.0)) < 1e-3, "{end:?}");
+            assert!(h.app.sketch.as_ref().unwrap().status.converged);
+        }
     }
 
     #[test]

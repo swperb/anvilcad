@@ -76,6 +76,7 @@ macOS the command-line tools are also inside the app, in
 - Slots: straight, centerpoint straight, 3 point arc and centerpoint arc
 - Polygon, circle and perimeter circle
 - Arcs: centerpoint, tangent and 3 point ([spec](docs/re/sketch-entities.md))
+- Ellipses and partial ellipses, extruded exactly and exported to STEP as ellipses
 - Sketch Fillet and Sketch Chamfer at a corner; Trim, Extend and Split; Offset;
   Mirror about a line; Linear and Circular Sketch Patterns; Move, Copy and Rotate
   ([spec](docs/re/sketch-tools.md))

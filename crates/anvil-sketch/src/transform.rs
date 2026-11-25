@@ -241,15 +241,13 @@ fn map_err(e: OffsetError) -> SketchError {
     match e {
         OffsetError::NotAChain => SketchError::Unsupported("the curves must join end to end in one chain"),
         OffsetError::Collapsed => SketchError::TooLarge,
+        OffsetError::Elliptic => SketchError::Unsupported("ellipses cannot be offset yet"),
     }
 }
 
 impl Sketch {
     fn ends(&self, e: EntityId) -> Option<(PointId, PointId)> {
-        match self.entities[e].geom {
-            Geom::Line { a, b } | Geom::Arc { a, b, .. } => Some((a, b)),
-            Geom::Circle { .. } => None,
-        }
+        self.entities[e].ends().map(|[a, b]| (a, b))
     }
 
     /// Every entity joined end to end with `e` (through shared end points), `e` first.
@@ -354,6 +352,18 @@ impl Sketch {
             Geom::Circle { c, r } => {
                 Seg2::Arc { center: self.pos(c), radius: r, start: 0.0, sweep: std::f64::consts::TAU, source }
             }
+            Geom::Ellipse { .. } | Geom::EllipseArc { .. } => match crate::ellipse::of(self, l.e) {
+                Some((el, start, sweep)) => Seg2::Ellipse {
+                    center: el.c,
+                    a: el.r1,
+                    b: el.r2,
+                    rotation: el.rotation,
+                    start,
+                    sweep,
+                    source,
+                },
+                None => Seg2::Line { a: Vec2::ZERO, b: Vec2::ZERO, source },
+            },
         };
         if l.reversed {
             s.reversed()
@@ -389,10 +399,7 @@ impl Sketch {
     }
 
     fn center_of(&self, e: EntityId) -> Option<PointId> {
-        match self.entities[e].geom {
-            Geom::Arc { c, .. } | Geom::Circle { c, .. } => Some(c),
-            Geom::Line { .. } => None,
-        }
+        self.entities[e].center()
     }
 
     /// Offset Entities (sketch-tools.md, "Offset Entities"): copies a chain of lines and
@@ -431,6 +438,9 @@ impl Sketch {
     }
 
     fn offset_inner(&mut self, sel: &[EntityId], opts: OffsetOptions) -> Result<OffsetResult, SketchError> {
+        if sel.iter().any(|&e| self.entities[e].is_ellipse()) {
+            return Err(map_err(OffsetError::Elliptic));
+        }
         let (links, closed) = match sel {
             [e] if matches!(self.entities[*e].geom, Geom::Circle { .. }) => {
                 (vec![Link { e: *e, reversed: false }], true)
@@ -554,6 +564,7 @@ impl Sketch {
                     pairs.push((link.e, e));
                     e
                 }
+                (Seg2::Ellipse { .. }, _) => return Err(map_err(OffsetError::Elliptic)),
                 (Seg2::Arc { sweep, .. }, _) => {
                     // A round about a corner of the original chain, where two offset arcs
                     // bend apart and never meet.
@@ -701,6 +712,16 @@ impl Sketch {
                 Geom::Circle { c, r } => Geom::Circle { c: m(c), r },
                 Geom::Arc { c, a, b } if reverse_arcs => Geom::Arc { c: m(c), a: m(b), b: m(a) },
                 Geom::Arc { c, a, b } => Geom::Arc { c: m(c), a: m(a), b: m(b) },
+                Geom::Ellipse { c, axis1, axis2 } => {
+                    Geom::Ellipse { c: m(c), axis1: m(axis1), axis2: m(axis2) }
+                }
+                // A mirror image runs clockwise; swapping its ends keeps it counter-clockwise.
+                Geom::EllipseArc { c, axis1, axis2, a, b } if reverse_arcs => {
+                    Geom::EllipseArc { c: m(c), axis1: m(axis1), axis2: m(axis2), a: m(b), b: m(a) }
+                }
+                Geom::EllipseArc { c, axis1, axis2, a, b } => {
+                    Geom::EllipseArc { c: m(c), axis1: m(axis1), axis2: m(axis2), a: m(a), b: m(b) }
+                }
             };
             let construction = self.entities[e].construction;
             let ne = self.add_entity(g);

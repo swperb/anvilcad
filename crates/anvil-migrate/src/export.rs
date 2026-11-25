@@ -1430,8 +1430,8 @@ fn line_points(s: &Sketch, l: usize) -> (usize, usize) {
 
 fn center_of(s: &Sketch, e: usize) -> usize {
     match s.entities[e].geom {
-        Geom::Circle { c, .. } | Geom::Arc { c, .. } => c,
         Geom::Line { a, .. } => a,
+        _ => s.entities[e].center().unwrap_or(ORIGIN),
     }
 }
 

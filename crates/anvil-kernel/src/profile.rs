@@ -1,4 +1,5 @@
-//! Closed 2D profiles (an outer loop plus holes) built from exact lines and arcs.
+//! Closed 2D profiles (an outer loop plus holes) built from exact lines, arcs and elliptic
+//! arcs.
 //! These are what sketches hand to the solid-building operations.
 
 use crate::math::{v2, Vec2};
@@ -21,18 +22,47 @@ pub enum Seg2 {
         sweep: f64,
         source: u32,
     },
+    /// Elliptic arc: the point at parameter `t` is `center + u a cos t + v b sin t`, with
+    /// `u` the unit vector at angle `rotation` and `v` that turned +90°, from `t = start`
+    /// sweeping `sweep` (positive is counter-clockwise). `|sweep| == TAU` is a whole
+    /// ellipse. Matches the exact kernel's `Segment::Ellipse`.
+    Ellipse {
+        center: Vec2,
+        a: f64,
+        b: f64,
+        rotation: f64,
+        start: f64,
+        sweep: f64,
+        source: u32,
+    },
+}
+
+/// The point at parameter `t` of the ellipse about `center` with semi-axes `a` along the
+/// direction at angle `rotation` and `b` square to it.
+pub fn ellipse_point(center: Vec2, a: f64, b: f64, rotation: f64, t: f64) -> Vec2 {
+    let u = Vec2::from_angle(rotation);
+    center + u * (a * t.cos()) + u.perp() * (b * t.sin())
+}
+
+/// The derivative with respect to `t` of [`ellipse_point`].
+pub fn ellipse_derivative(a: f64, b: f64, rotation: f64, t: f64) -> Vec2 {
+    let u = Vec2::from_angle(rotation);
+    u * (-a * t.sin()) + u.perp() * (b * t.cos())
 }
 
 impl Seg2 {
     pub fn source(&self) -> u32 {
         match *self {
-            Seg2::Line { source, .. } | Seg2::Arc { source, .. } => source,
+            Seg2::Line { source, .. } | Seg2::Arc { source, .. } | Seg2::Ellipse { source, .. } => source,
         }
     }
     pub fn start_point(&self) -> Vec2 {
         match *self {
             Seg2::Line { a, .. } => a,
             Seg2::Arc { center, radius, start, .. } => center + Vec2::from_angle(start) * radius,
+            Seg2::Ellipse { center, a, b, rotation, start, .. } => {
+                ellipse_point(center, a, b, rotation, start)
+            }
         }
     }
     pub fn end_point(&self) -> Vec2 {
@@ -41,6 +71,9 @@ impl Seg2 {
             Seg2::Arc { center, radius, start, sweep, .. } => {
                 center + Vec2::from_angle(start + sweep) * radius
             }
+            Seg2::Ellipse { center, a, b, rotation, start, sweep, .. } => {
+                ellipse_point(center, a, b, rotation, start + sweep)
+            }
         }
     }
     pub fn reversed(&self) -> Seg2 {
@@ -48,6 +81,9 @@ impl Seg2 {
             Seg2::Line { a, b, source } => Seg2::Line { a: b, b: a, source },
             Seg2::Arc { center, radius, start, sweep, source } => {
                 Seg2::Arc { center, radius, start: start + sweep, sweep: -sweep, source }
+            }
+            Seg2::Ellipse { center, a, b, rotation, start, sweep, source } => {
+                Seg2::Ellipse { center, a, b, rotation, start: start + sweep, sweep: -sweep, source }
             }
         }
     }
@@ -66,6 +102,12 @@ impl Seg2 {
                     out.push(center + Vec2::from_angle(t) * radius);
                 }
             }
+            Seg2::Ellipse { center, a, b, rotation, start, sweep, .. } => {
+                let n = ellipse_segments(a, b, sweep, tol);
+                for i in 0..n {
+                    out.push(ellipse_point(center, a, b, rotation, start + sweep * (i as f64 / n as f64)));
+                }
+            }
         }
     }
 }
@@ -79,6 +121,17 @@ pub fn arc_segments(radius: f64, sweep: f64, tol: f64) -> usize {
         max_step
     };
     ((sweep.abs() / step).ceil() as usize).max(if sweep.abs() > TAU - 1e-9 { 12 } else { 1 })
+}
+
+/// Number of even parameter steps that keep an elliptic arc's chords within `tol`. The
+/// tightest bend is radius `min² / max`, travelled at up to `max / min` times the
+/// parameter's pace there, so a circle of that radius swept that much further bounds both.
+pub fn ellipse_segments(a: f64, b: f64, sweep: f64, tol: f64) -> usize {
+    let (lo, hi) = (a.abs().min(b.abs()), a.abs().max(b.abs()));
+    if lo <= 0.0 || !lo.is_finite() || !hi.is_finite() {
+        return 1;
+    }
+    arc_segments(lo * lo / hi, sweep * hi / lo, tol).min(4096)
 }
 
 /// A closed chain of segments, each one starting where the previous ended.
@@ -150,6 +203,16 @@ impl Loop2 {
                     let (t0, t1) = (start, start + sweep);
                     a += 0.5
                         * (r * r * sweep + c.x * r * (t1.sin() - t0.sin()) + c.y * r * (t0.cos() - t1.cos()));
+                }
+                Seg2::Ellipse { center: c, a: ra, b: rb, rotation, start: s, sweep: w, .. } => {
+                    // P = c + A cos t + B sin t, so P x P' = c x (B cos t - A sin t) + A x B.
+                    let u = Vec2::from_angle(rotation);
+                    let (aa, bb) = (u * ra, u.perp() * rb);
+                    let e = s + w;
+                    a += 0.5
+                        * (c.cross(aa) * (e.cos() - s.cos())
+                            + c.cross(bb) * (e.sin() - s.sin())
+                            + aa.cross(bb) * w);
                 }
             }
         }

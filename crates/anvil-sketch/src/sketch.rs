@@ -37,6 +37,23 @@ pub enum Geom {
         a: PointId,
         b: PointId,
     },
+    /// Whole ellipse about centre `c`, with `axis1` and `axis2` the ends of its two
+    /// semi-axes, both on the curve. The solver keeps `axis2 - c` square to `axis1 - c`.
+    /// Either axis may be the longer. See `docs/re/sketch-entities.md`, "Ellipses".
+    Ellipse {
+        c: PointId,
+        axis1: PointId,
+        axis2: PointId,
+    },
+    /// The part of the ellipse `c`, `axis1`, `axis2` (as for [`Geom::Ellipse`]) running
+    /// counter-clockwise from `a` to `b`. The solver keeps `a` and `b` on the ellipse.
+    EllipseArc {
+        c: PointId,
+        axis1: PointId,
+        axis2: PointId,
+        a: PointId,
+        b: PointId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -52,6 +69,8 @@ impl Entity {
             Geom::Line { a, b } => vec![a, b],
             Geom::Circle { c, .. } => vec![c],
             Geom::Arc { c, a, b } => vec![c, a, b],
+            Geom::Ellipse { c, axis1, axis2 } => vec![c, axis1, axis2],
+            Geom::EllipseArc { c, axis1, axis2, a, b } => vec![c, axis1, axis2, a, b],
         }
     }
     /// Renames the entity's points through `f`.
@@ -67,14 +86,48 @@ impl Entity {
                 *a = f(*a);
                 *b = f(*b);
             }
+            Geom::Ellipse { c, axis1, axis2 } => {
+                *c = f(*c);
+                *axis1 = f(*axis1);
+                *axis2 = f(*axis2);
+            }
+            Geom::EllipseArc { c, axis1, axis2, a, b } => {
+                *c = f(*c);
+                *axis1 = f(*axis1);
+                *axis2 = f(*axis2);
+                *a = f(*a);
+                *b = f(*b);
+            }
         }
     }
 
     pub fn is_line(&self) -> bool {
         matches!(self.geom, Geom::Line { .. })
     }
+    /// A circle or a circular arc.
     pub fn is_round(&self) -> bool {
-        !self.is_line()
+        matches!(self.geom, Geom::Circle { .. } | Geom::Arc { .. })
+    }
+    /// A whole or partial ellipse.
+    pub fn is_ellipse(&self) -> bool {
+        matches!(self.geom, Geom::Ellipse { .. } | Geom::EllipseArc { .. })
+    }
+    /// The centre point of a circle, arc or ellipse.
+    pub fn center(&self) -> Option<PointId> {
+        match self.geom {
+            Geom::Circle { c, .. }
+            | Geom::Arc { c, .. }
+            | Geom::Ellipse { c, .. }
+            | Geom::EllipseArc { c, .. } => Some(c),
+            Geom::Line { .. } => None,
+        }
+    }
+    /// The end points of an entity that has ends: a line, an arc or a partial ellipse.
+    pub fn ends(&self) -> Option<[PointId; 2]> {
+        match self.geom {
+            Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => Some([a, b]),
+            Geom::Circle { .. } | Geom::Ellipse { .. } => None,
+        }
     }
 }
 
@@ -696,11 +749,12 @@ impl Sketch {
         l
     }
 
+    /// The radius of a circle or arc; zero for lines and ellipses.
     pub fn radius(&self, e: EntityId) -> f64 {
         match self.entities[e].geom {
             Geom::Circle { r, .. } => r,
             Geom::Arc { c, a, .. } => self.pos(a).distance(self.pos(c)),
-            Geom::Line { .. } => 0.0,
+            Geom::Line { .. } | Geom::Ellipse { .. } | Geom::EllipseArc { .. } => 0.0,
         }
     }
 
@@ -731,6 +785,10 @@ impl Sketch {
                     p.distance(pa).min(p.distance(pb))
                 }
             }
+            Geom::Ellipse { .. } | Geom::EllipseArc { .. } => match crate::ellipse::of(self, e) {
+                Some((el, t0, sweep)) => el.distance(p, t0, sweep),
+                None => f64::INFINITY,
+            },
         }
     }
 
@@ -868,10 +926,7 @@ impl Sketch {
         self.entities
             .iter()
             .enumerate()
-            .filter(|(_, e)| match e.geom {
-                Geom::Line { a, b } | Geom::Arc { a, b, .. } => a == p || b == p,
-                Geom::Circle { .. } => false,
-            })
+            .filter(|(_, e)| e.ends().is_some_and(|[a, b]| a == p || b == p))
             .map(|(i, _)| i)
             .collect()
     }
@@ -912,18 +967,7 @@ impl Sketch {
             used[i - 1]
         });
         for e in &mut self.entities {
-            match &mut e.geom {
-                Geom::Line { a, b } => {
-                    *a = p_map[*a];
-                    *b = p_map[*b];
-                }
-                Geom::Circle { c, .. } => *c = p_map[*c],
-                Geom::Arc { c, a, b } => {
-                    *c = p_map[*c];
-                    *a = p_map[*a];
-                    *b = p_map[*b];
-                }
-            }
+            e.remap_points(&|p| p_map[p]);
         }
         for c in &mut self.constraints {
             c.remap(&|p| p_map[p], &|e| e);
@@ -1021,7 +1065,7 @@ impl Sketch {
         let radius = |e: EntityId| match self.entities.get(e)?.geom {
             Geom::Circle { r, .. } => Some(r),
             Geom::Arc { c, a, .. } => Some(pos(a)?.distance(pos(c)?)),
-            Geom::Line { .. } => None,
+            Geom::Line { .. } | Geom::Ellipse { .. } | Geom::EllipseArc { .. } => None,
         };
         let line_dist = |p: PointId, e: EntityId| {
             let (a, b) = line(e)?;
