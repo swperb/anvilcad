@@ -127,6 +127,28 @@ mod tests {
         s.add_line(a, b);
         s.add_line(b, c);
         assert!(matches!(s.profiles(), Err(ProfileError::OpenContour { .. })));
+        // The end at (0, 0) is found as the sketch's origin, which it coincides with.
+        let ends: Vec<_> = s.open_ends().into_iter().map(|p| s.pos(p)).collect();
+        assert_eq!(ends, vec![s.pos(a), s.pos(c)]);
+    }
+
+    #[test]
+    fn open_ends_are_the_points_where_one_curve_ends() {
+        let mut s = Sketch::new();
+        // A rectangle with no open ends, and a construction line that does not count.
+        s.add_rectangle(v2(0.0, 0.0), v2(40.0, 30.0));
+        let (x, y) = (s.add_point(v2(0.0, 0.0)), s.add_point(v2(40.0, 30.0)));
+        let diagonal = s.add_line(x, y);
+        s.entities[diagonal].construction = true;
+        assert!(s.open_ends().is_empty());
+        // A U of a line and an arc: open at the line's start and the arc's end. The
+        // shared corner is two points made coincident by a relation, which count as one.
+        let (a, b, b2) = (s.add_point(v2(60.0, 0.0)), s.add_point(v2(70.0, 0.0)), s.add_point(v2(70.0, 0.0)));
+        let (c, e) = (s.add_point(v2(75.0, 0.0)), s.add_point(v2(80.0, 0.0)));
+        s.add_line(a, b);
+        s.add_arc(c, b2, e);
+        s.constraints.push(Constraint::Coincident { p: b, q: b2 });
+        assert_eq!(s.open_ends(), vec![a, e]);
     }
 
     #[test]

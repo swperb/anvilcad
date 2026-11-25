@@ -3201,6 +3201,8 @@ impl AnvilApp {
         } else {
             self.dragging = false;
         }
+        // Over the sketch, so they show while it is edited too.
+        self.draw_failed_points(&painter, rect);
 
         // Axis triad, drawn back to front so the axis nearest the viewer is on top.
         let o = rect.left_bottom() + egui::vec2(46.0, -46.0);
@@ -3393,6 +3395,52 @@ impl AnvilApp {
         ));
     }
 
+    /// The loose sketch ends a failed feature names, to mark in red: while a sketch is
+    /// open, those in it that any feature failed on; otherwise those of the feature being
+    /// edited, or selected in the tree.
+    fn failed_points(&self) -> Vec<anvil_model::failure::SketchPoint> {
+        if let Some(s) = &self.sketch {
+            let mut all: Vec<_> = self
+                .state
+                .errors
+                .values()
+                .flat_map(|e| &e.points)
+                .filter(|p| p.sketch == s.feature)
+                .copied()
+                .collect();
+            all.sort_by_key(|p| p.point);
+            all.dedup();
+            return all;
+        }
+        let id = match (&self.editor, self.selection) {
+            (Some(Editor::Feature { id, .. }), _) => *id,
+            (None, Selection::Feature(id)) => id,
+            _ => return Vec::new(),
+        };
+        self.state.errors.get(&id).map_or_else(Vec::new, |e| e.points.clone())
+    }
+
+    /// Rings round the loose sketch ends of [`Self::failed_points`], in the error colour.
+    fn draw_failed_points(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let points = self.failed_points();
+        if points.is_empty() {
+            return;
+        }
+        let ctx = painter.ctx();
+        let error = Palette::for_ctx(ctx, ctx.style().visuals.dark_mode).error;
+        for p in points {
+            let frame = match &self.sketch {
+                Some(s) if s.feature == p.sketch => Some(s.frame),
+                _ => self.state.frames.get(&p.sketch).copied(),
+            };
+            let at = self.doc.sketch(p.sketch).and_then(|sf| sf.sketch.points.get(p.point)).map(|q| q.pos());
+            let (Some(frame), Some(at)) = (frame, at) else { continue };
+            let c = self.camera.project(frame.to_world(at), rect);
+            painter.circle_filled(c, 3.0, error);
+            painter.circle_stroke(c, 7.0, Stroke::new(2.0_f32, error));
+        }
+    }
+
     fn draw_model_sketches(&self, painter: &egui::Painter, rect: egui::Rect) {
         let consumed: Vec<u32> = self
             .doc
@@ -3405,13 +3453,15 @@ impl AnvilApp {
                 _ => vec![],
             })
             .collect();
+        // A sketch whose loose ends are marked is shown, so the marks sit on its curves.
+        let marked: Vec<u32> = self.failed_points().iter().map(|p| p.sketch).collect();
         for f in &self.doc.features {
             let FeatureKind::Sketch(sf) = &f.kind else { continue };
             if self.sketch.as_ref().is_some_and(|s| s.feature == f.id) || f.suppressed {
                 continue;
             }
             let selected = self.selection == Selection::Feature(f.id);
-            if consumed.contains(&f.id) && !selected {
+            if consumed.contains(&f.id) && !selected && !marked.contains(&f.id) {
                 continue;
             }
             let Some(frame) = self.state.frames.get(&f.id) else { continue };
@@ -5302,6 +5352,11 @@ fn feature_error(ui: &mut egui::Ui, e: &anvil_model::FeatureError) {
 
 /// Where a failure's geometry is marked, for the line under its message in the editor.
 fn marked_in_view(e: &anvil_model::FeatureError) -> Option<String> {
+    match e.points.len() {
+        0 => {}
+        1 => return Some("The open end of its sketch is marked in red in the view.".into()),
+        n => return Some(format!("The {n} open ends of its sketch are marked in red in the view.")),
+    }
     let what = match (e.edges.len(), e.faces.len()) {
         (0, 0) => return None,
         (1, 0) => "The edge".to_string(),
@@ -5803,6 +5858,49 @@ mod ui_tests {
         assert!([a, b].iter().all(|e| shown.iter().any(|m| m.faces == *e)));
     }
 
+    /// An extrude of an open sketch marks the sketch's two loose ends while it is edited
+    /// or selected, and while its sketch is open for editing, and not otherwise (#199).
+    #[test]
+    fn a_failed_extrude_marks_its_sketchs_open_ends() {
+        use anvil_model::failure::SketchPoint;
+        let mut h = Harness::new();
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let a = sf.sketch.add_point(v2(5.0, 10.0));
+        let corner = sf.sketch.add_point(v2(5.0, 0.0));
+        let b = sf.sketch.add_point(v2(25.0, 0.0));
+        sf.sketch.add_line(a, corner);
+        sf.sketch.add_line(corner, b);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let id = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            op: BodyOp::Boss,
+            ..Default::default()
+        }));
+        h.app.load_document(doc, None);
+        h.step(vec![]);
+        let want = vec![SketchPoint { sketch: sk, point: a }, SketchPoint { sketch: sk, point: b }];
+        assert!(h.app.failed_points().is_empty());
+        h.app.selection = Selection::Feature(id);
+        assert_eq!(h.app.failed_points(), want);
+        h.app.selection = Selection::None;
+        let before = h.app.doc.clone();
+        h.app.open_editor(id, before, false);
+        h.step(vec![]);
+        assert_eq!(h.app.failed_points(), want);
+        let e = h.app.state.errors.get(&id).cloned().expect("the extrude failed");
+        assert_eq!(
+            marked_in_view(&e).as_deref(),
+            Some("The 2 open ends of its sketch are marked in red in the view.")
+        );
+        h.app.editor = None;
+        h.app.edit_sketch(sk);
+        h.step(vec![]);
+        assert_eq!(h.app.failed_points(), want);
+    }
+
     #[test]
     fn marked_in_view_counts_edges_and_faces() {
         let e = |edges: usize, faces: usize| anvil_model::FeatureError {
@@ -5815,6 +5913,7 @@ mod ui_tests {
                 edges
             ],
             faces: vec![FaceId { feature: 1, index: 0 }; faces],
+            points: Vec::new(),
         };
         assert_eq!(marked_in_view(&e(0, 0)), None);
         assert_eq!(

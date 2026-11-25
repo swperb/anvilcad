@@ -1,3 +1,4 @@
+use crate::topo::EdgeId;
 use glam::DVec2;
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -28,4 +29,13 @@ pub enum KernelError {
     Boolean(String),
     #[error("tessellation failed: {0}")]
     Tessellation(String),
+    /// A fillet or chamfer wider than the faces next to `edge` allow. `size` is the
+    /// blend's size as asked for (a fillet's radius, a chamfer's distance, in mm) and
+    /// `limit` the largest size of the same blend that fits there, when the kernel can
+    /// tell: the closed-form tools measure it, the rolling-ball tool does not.
+    #[error(
+        "a {blend} of {size} does not fit on the faces next to this edge{}",
+        limit.map_or(String::new(), |l| format!(" (at most {l:.6})"))
+    )]
+    BlendTooLarge { edge: EdgeId, blend: &'static str, size: f64, limit: Option<f64> },
 }

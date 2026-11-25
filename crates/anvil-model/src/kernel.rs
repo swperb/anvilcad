@@ -64,6 +64,44 @@ pub enum Blend {
     ChamferAngle { distance: f64, angle: f64, flip: bool },
 }
 
+/// Why an exact kernel declined a fillet or chamfer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BlendRefusal {
+    /// The blend is wider than the faces next to `edge` allow: `size` (the radius or
+    /// distance asked for, in mm) does not fit, and at most `limit` does, when the kernel
+    /// can tell.
+    TooLarge { edge: EdgeRef, size: f64, limit: Option<f64> },
+    /// Any other reason, in words a user can read.
+    Other(String),
+}
+
+impl std::fmt::Display for BlendRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlendRefusal::TooLarge { size, limit: Some(limit), .. } => write!(
+                f,
+                "a blend of {size} mm does not fit on the faces next to an edge, which allow at most {limit:.6} mm"
+            ),
+            BlendRefusal::TooLarge { size, limit: None, .. } => {
+                write!(f, "a blend of {size} mm does not fit on the faces next to an edge")
+            }
+            BlendRefusal::Other(reason) => f.write_str(reason),
+        }
+    }
+}
+
+impl From<String> for BlendRefusal {
+    fn from(reason: String) -> BlendRefusal {
+        BlendRefusal::Other(reason)
+    }
+}
+
+impl From<&str> for BlendRefusal {
+    fn from(reason: &str) -> BlendRefusal {
+        BlendRefusal::Other(reason.into())
+    }
+}
+
 /// What the rebuild asks of an exact kernel. Bodies are values: an operation takes the
 /// part's bodies and returns the new ones, leaving its inputs alone. Tool bodies are owned
 /// by `feature`, which names their faces.
@@ -120,7 +158,8 @@ pub trait ExactKernel {
     fn intersect(&self, a: &Self::Body, b: &Self::Body) -> Result<Vec<Self::Body>, String>;
 
     /// The bodies with the named edges blended. With `propagate`, creases running smoothly
-    /// on from them are blended too.
+    /// on from them are blended too. A blend too large for its faces is refused with
+    /// [`BlendRefusal::TooLarge`], naming the edge.
     fn blend(
         &self,
         bodies: &[Self::Body],
@@ -128,7 +167,7 @@ pub trait ExactKernel {
         blend: Blend,
         propagate: bool,
         feature: u32,
-    ) -> Result<Vec<Self::Body>, String>;
+    ) -> Result<Vec<Self::Body>, BlendRefusal>;
 
     /// The bodies hollowed to a wall of `thickness`, open through the named faces.
     fn shell(
@@ -292,8 +331,15 @@ pub(crate) mod conformance {
 
     fn refusals<K: ExactKernel>(k: &K) {
         let c = [cube(k)];
-        // Too big to fit on the faces: refused, not built wrong.
-        assert!(k.blend(&c, &[top_front()], Blend::Chamfer(20.0), false, 5).is_err());
+        // Too big to fit on the faces: refused, not built wrong, naming the edge and the
+        // 10 mm the cube's faces allow.
+        match k.blend(&c, &[top_front()], Blend::Chamfer(20.0), false, 5) {
+            Err(BlendRefusal::TooLarge { edge, size, limit: Some(limit) }) => {
+                assert_eq!((edge, size), (top_front(), 20.0));
+                assert!(close(limit, 10.0, 1e-5), "{limit}");
+            }
+            other => panic!("{:?}", other.map(|b| b.len())),
+        }
         assert!(k.shell(&c, &[FaceId { feature: 1, index: FaceId::END_CAP }], 6.0, 6).is_err());
         assert!(k.extrude(&[], &Frame::WORLD, 0.0, 1.0, 1).is_err());
     }

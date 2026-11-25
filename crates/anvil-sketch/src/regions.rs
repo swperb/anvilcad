@@ -69,6 +69,27 @@ impl Sketch {
         (0..n).map(|i| find(&mut parent, i)).collect()
     }
 
+    /// The loose ends of the sketch's curves, which leave its outline open: each point
+    /// (standing for every point coincident with it) where exactly one curve ends, in
+    /// order. Construction geometry is left out, as [`Sketch::loops`] leaves it out.
+    pub fn open_ends(&self) -> Vec<PointId> {
+        let roots = self.point_roots();
+        let mut ends: std::collections::BTreeMap<PointId, usize> = Default::default();
+        for e in self.entities.iter().filter(|e| !e.construction) {
+            let (a, b) = match e.geom {
+                Geom::Circle { .. } => continue,
+                Geom::Line { a, b } | Geom::Arc { a, b, .. } => (roots[a], roots[b]),
+            };
+            // A line whose ends coincide is skipped, as it is for loops; an arc whose ends
+            // coincide is a closed curve.
+            if a != b {
+                *ends.entry(a).or_default() += 1;
+                *ends.entry(b).or_default() += 1;
+            }
+        }
+        ends.into_iter().filter(|&(_, n)| n == 1).map(|(p, _)| p).collect()
+    }
+
     /// Closed loops formed by non-construction geometry, each oriented arbitrarily.
     pub fn loops(&self) -> Result<Vec<Loop2>, ProfileError> {
         let roots = self.point_roots();

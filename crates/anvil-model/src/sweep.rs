@@ -256,7 +256,9 @@ impl Document {
                         )?
                     }
                     None => sf.sketch.profiles().map_err(|e| match e {
-                        anvil_sketch::ProfileError::OpenContour { .. } => crate::failure::Cause::told(
+                        anvil_sketch::ProfileError::OpenContour { .. } => crate::failure::open_sketch(
+                            id,
+                            &sf.sketch,
                             "its profile's outline is open",
                             "Close the profile's outline so every end meets another, or turn on Thin feature.",
                         ),
