@@ -13,6 +13,7 @@ use anvil_kernel::build::BuildError;
 use anvil_kernel::offset::OffsetError;
 use anvil_kernel::shell::ShellError;
 use anvil_kernel::{EdgeRef, FaceId};
+use anvil_sketch::ProfileError;
 use serde::Serialize;
 
 /// Why a feature could not be built, as the rebuild sees it.
@@ -23,6 +24,11 @@ pub enum Cause {
     /// What went wrong and what to try, both written by the feature code, which knows
     /// better than a general suggestion.
     Told { cause: String, suggestion: String },
+    /// Like [`Cause::Told`], with technical detail for the Details section, such as the
+    /// exact kernel's own reason for refusing a feature.
+    Detailed { cause: String, suggestion: String, details: String },
+    /// The sketch's curves do not make closed outlines.
+    Profile(ProfileError),
     /// Building a solid from a profile (extrude, revolve) failed.
     Build(BuildError),
     /// A fillet or chamfer failed.
@@ -39,6 +45,29 @@ impl Cause {
     /// A cause with its own suggestion: "the sketch's outline is open", "Close it, or …".
     pub fn told(cause: impl Into<String>, suggestion: impl Into<String>) -> Cause {
         Cause::Told { cause: cause.into(), suggestion: suggestion.into() }
+    }
+
+    /// A cause with its own suggestion and technical detail for the Details section.
+    pub fn detailed(
+        cause: impl Into<String>,
+        suggestion: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Cause {
+        Cause::Detailed { cause: cause.into(), suggestion: suggestion.into(), details: details.into() }
+    }
+}
+
+/// The plain cause alone, for places that report it without naming a feature, such as a
+/// section view.
+impl std::fmt::Display for Cause {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&describe(Does::Other, self.clone()).cause)
+    }
+}
+
+impl From<ProfileError> for Cause {
+    fn from(e: ProfileError) -> Cause {
+        Cause::Profile(e)
     }
 }
 
@@ -201,12 +230,47 @@ fn general(d: Does) -> &'static str {
 
 /// Turns the rebuild's `cause` for feature `name` of `kind` into a message a user can act on.
 pub fn explain(name: &str, kind: &FeatureKind, cause: Cause) -> FeatureError {
-    let d = does(kind);
+    let Described { cause, suggestion, details, edges, faces } = describe(does(kind), cause);
+    FeatureError { feature: name.to_string(), cause, suggestion, details, edges, faces }
+}
+
+/// A cause in words, before it is given a feature's name.
+struct Described {
+    cause: String,
+    suggestion: String,
+    details: Option<String>,
+    edges: Vec<EdgeRef>,
+    faces: Vec<FaceId>,
+}
+
+fn describe(d: Does, cause: Cause) -> Described {
     let gen = general(d).to_string();
     let (mut edges, mut faces) = (Vec::new(), Vec::new());
     let (cause, suggestion, details): (String, String, Option<String>) = match cause {
         Cause::Plain(s) => (fragment(&s), gen, None),
         Cause::Told { cause, suggestion } => (fragment(&cause), suggestion, None),
+        Cause::Detailed { cause, suggestion, details } => (fragment(&cause), suggestion, Some(details)),
+        Cause::Profile(e) => {
+            let (what, how) = match e {
+                ProfileError::Empty => (
+                    "its sketch has no closed outline",
+                    "Draw a closed outline in the sketch, or pick a sketch that has one.",
+                ),
+                ProfileError::OpenContour { .. } => (
+                    "its sketch's outline is open",
+                    "Close the outline so every end meets another, or turn on Thin feature.",
+                ),
+                ProfileError::Branching { .. } => (
+                    "its sketch has a point where three or more curves meet, so the outline is ambiguous",
+                    "Edit the sketch so each end meets exactly one other curve: trim the extra curves or make them construction geometry.",
+                ),
+                ProfileError::SelfIntersecting => (
+                    "its sketch's outlines cross each other",
+                    "Edit the sketch so no outline crosses another; trim where they meet.",
+                ),
+            };
+            (what.into(), how.into(), Some(e.to_string()))
+        }
         Cause::Build(e) => {
             let how = match e {
                 BuildError::EmptyProfile => {
@@ -333,7 +397,7 @@ pub fn explain(name: &str, kind: &FeatureKind, cause: Cause) -> FeatureError {
             (what.to_string(), how, detail)
         }
     };
-    FeatureError { feature: name.to_string(), cause, suggestion, details, edges, faces }
+    Described { cause, suggestion, details, edges, faces }
 }
 
 #[cfg(test)]
@@ -438,10 +502,30 @@ mod tests {
                 | KernelError::Tessellation(_) => {}
             }
         }
+        let profile = [
+            ProfileError::Empty,
+            ProfileError::OpenContour { point: 3 },
+            ProfileError::Branching { point: 4 },
+            ProfileError::SelfIntersecting,
+        ];
+        for p in &profile {
+            match p {
+                ProfileError::Empty
+                | ProfileError::OpenContour { .. }
+                | ProfileError::Branching { .. }
+                | ProfileError::SelfIntersecting => {}
+            }
+        }
         let mut all = vec![
             Cause::Plain("the sketch this feature uses is missing.".into()),
             Cause::told("the sketch's outline is open", "Close the outline, or turn on Thin feature."),
+            Cause::detailed(
+                "the exact kernel could not build it",
+                "Try a smaller radius.",
+                "blend: EdgeKey(1) has no neighbour",
+            ),
         ];
+        all.extend(profile.into_iter().map(Cause::Profile));
         all.extend(build.into_iter().map(Cause::Build));
         all.extend(blend.into_iter().map(Cause::Blend));
         all.extend(shell.into_iter().map(Cause::Shell));
@@ -649,5 +733,213 @@ mod tests {
         // Too thick for the part, not a curved region's fault: the block has none (#173).
         assert_eq!(e.cause, "the wall thickness is too large for this part");
         assert_eq!(e.suggestion, "Try a thinner wall.");
+    }
+
+    /// A sketch on the Top plane holding a `w` x `h` rectangle at the origin, and its id.
+    fn rectangle_sketch(doc: &mut Document, plane: PlaneRef, w: f64, h: f64) -> u32 {
+        let mut sf = SketchFeature::new(plane);
+        sf.sketch.add_rectangle(v2(0.0, 0.0), v2(w, h));
+        doc.add_feature(FeatureKind::Sketch(sf))
+    }
+
+    fn extrude(sketch: u32, depth: Dim, op: BodyOp) -> FeatureKind {
+        FeatureKind::Extrude(ExtrudeFeature {
+            sketch,
+            end: EndCondition::Blind,
+            depth,
+            reverse: false,
+            op,
+            ..Default::default()
+        })
+    }
+
+    /// Capped thin walls 6 mm thick at each end of a 10 mm extrusion would meet in the
+    /// middle; the message gives both sizes and the largest cap that fits.
+    #[test]
+    fn caps_thicker_than_the_extrusion_give_both_sizes() {
+        let mut doc = Document::new();
+        let sk = rectangle_sketch(&mut doc, PlaneRef::Top, 40.0, 30.0);
+        let id = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            op: BodyOp::Boss,
+            thin: Some(ThinWall {
+                kind: ThinKind::OneDirection,
+                thickness: Dim::Value(2.0),
+                thickness2: Dim::Value(1.0),
+                reverse: false,
+                fillet: None,
+                cap: Some(Dim::Value(6.0)),
+            }),
+            ..Default::default()
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.feature, "Extrude-Thin1");
+        assert_eq!(e.cause, "the caps are 6 mm thick at each end, and the extrusion is only 10 mm long");
+        assert_eq!(e.suggestion, "Make the caps thinner than 5 mm, or the extrusion longer.");
+    }
+
+    /// A depth whose equation uses a variable that is not defined names the depth and
+    /// the variable.
+    #[test]
+    fn a_depth_with_an_unknown_variable_names_both() {
+        let mut doc = Document::new();
+        let sk = rectangle_sketch(&mut doc, PlaneRef::Top, 40.0, 30.0);
+        let id = doc.add_feature(extrude(sk, Dim::Expr("wall * 2".into()), BodyOp::Boss));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "the depth cannot be worked out: unknown variable 'wall'");
+        assert_eq!(
+            e.suggestion,
+            "Edit the depth and fix its equation, or define the variables it uses in Equations."
+        );
+    }
+
+    /// A fillet radius whose equation does not work out names the radius.
+    #[test]
+    fn a_fillet_radius_with_a_bad_equation_names_the_radius() {
+        let (mut doc, base) = block();
+        let side = |e: u32| FaceId::side(base, e);
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![EdgeRef::new(side(0), side(1))],
+            radius: Dim::Expr("r_missing".into()),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.feature, "Fillet1");
+        assert_eq!(e.cause, "the radius cannot be worked out: unknown variable 'r_missing'");
+    }
+
+    /// A sketch on a reference plane that is suppressed names the plane.
+    #[test]
+    fn a_sketch_on_a_suppressed_plane_names_the_plane() {
+        let mut doc = Document::new();
+        let plane = doc.add_feature(FeatureKind::Plane(PlaneFeature {
+            base: PlaneRef::Top,
+            offset: Dim::Value(10.0),
+            ..Default::default()
+        }));
+        let sk = rectangle_sketch(&mut doc, PlaneRef::Feature(plane), 40.0, 30.0);
+        let name = doc.feature(plane).map(|f| f.name.clone()).unwrap_or_default();
+        if let Some(f) = doc.feature_mut(plane) {
+            f.suppressed = true;
+        }
+        let e = failed(&mut doc, sk);
+        assert_eq!(e.cause, format!("the plane {name} it is placed on failed or is suppressed"));
+        assert_eq!(e.suggestion, format!("Fix or unsuppress {name}, or pick another plane."));
+    }
+
+    /// A sketch on a face that no longer exists names the feature that made the face.
+    #[test]
+    fn a_sketch_on_a_face_that_is_gone_names_the_feature_that_made_it() {
+        let (mut doc, base) = block();
+        let gone = FaceId { feature: base, index: 99 };
+        let sk = rectangle_sketch(&mut doc, PlaneRef::Face(gone), 5.0, 5.0);
+        let e = failed(&mut doc, sk);
+        assert_eq!(
+            e.cause,
+            "the face it is placed on, made by Boss-Extrude1, no longer exists or is not flat"
+        );
+        assert!(e.suggestion.starts_with("Edit it and pick a flat face or a plane again"), "{e}");
+    }
+
+    /// A cut with nothing before it to cut says to move it after a boss.
+    #[test]
+    fn a_cut_with_no_body_says_move_it_after_one() {
+        let mut doc = Document::new();
+        let sk = rectangle_sketch(&mut doc, PlaneRef::Top, 40.0, 30.0);
+        let id = doc.add_feature(extrude(sk, Dim::Value(10.0), BodyOp::Cut));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "there is no body to cut");
+        assert_eq!(e.suggestion, "Move the cut after a feature that makes a body, or make it a boss.");
+    }
+
+    /// A sketch where three lines meet at one point cannot be read as an outline.
+    #[test]
+    fn an_extrude_of_a_branching_sketch_says_which_problem() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        sf.sketch.add_rectangle(v2(0.0, 0.0), v2(40.0, 30.0));
+        // A diagonal between opposite corners, so three curves meet at each and no end
+        // is left open.
+        let (a, b) = (sf.sketch.add_point(v2(0.0, 0.0)), sf.sketch.add_point(v2(40.0, 30.0)));
+        sf.sketch.add_line(a, b);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let id = doc.add_feature(extrude(sk, Dim::Value(10.0), BodyOp::Boss));
+        let e = failed(&mut doc, id);
+        assert_eq!(
+            e.cause,
+            "its sketch has a point where three or more curves meet, so the outline is ambiguous"
+        );
+        assert!(e.details.is_some());
+    }
+
+    /// Flip side to cut on a revolve is refused with what to do instead.
+    #[test]
+    fn a_revolve_with_flip_side_says_turn_it_off() {
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        sf.sketch.add_rectangle(v2(5.0, 0.0), v2(15.0, 10.0));
+        let (a, b) = (sf.sketch.add_point(v2(0.0, 0.0)), sf.sketch.add_point(v2(0.0, 10.0)));
+        let axis = sf.sketch.add_line(a, b);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let id = doc.add_feature(FeatureKind::Revolve(RevolveFeature {
+            sketch: sk,
+            axis,
+            flip_side: true,
+            op: BodyOp::Cut,
+            ..Default::default()
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "Flip side to cut is not available for revolves yet");
+        assert_eq!(e.suggestion, "Turn off Flip side to cut, and revolve the region to remove instead.");
+    }
+
+    /// An imported body whose triangles use a corner it does not have is reported as
+    /// damaged, with the corner's number under Details.
+    #[test]
+    fn a_damaged_imported_body_says_import_it_again() {
+        let mut doc = Document::new();
+        let id = doc.add_feature(FeatureKind::ImportedBody(ImportedBodyFeature {
+            source: "part.step".into(),
+            replaces: Vec::new(),
+            vertices: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            faces: vec![ImportedFace { planar: true, triangles: vec![[0, 1, 7]] }],
+            exact: None,
+            adds: false,
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "the imported body is damaged: a triangle uses a corner the body does not have");
+        assert_eq!(e.details.as_deref(), Some("vertex 7 of 3"));
+    }
+
+    /// A conic fillet the exact kernel refuses (here on an edge an earlier change
+    /// removed) cannot fall back to the faceted kernel, which builds only circular ones.
+    /// The message names the radius asked for and keeps the kernel's words under Details.
+    #[test]
+    fn a_conic_fillet_the_exact_kernel_refuses_names_the_radius() {
+        let (mut doc, base) = block();
+        let side = |e: u32| FaceId::side(base, e);
+        let profile = FilletProfile::ConicRho { rho: Dim::Value(0.5) };
+        let kind = profile.label().to_lowercase();
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![EdgeRef::new(side(0), side(2))],
+            radius: Dim::Value(2.5),
+            profile,
+            tangent_propagation: false,
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(
+            e.cause,
+            format!(
+                "{kind} fillets are built only on the exact kernel, and it could not build this one with a radius of 2.5 mm"
+            )
+        );
+        assert_eq!(
+            e.suggestion,
+            "Try a smaller radius or fewer edges, pick its edges again, or use a circular fillet, which the faceted kernel can also build."
+        );
+        assert_eq!(e.details.as_deref(), Some("an edge to blend no longer exists"));
     }
 }

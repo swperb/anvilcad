@@ -11,7 +11,9 @@
 //! is never built worse than the faceted kernel alone would build it.
 
 use crate::document::*;
+use crate::failure::{mm, Cause};
 use crate::kernel::{self, ExactKernel};
+use crate::refgeom::value;
 use anvil_kernel::blend::{blend_edges, EdgeTreatment};
 use anvil_kernel::build::revolve;
 use anvil_kernel::shell::shell;
@@ -172,12 +174,17 @@ fn principal_moments(t: [[f64; 3]; 3]) -> [f64; 3] {
 
 /// Builds a solid from imported triangles. Each imported face keeps its own face id so
 /// later sketches can attach to it.
-fn imported_solid(id: u32, ib: &ImportedBodyFeature) -> Result<Solid, String> {
-    let v = |i: u32| -> Result<Vec3, String> {
-        ib.vertices
-            .get(i as usize)
-            .map(|p| Vec3 { x: p[0], y: p[1], z: p[2] })
-            .ok_or_else(|| "imported body references a missing vertex".to_string())
+fn imported_solid(id: u32, ib: &ImportedBodyFeature) -> Result<Solid, Cause> {
+    let reimport = "Import the file again; if it keeps failing, report it with the file attached.";
+    let n = ib.vertices.len();
+    let v = |i: u32| -> Result<Vec3, Cause> {
+        ib.vertices.get(i as usize).map(|p| Vec3 { x: p[0], y: p[1], z: p[2] }).ok_or_else(|| {
+            Cause::detailed(
+                "the imported body is damaged: a triangle uses a corner the body does not have",
+                reimport,
+                format!("vertex {i} of {n}"),
+            )
+        })
     };
     let mut polys = Vec::new();
     for (fi, face) in ib.faces.iter().enumerate() {
@@ -190,7 +197,7 @@ fn imported_solid(id: u32, ib: &ImportedBodyFeature) -> Result<Solid, String> {
         }
     }
     if polys.is_empty() {
-        return Err("imported body is empty".into());
+        return Err(Cause::told("the imported body has no faces", reimport));
     }
     Ok(Solid::new(polys))
 }
@@ -231,27 +238,41 @@ impl BuildState {
 
     /// Why feature `id`, which only the exact kernel builds, failed: the exact kernel's
     /// own reason when it was this feature that left it, or that an earlier one did.
+    ///
+    /// `what` names the kind ("conic rho fillets"), `size` the size asked for (("radius",
+    /// 5.0) in mm) and `plain` the kind the faceted kernel can build instead.
     fn needs_exact(
         &self,
         id: u32,
         what: &str,
+        (size, asked): (&str, f64),
         plain: &str,
         name_of: impl Fn(u32) -> String,
-    ) -> crate::failure::Cause {
+    ) -> Cause {
         match &self.faceted_from {
-            // The exact kernel refused this very feature: its reason says why.
-            Some((from, reason)) if *from == id => crate::failure::Cause::told(
+            // The exact kernel refused this very feature. Its reason is kernel text, so it
+            // goes under Details; the message says what was asked for.
+            Some((from, reason)) if *from == id => Cause::detailed(
+                format!(
+                    "{what} are built only on the exact kernel, and it could not build this one with a {size} of {} mm",
+                    mm(asked)
+                ),
+                format!(
+                    "Try a smaller {size} or fewer edges, pick its edges again, or use {plain}, which the faceted kernel can also build."
+                ),
                 reason.clone(),
-                format!("Try a smaller size, or use {plain}, which the faceted kernel can also build."),
             ),
             Some((from, _)) => {
                 let from = name_of(*from);
-                crate::failure::Cause::told(
+                Cause::told(
                     format!("{what} are built only on the exact kernel, and the part left it at {from}"),
                     format!("Fix or suppress {from}, move this feature before it, or use {plain}."),
                 )
             }
-            None => format!("{what} need the exact kernel").into(),
+            None => Cause::told(
+                format!("{what} need the exact kernel"),
+                format!("Use {plain}, which the faceted kernel can also build."),
+            ),
         }
     }
 
@@ -267,12 +288,13 @@ impl BuildState {
     }
 }
 
-pub(crate) fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), String> {
+/// Combines `tool` with the faceted body: a boss adds it, a cut takes it away.
+pub(crate) fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), Cause> {
     match op {
         BodyOp::Boss => *body = body.union(tool),
         BodyOp::Cut => {
             if body.is_empty() {
-                return Err("there is no body to cut".into());
+                return Err(no_body_to_cut());
             }
             *body = body.subtract(tool);
         }
@@ -280,20 +302,44 @@ pub(crate) fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), St
     Ok(())
 }
 
+/// A cut placed before anything has made a body.
+pub(crate) fn no_body_to_cut() -> Cause {
+    Cause::told(
+        "there is no body to cut",
+        "Move the cut after a feature that makes a body, or make it a boss.",
+    )
+}
+
 impl Document {
-    pub(crate) fn resolve_plane(&self, p: &PlaneRef, st: &BuildState) -> Result<Frame, String> {
+    /// The frame of a plane or flat face that a sketch or feature is placed on.
+    pub(crate) fn resolve_plane(&self, p: &PlaneRef, st: &BuildState) -> Result<Frame, Cause> {
         if let Some(f) = p.standard_frame() {
             return Ok(f);
         }
+        let name = |id: u32| self.feature(id).map(|f| f.name.clone());
         match *p {
-            PlaneRef::Face(fid) => st
-                .body
-                .planar_face_frame(fid)
-                .ok_or_else(|| "the referenced face no longer exists or is not planar".to_string()),
-            PlaneRef::Feature(id) => {
-                st.frames.get(&id).copied().ok_or_else(|| "the referenced plane is missing".to_string())
-            }
-            _ => unreachable!(),
+            PlaneRef::Face(fid) => st.body.planar_face_frame(fid).ok_or_else(|| {
+                let made_by = name(fid.feature).map_or(String::new(), |n| format!(", made by {n},"));
+                Cause::told(
+                    format!("the face it is placed on{made_by} no longer exists or is not flat"),
+                    "Edit it and pick a flat face or a plane again; an earlier change may have removed or curved the face.",
+                )
+            }),
+            PlaneRef::Feature(id) => st.frames.get(&id).copied().ok_or_else(|| match name(id) {
+                Some(n) => Cause::told(
+                    format!("the plane {n} it is placed on failed or is suppressed"),
+                    format!("Fix or unsuppress {n}, or pick another plane."),
+                ),
+                None => Cause::told(
+                    "the plane it is placed on has been deleted",
+                    "Edit it and pick another plane, or undo the deletion.",
+                ),
+            }),
+            // Every other plane is a standard one, answered above.
+            _ => Err(Cause::told(
+                "the plane it is placed on is not valid",
+                "Edit it and pick the plane again.",
+            )),
         }
     }
 
@@ -327,19 +373,22 @@ impl Document {
         st
     }
 
-    fn rebuild_feature(&mut self, i: usize, st: &mut BuildState) -> Result<(), crate::failure::Cause> {
+    fn rebuild_feature(&mut self, i: usize, st: &mut BuildState) -> Result<(), Cause> {
         let id = self.features[i].id;
         let kind = self.features[i].kind.clone();
-        let num = |d: &Dim, what: &str| -> Result<f64, String> {
-            d.eval(&st.variables).map_err(|e| format!("{what}: {e}"))
-        };
+        let num = |d: &Dim, what: &str| value(d, &st.variables, what);
         match kind {
             FeatureKind::Sketch(sf) => {
                 let frame = self.resolve_plane(&sf.plane, st)?;
                 let mut sketch = sf.sketch.clone();
                 for d in &sf.driven {
                     let v = crate::equations::eval(&d.expr, &|n| st.variables.get(n).copied())
-                        .map_err(|e| format!("dimension equation: {e}"))?;
+                        .map_err(|e| {
+                            Cause::told(
+                                format!("the equation {} of one of its dimensions cannot be worked out: {e}", d.expr.trim()),
+                                "Edit the sketch and fix that dimension's equation, or define the variables it uses in Equations.",
+                            )
+                        })?;
                     if let Some(c) = sketch.constraints.get_mut(d.constraint) {
                         c.set_value(v);
                     }
@@ -353,11 +402,11 @@ impl Document {
                 if !ok {
                     let n = st.sketch_status.get(&id).map_or(0, |r| r.unsatisfied.len());
                     return Err(match n {
-                        0 => crate::failure::Cause::told(
+                        0 => Cause::told(
                             "its relations and dimensions cannot all be met",
                             "Edit the sketch and remove or change a relation or dimension; undo the last change if it caused this.",
                         ),
-                        n => crate::failure::Cause::told(
+                        n => Cause::told(
                             if n == 1 {
                                 "it is over defined: 1 relation or dimension conflicts with the others".to_string()
                             } else {
@@ -435,7 +484,10 @@ impl Document {
             }
             FeatureKind::Revolve(rf) => {
                 if rf.flip_side {
-                    return Err("flip side to cut is not available for revolves yet".into());
+                    return Err(Cause::told(
+                        "Flip side to cut is not available for revolves yet",
+                        "Turn off Flip side to cut, and revolve the region to remove instead.",
+                    ));
                 }
                 let plan = self.plan_revolve(&rf, st)?;
                 let tool = plan.faceted(id)?;
@@ -503,7 +555,8 @@ impl Document {
                 if f.profile != FilletProfile::Circular {
                     let name_of = |f: u32| self.feature(f).map(|f| f.name.clone()).unwrap_or_default();
                     let what = format!("{} fillets", f.profile.label().to_lowercase());
-                    return Err(st.needs_exact(id, &what, "a circular fillet", name_of));
+                    let size = ("radius", radius);
+                    return Err(st.needs_exact(id, &what, size, "a circular fillet", name_of));
                 }
                 st.body = blend_edges(&st.body, &f.edges, EdgeTreatment::Fillet { radius }, id)?;
             }
@@ -525,7 +578,8 @@ impl Document {
                 if c.kind != ChamferKind::EqualDistance {
                     let name_of = |f: u32| self.feature(f).map(|f| f.name.clone()).unwrap_or_default();
                     let what = format!("{} chamfers", c.kind.label().to_lowercase());
-                    return Err(st.needs_exact(id, &what, "an equal-distance chamfer", name_of));
+                    let size = ("distance", distance);
+                    return Err(st.needs_exact(id, &what, size, "an equal-distance chamfer", name_of));
                 }
                 st.body = blend_edges(&st.body, &c.edges, EdgeTreatment::Chamfer { distance }, id)?;
             }
@@ -542,13 +596,7 @@ impl Document {
 
     /// Cuts one hole at each free point of the hole's sketch. Each hole is its section
     /// turned about the hole's axis; see `docs/re/hole-wizard.md`.
-    fn rebuild_hole(
-        &self,
-        id: u32,
-        h: &crate::hole::HoleFeature,
-        st: &mut BuildState,
-    ) -> Result<(), crate::failure::Cause> {
-        use crate::failure::Cause;
+    fn rebuild_hole(&self, id: u32, h: &crate::hole::HoleFeature, st: &mut BuildState) -> Result<(), Cause> {
         let lost = || {
             Cause::told(
                 "the sketch that places the holes failed, is suppressed or is missing",
@@ -556,7 +604,7 @@ impl Document {
             )
         };
         let sf = self.sketch(h.sketch).ok_or_else(lost)?;
-        let frame = self.sketch_profiles_frame(h.sketch, st).map_err(|_| lost())?;
+        let frame = st.frames.get(&h.sketch).copied().ok_or_else(lost)?;
         let centers = crate::hole::positions(&sf.sketch);
         if centers.is_empty() {
             return Err(Cause::told(
@@ -613,13 +661,6 @@ impl Document {
         }
         st.tools.insert(id, (Solid::new(polys), BodyOp::Cut));
         Ok(())
-    }
-
-    fn sketch_profiles_frame(&self, sketch_id: u32, st: &BuildState) -> Result<Frame, String> {
-        st.frames
-            .get(&sketch_id)
-            .copied()
-            .ok_or_else(|| "the sketch this feature uses failed or is suppressed".into())
     }
 }
 

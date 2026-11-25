@@ -171,7 +171,7 @@ impl Document {
         sw: &SweepFeature,
         st: &BuildState,
     ) -> Result<SweepPlan, crate::failure::Cause> {
-        let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
+        let num = |d: &Dim, what: &str| crate::refgeom::value(d, &st.variables, what);
         let ps = self.sketch(sw.path).ok_or_else(|| {
             crate::failure::Cause::told(
                 "the sketch holding its path has been deleted",
@@ -205,7 +205,13 @@ impl Document {
                 },
             })
             .collect();
-        let first = path.first().ok_or("the path is empty")?;
+        let empty_path = || {
+            crate::failure::Cause::told(
+                "its path has no curves",
+                "Add the path to its sketch as normal (not construction) geometry.",
+            )
+        };
+        let first = path.first().ok_or_else(empty_path)?;
 
         // The profile and its plane.
         let (frame, profiles) = match &sw.diameter {
@@ -254,7 +260,7 @@ impl Document {
                             "its profile's outline is open",
                             "Close the profile's outline so every end meets another, or turn on Thin feature.",
                         ),
-                        e => e.to_string().into(),
+                        e => e.into(),
                     })?,
                 };
                 (f, p)
@@ -305,7 +311,7 @@ impl Document {
             (before, after)
         };
         let meet =
-            after.first().map(|s| s.start()).or(before.last().map(|s| s.end())).ok_or("the path is empty")?;
+            after.first().map(|s| s.start()).or(before.last().map(|s| s.end())).ok_or_else(empty_path)?;
         if (k(meet) - frame.origin).dot(frame.z).abs() > tol {
             return Err(crate::failure::Cause::told(
                 "its path does not meet the profile's plane",
@@ -403,7 +409,12 @@ impl SweepPlan {
                 });
             }
         }
-        out.ok_or_else(|| "the sweep has no length".into())
+        out.ok_or_else(|| {
+            crate::failure::Cause::told(
+                "its path has no length",
+                "Edit the path's sketch so its curves have length.",
+            )
+        })
     }
 
     pub(crate) fn exact(&self, id: u32) -> Result<Vec<brep::Solid>, String> {
