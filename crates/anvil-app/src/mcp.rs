@@ -779,11 +779,22 @@ fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
         }
     };
     let points = a.number_lists::<2>("points", "points: [[x, y], ...]")?;
-    if rects.is_empty() && circles.is_empty() && polylines.is_empty() && arcs.is_empty() && points.is_empty()
+    let ellipses = a.number_lists::<5>("ellipses", "ellipses: [[x, y, r1, r2, angle], ...]")?;
+    let partial_ellipses = a.number_lists::<9>(
+        "partial_ellipses",
+        "partial_ellipses: [[x, y, r1, r2, angle, x_start, y_start, x_end, y_end], ...]",
+    )?;
+    if rects.is_empty()
+        && circles.is_empty()
+        && polylines.is_empty()
+        && arcs.is_empty()
+        && ellipses.is_empty()
+        && partial_ellipses.is_empty()
+        && points.is_empty()
     {
-        return Err("give rects, circles, polylines, arcs or points".into());
+        return Err("give rects, circles, polylines, arcs, ellipses, partial_ellipses or points".into());
     }
-    Ok(SketchSpec { plane, rects, circles, polylines, arcs, points })
+    Ok(SketchSpec { plane, rects, circles, polylines, arcs, ellipses, partial_ellipses, points })
 }
 
 /// A tool's arguments, with readers that say what was wrong.
@@ -926,7 +937,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "add_sketch",
         title: "Add sketch",
-        description: "Add a sketch of rectangles, circles, polylines and three-point arcs, and return its feature id. Lines and arcs whose ends meet are joined, so a polyline whose last point repeats its first, or polylines and arcs end to end, make a closed profile. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on a boss extrusion's end (or start) face instead, with the sketch's x along world X (world Y on a face normal to X) and its origin at the world origin projected onto the face. A cut's faces cannot be sketched on; use the boss's face or a plane.",
+        description: "Add a sketch of rectangles, circles, polylines, three-point arcs, ellipses and partial ellipses, and return its feature id. Lines and arcs whose ends meet are joined, so a polyline whose last point repeats its first, or polylines and arcs end to end, make a closed profile. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on a boss extrusion's end (or start) face instead, with the sketch's x along world X (world Y on a face normal to X) and its origin at the world origin projected onto the face. A cut's faces cannot be sketched on; use the boss's face or a plane.",
         properties: r#"{
             "plane": { "type": "string", "enum": ["front", "top", "right"], "description": "Default front" },
             "on_feature": { "type": "integer", "description": "Sketch on this extrusion's face instead of a plane" },
@@ -935,6 +946,8 @@ const TOOLS: &[Tool] = &[
             "circles": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 3, "maxItems": 3 }, "description": "Circles: [[x, y, radius], ...]" },
             "polylines": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 } }, "description": "Chains of lines: [[[x, y], [x, y], ...], ...]; repeat the first point to close one" },
             "arcs": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 6, "maxItems": 6 }, "description": "Arcs through three points: [[x_start, y_start, x_on, y_on, x_end, y_end], ...]" },
+            "ellipses": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 5, "maxItems": 5 }, "description": "Ellipses: [[x, y, r1, r2, angle], ...]: centre, the radius along the first axis, the radius square to it, and the first axis's angle from x in degrees" },
+            "partial_ellipses": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 9, "maxItems": 9 }, "description": "Partial ellipses: [[x, y, r1, r2, angle, x_start, y_start, x_end, y_end], ...]: an ellipse as in ellipses, running counter-clockwise from the point in the direction of (x_start, y_start) from the centre to the point in the direction of (x_end, y_end)" },
             "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "Free points, such as where add_hole puts holes: [[x, y], ...]" }
         }"#,
         required: &[],

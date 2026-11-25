@@ -373,6 +373,10 @@ pub enum Icon {
     CenterArcSlot,
     Polygon,
     PerimeterCircle,
+    /// An ellipse with its two axes.
+    Ellipse,
+    /// Part of an ellipse with its centre.
+    PartialEllipse,
     TangentArc,
     Arc3,
     SketchFillet,
@@ -864,6 +868,25 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
                 let a = deg.to_radians();
                 dot(8.0 + 5.8 * a.cos(), 8.0 - 5.8 * a.sin(), accent);
             }
+        }
+        Icon::Ellipse => {
+            ellipse((8.0, 8.0), 6.5, 4.0, ln);
+            dashed((1.5, 8.0), (14.5, 8.0));
+            dot(8.0, 8.0, accent);
+            dot(14.5, 8.0, accent);
+            dot(8.0, 4.0, accent);
+        }
+        Icon::PartialEllipse => {
+            let v: Vec<Pos2> = (0..=20)
+                .map(|i| {
+                    let a = std::f32::consts::PI * i as f32 / 20.0;
+                    p(8.0 + 6.5 * a.cos(), 10.0 - 5.0 * a.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(v, ln));
+            dot(8.0, 10.0, accent);
+            dot(14.5, 10.0, accent);
+            dot(1.5, 10.0, accent);
         }
         Icon::TangentArc => {
             line((1.5, 12.0), (8.0, 12.0), ln);

@@ -122,6 +122,22 @@ fn handshake_and_tool_list() {
     }
 }
 
+/// Issue #69: an ellipse sketched through MCP extrudes to its exact volume.
+#[test]
+fn extrudes_an_ellipse() {
+    let mut s = server();
+    call(&mut s, "new_part", json!({}));
+    let sk = call(&mut s, "add_sketch", json!({ "ellipses": [[0, 0, 30, 20, 90]] }));
+    call(&mut s, "add_extrude", json!({ "sketch": sk["sketch"], "depth": 10 }));
+    let m = call(&mut s, "mass_properties", json!({}));
+    let want = 6000.0 * std::f64::consts::PI;
+    let v = m["volume"].as_f64().unwrap();
+    assert!((v - want).abs() < 2e-3 * want, "{m}");
+    // Turned by 90°, the first axis runs along y.
+    assert!((m["size"][0].as_f64().unwrap() - 40.0).abs() < 0.05, "{m}");
+    assert!((m["size"][1].as_f64().unwrap() - 60.0).abs() < 0.05, "{m}");
+}
+
 #[test]
 fn extrudes_a_10_by_20_by_30_block() {
     let mut s = server();
@@ -313,6 +329,10 @@ fn mistakes_are_tool_errors_and_protocol_errors() {
     assert!(e.contains("rects"), "{e}");
     let e = call_err(&mut s, "add_sketch", json!({ "circles": [[0, 0, -1]] }));
     assert!(e.contains("radius"), "{e}");
+    let e = call_err(&mut s, "add_sketch", json!({ "ellipses": [[0, 0, 5, -1, 0]] }));
+    assert!(e.contains("two positive radii"), "{e}");
+    let e = call_err(&mut s, "add_sketch", json!({ "partial_ellipses": [[0, 0, 5, 3, 0]] }));
+    assert!(e.contains("x_start, y_start, x_end, y_end"), "{e}");
     let e = call_err(&mut s, "add_extrude", json!({ "sketch": 42, "depth": 10 }));
     assert!(e.contains("not a sketch"), "{e}");
     let e = call_err(&mut s, "add_extrude", json!({ "sketch": 1, "depth": [1] }));

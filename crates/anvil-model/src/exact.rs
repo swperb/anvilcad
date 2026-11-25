@@ -39,6 +39,14 @@ pub(crate) fn exact_loop(l: &Loop2) -> brep::Loop2 {
             Seg2::Arc { center, radius, start, sweep, .. } => {
                 brep::Segment::Arc { center: DVec2::new(center.x, center.y), radius, start, sweep }
             }
+            Seg2::Ellipse { center, a, b, rotation, start, sweep, .. } => brep::Segment::Ellipse {
+                center: DVec2::new(center.x, center.y),
+                a,
+                b,
+                rotation,
+                start,
+                sweep,
+            },
         });
         tags.push(s.source());
     }

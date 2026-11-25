@@ -126,6 +126,20 @@ Base C is `https://help.solidworks.com/2024/English/api/swconst/`, with pages
 | S65 | `swUserPreferenceToggle_e` (`swSketchAutomaticRelations`, `swSketchInference`) | C | 2024 |
 | N1 | Regular polygon: circumradius, apothem, side and area | `https://en.wikipedia.org/wiki/Regular_polygon` | not Dassault |
 | N2 | Stadium: area and perimeter | `https://en.wikipedia.org/wiki/Stadium_(geometry)` | not Dassault |
+| S66 | Ellipse tools, partial ellipses, changing ellipse properties | A + `c_ellipses.htm`, `t_Sketching_Ellipses.htm`, `t_Sketching_Partial_Ellipses.htm`, `t_Changing_Ellipse_Properties.htm` | 2025 |
+| S67 | Ellipse PropertyManager | A + `HIDD_DVE_SKETCH_ELLIPSE.htm` | 2025 |
+| S68 | `ISketchManager::CreateEllipse`, `CreateEllipticalArc` (parameters and `Direction`) | B + member pages | 2024 |
+| S69 | `ISketchEllipse` members (`GetCenterPoint2`, `GetMajorPoint2`, `GetMinorPoint2`, `GetStartPoint2`, `GetEndPoint2`, `GetRotationDir`) | B + `SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.ISketchEllipse_members.html` | 2024 |
+| S70 | Splines overview; B-splines | A + `c_Splines.htm`, `c_b_splines.htm` | 2025 |
+| S71 | Spline PropertyManager | A + `HIDD_DVE_SKETCH_SPLINE.htm` | 2025 |
+| S72 | Creating multiple point splines; two-point splines with tangency | A + `t_Creating_Multiple_Point_Splines.htm`, `t_Creating_Two_Point_Splines_with_Tangency.htm` | 2025 |
+| S73 | Relations with splines; curvature continuous splines | A + `c_Relations_with_Splines.htm` | 2025 |
+| S74 | Spline handles, spline points, tangency and curvature control | A + `c_Spline_Handles.htm`, `c_Spline_Points.htm`, `t_Adding_Tangency_Control_to_Splines.htm`, `t_Adding_Curvature_Control_to_Splines.htm` | 2025 |
+| S75 | Control polygons | A + `c_Control_Polygons.htm` | 2025 |
+| S76 | Style splines; sketching a style spline; Style Spline PropertyManager | A + `c_about_style_splines.htm`, `t_sketch_style_spline.htm`, `r_style_spline_pm.htm` | 2025 |
+| S77 | Spline tools; fixed spline length | A + `c_spline_tools.htm`, `t_set_fixed_length_for_spline.htm` | 2025 |
+| S78 | `ISketchManager::CreateSpline2`; `ISketchSpline` members | B + member pages | 2024 |
+| N3 | Ellipse: area and centroid of an elliptic segment | `https://en.wikipedia.org/wiki/Ellipse` | not Dassault |
 
 ## Common behaviour
 
@@ -545,15 +559,222 @@ Base C is `https://help.solidworks.com/2024/English/api/swconst/`, with pages
   relation, say `TangentCircles { a, b, inside }`, does this; the side is chosen from the
   geometry when the relation is made, so the solver cannot jump to the other one.
 
+## Ellipses
+
+Studied on 2026-11-25 for issue #69 from S43 and S66–S69, retrieved and handled as in "How
+this was studied" (same retrieval script, `python3 -I`, text paraphrased). REA
+(`rea-agents` 6.10.1) was set up and its method followed: Observed, Inferred, Decision and
+Unknown are kept apart and every observation cites its source. REA's analysis tools were
+not run, for the reason given above: the inputs are prose pages.
+
+### Tools and picks
+
+- **Observed (S66).** Ellipse: click the centre, drag and click to set the major axis,
+  drag and click again to set the minor axis.
+- **Observed (S66).** Partial Ellipse: click the centre, click to define one axis, click
+  to define the second axis; the outline stays shown as a guide, and the pointer is then
+  dragged round it to set the extent and clicked to finish. The help calls this "similar
+  to creating a centerpoint arc".
+- **Inferred (S66).** For a partial ellipse the help says "one axis" and "the second
+  axis", not major and minor, so the first axis drawn need not be the longer one.
+- **Unknown.** Whether the click that sets the second axis also places the partial
+  ellipse's start point, or the start is the point where the pointer begins its drag
+  round the outline. The help's wording allows both; its video was not used.
+- **Decision.** AnvilCAD's Ellipse tool takes three clicks: the centre C, the end of the
+  first axis P1, and a third click Q. The second radius is Q's distance from the line
+  C–P1, and the second axis end P2 is C plus that radius square to the first axis, on Q's
+  side. The first axis need not be the longer for either tool. The Partial Ellipse tool
+  takes the same three clicks and then a fourth: the start is the point of the ellipse in
+  the direction of Q from C, and the end is the point of the ellipse in the direction of
+  the fourth click. The direction follows the pointer's sweep round the centre, as for the
+  centerpoint arc (below): a clockwise sweep swaps start and end so the stored arc still
+  runs counter-clockwise. A pick that leaves a zero radius, or a fourth click on the start,
+  makes nothing and the tool waits.
+
+### Geometry and stored data
+
+- **Observed (S68).** `CreateEllipse` takes the centre, a point on the ellipse on its
+  major axis and a point on the ellipse on its minor axis. `CreateEllipticalArc` takes the
+  same three and a start and an end point, with `Direction` +1 for counter-clockwise from
+  start to end and −1 for clockwise.
+- **Observed (S69).** An ellipse segment exposes its centre, major point, minor point,
+  start point, end point and rotation direction as sketch points.
+- **Observed (S67).** Its parameters are the centre's x and y, Radius 1 and Radius 2, and
+  for a partial ellipse its start and end coordinates and its angle.
+- **Inferred (S67, S69).** The ellipse is held by sketch points: the centre and one point
+  on each axis. Its two radii are the distances from the centre to those points; its
+  rotation is the direction of the first.
+- **Decision.** `Geom::Ellipse { c, axis1, axis2 }` is the whole ellipse with centre `c`,
+  and `axis1`, `axis2` the ends of its two semi-axes, both on the ellipse.
+  `Geom::EllipseArc { c, axis1, axis2, a, b }` is the part running counter-clockwise from
+  `a` to `b`. The solver keeps `axis2 − c` square to `axis1 − c`, and keeps `a` and `b` on
+  the ellipse. A whole ellipse has 5 degrees of freedom and a partial one 7. The kernel's
+  elliptic segment is `center + u r1 cos t + v r2 sin t` with u the unit vector towards
+  `axis1` and v square to it (counter-clockwise), so a sketch ellipse maps to it with
+  rotation angle(u), `a` = r1, `b` = r2. If the second axis point lies clockwise of the
+  first (a mirrored ellipse) the same curve results, since v is always u turned +90°.
+- **Observed (S67).** "Add construction lines" turns the major and minor axes into
+  construction lines. **Decision.** Not in this slice; the axis end points are drawn and
+  can be dimensioned and related without the lines.
+
+### Relations
+
+- **Observed (S43).** Tangent applies to an ellipse and a line or arc; Coincident to a
+  point and an ellipse (the point lies on it); Symmetric to two ellipses about a
+  centerline; Fix to any entity, leaving an elliptical segment's end points free to move
+  round the full ellipse. A relation to an elliptical segment is to its full ellipse.
+- **Observed (S67).** Add Relations offers only the relations possible for the selected
+  entity.
+- **Decision.** In this slice:
+  - `PointOnCircle` also puts a point on an ellipse or partial ellipse (its full
+    ellipse). Its residual is (√((x/r1)² + (y/r2)²) − 1)·√(r1 r2), in the ellipse's own
+    axes: zero on the curve, the plain radial distance for a circle.
+  - `Tangent` between a line and an ellipse: at a shared end point, the line runs along
+    the ellipse's tangent there; with no shared point, the line's distance from the centre
+    equals the ellipse's support distance √(r1²(n·u)² + r2²(n·v)²) for the line's unit
+    normal n.
+  - `TangentCircles` between an ellipse and a circle, arc or ellipse needs a shared end
+    point (a partial ellipse's end); the curves' normals there are parallel. Without a
+    shared point the tool refuses with a plain message, since two ellipses touching away
+    from their ends has no closed form the solver can use well.
+  - `Concentric` and `Coincident` use the centre point; `Fix` on an ellipse fixes its
+    centre and both axis points, leaving a partial ellipse's ends free, as S43 says.
+  - Symmetric ellipses, Equal ellipses and the construction axes are left for later.
+
+### Dimensions
+
+- **Observed (S67).** Radius 1 and Radius 2 are the ellipse's sizes.
+- **Unknown.** How Smart Dimension treats a click on an ellipse itself; the dimension
+  help (see `sketch-dimension.md`) does not cover ellipses.
+- **Decision.** A dimension on an ellipse is the distance from its centre to one axis
+  point: picking the ellipse with the Dimension tool dimensions the semi-axis whose end is
+  nearer the pick. Picking the centre and an axis point gives the same dimension.
+
+### Editing tools
+
+- **Decision.** Move, Copy, Rotate, Scale, Mirror, Linear and Circular Pattern move the
+  ellipse's points and keep it; Mirror swaps a partial ellipse's ends so it stays
+  counter-clockwise. Trim, Extend, Split, Sketch Fillet, Sketch Chamfer and Offset refuse
+  an ellipse with a plain message in this slice: an offset of an ellipse is not an
+  ellipse, and trimming needs ellipse intersections, which come later.
+
+### Features and export
+
+- **Inferred (S66, N3).** An ellipse with radii r1 and r2 encloses π r1 r2; its centroid is
+  its centre.
+- **Decision.** Ellipses reach the exact kernel's elliptic segments (`anvil-brep`
+  `Segment::Ellipse`), so extrusions of ellipses are exact, and STEP export writes
+  `ELLIPSE` curves. Where the exact kernel does not yet take an ellipse (revolve, loft,
+  drafted extrude; issue #143) the feature is built on the faceted kernel, as for any
+  other feature the exact kernel refuses, and the part says it is no longer exact. Shell
+  and thin features, which offset the profile, refuse an ellipse with a plain message.
+
+### Testable statements
+
+28. An ellipse with centre (0, 0), first axis end (30, 0) and third click (12, 20) has
+    second axis end (0, 20), radii 30 and 20, area 600π = 1884.956 and 5 DOF.
+29. Extruded 10, that ellipse gives a body of volume 6000π = 18849.556 with centroid
+    (0, 0, 5) and an elliptic side face whose STEP export holds an `ELLIPSE` with semi-axes
+    30 and 20.
+30. An ellipse with centre (5, 5), first axis end at 45° and radii 20 and 10 keeps its
+    area 200π when rotated, and its radii stay 20 and 10 when its centre is dragged.
+31. A partial ellipse with centre (0, 0), radii 30 and 20, running counter-clockwise from
+    (30, 0) to (−30, 0), closed by the line between them, encloses 300π = 942.478 with its
+    centroid at (0, 4·20/(3π)) = (0, 8.488).
+32. A point with `PointOnCircle` on that ellipse, dragged to (0, 50), settles at (0, 20)
+    (or wherever the solver's least move puts it, always on the curve).
+33. A horizontal line made `Tangent` to an ellipse of radii 30 and 20 about the origin,
+    first axis along x, settles at y = 20 (or −20, on the side it started); a vertical one
+    at x = ±30.
+
+## Splines
+
+Studied on 2026-11-25 for issue #69 from S70–S78, in the same way. **Not implemented
+yet** (issue #207): the exact kernel has no spline segments in profiles (issue #143), so
+the sketcher side waits for it. This section is the specification that work follows.
+
+### Two kinds
+
+- **Observed (S70).** There are two kinds: B-splines, defined by through points
+  ("spline points") with handles, and style splines, single-span Bézier curves defined by
+  control vertices that form a control polygon (hull). A B-spline has one span between
+  each pair of through points; a style spline has no through points and one span.
+- **Observed (S70).** Style splines are recommended where curvature continuity matters;
+  they can be inferred tangent or equal-curvature to neighbours, dimensioned on their
+  polygon's sides, mirrored and made self-symmetric.
+- **Observed (S76).** A style spline's curve type is a Bézier curve or a B-spline of degree
+  3, 5 or 7; inserting a control vertex raises a Bézier curve's degree. Rational style
+  splines take a weight per control vertex.
+- **Decision.** AnvilCAD's names: **Spline** (through points) and **Control Point Spline**
+  (control vertices). Both are stored as non-rational B-splines in the sketch: a through-
+  point spline as a cubic interpolating its points, a control-point spline as a clamped
+  B-spline of its vertices (degree 3 by default, the Bézier case when it has degree + 1
+  vertices). Rational weights are left out.
+
+### Picks
+
+- **Observed (S72).** Spline: click to place the first point, click each further point,
+  and double-click to finish. A spline has two or more points.
+- **Observed (S76).** Style spline: each click adds a control vertex; Alt with the final
+  double-click adds a tangent relation at the last vertex. Snapping the second vertex to an
+  inference line from a neighbouring entity makes the spline tangent there, and snapping
+  the third makes it equal-curvature there.
+- **Decision.** Both tools add points on each click and finish on a double-click or
+  Enter; Escape abandons the spline. A spline started or ended at the end of a line or arc
+  shares that point (Coincident, by sharing).
+
+### Handles, tangency and curvature
+
+- **Observed (S71, S74).** At each through point a handle sets the tangent direction and
+  two tangent weights (one each side); dimensions can go to handles. A curvature control
+  sets the radius of curvature at a point. "Proportional" keeps the shape when an end is
+  dragged.
+- **Observed (S73).** Relations available on a spline's end points include Coincident,
+  Horizontal, Vertical, Midpoint, Fix and Merge; on its end handles Tangent and Equal
+  Curvature; between handles Parallel, Horizontal and Vertical.
+- **Observed (S43, S73).** Equal Curvature between two splines makes the radius of
+  curvature and its direction match at their shared end (curvature continuity). It needs
+  the two splines to share an end point. Torsion Continuity adds an equal rate of change
+  of curvature.
+- **Decision.** For a control-point spline, tangency at an end holds the end's first two
+  control points on the line of the tangent, and equal curvature at a shared end is
+  expressed on the first three control points of each, which is linear-plus-one-equation
+  in the vertices and solves well. For a through-point spline the end tangent direction is
+  a handle the user can relate; its weight is the derivative's length. Torsion continuity
+  is left out.
+
+### Dimensions and errors
+
+- **Observed (S77).** A spline's length can be dimensioned (a fixed length that holds
+  while its ends or shape change).
+- **Observed (S43).** A spline end can be tangent to a line or arc.
+- **Decision.** A spline whose points coincide, or a control-point spline with fewer than
+  degree + 1 vertices, is not created.
+
+### Features and export (when implemented)
+
+- **Decision.** A closed profile containing a spline extrudes to a body with a B-spline
+  side face (a linear extrusion of the curve); STEP export writes
+  `B_SPLINE_CURVE_WITH_KNOTS`. Revolve, sweep and loft follow the kernel as it gains them
+  (#143).
+
+### API names (S78)
+
+- `CreateSpline2` (superseded by `CreateSpline3`) takes a flat array of x, y, z values, at
+  least two points, and a flag for natural ends. `ISketchSpline` has `GetPoints2`,
+  `GetPointCount`, `IsStyleSpline`, `CurveType`, `CurveDegree`, `IsRationalCurve`,
+  `GetControlVertexWeights`, `GetSplineHandles` and `InsertPoint`.
+
+### Unknowns
+
+1. The default end conditions of a through-point spline (natural, or "simulated natural"
+   as the API's flag says) and its parametrisation (chord length or other).
+2. What "Maintain Internal Continuity" and "Relax Spline" compute.
+3. How tangent weights map onto derivative lengths.
+
 ## Other entities (recommend deferring)
 
-- **Ellipse.** **Observed (S35, S58).** Click the centre, click to set the major axis,
-  click to set the minor axis. A partial ellipse adds a start and an end, like a centerpoint
-  arc; the API's elliptical arc runs counter-clockwise. The panel shows the centre, two
-  radii, and for a partial ellipse its ends and angle; "Add construction lines" turns the
-  axes into construction lines. An ellipse with radii a and b has area πab.
-  **Decision.** Defer. It needs a new `Geom` kind, solver support and elliptical edges in
-  the kernel's profiles.
+- **Ellipse.** Specified in "Ellipses" below (S66–S69) and implemented.
 - **Parabola.** **Observed (S36, S58).** Click the focus, drag to size it, then click and
   drag along it to set its extent. Its parameters are start, end, focus (centre) and apex.
   **Decision.** Defer.
@@ -563,9 +784,7 @@ Base C is `https://help.solidworks.com/2024/English/api/swconst/`, with pages
   tangency" makes it tangent at both ends. **Observed (S58).** The API's `CreateConic`
   takes a focus, an apex and two end points, which does not match the help's description;
   the difference is not explained. **Decision.** Defer.
-- **Spline.** **Observed (S38).** SOLIDWORKS has B-splines (through points, with tangency
-  handles and curvature controls) and style splines (single-span Bézier curves defined by
-  control vertices). **Decision.** Defer; this is a large feature of its own.
+- **Spline.** Specified in "Splines" below (S70–S78); not implemented yet.
 - **Text.** **Observed (S39, S58).** Text is placed along selected curves or edges, or
   horizontally from the origin, with a font, alignment, flips, width factor and spacing,
   and can then be extruded or cut. **Decision.** Defer; it needs a font engine and

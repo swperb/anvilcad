@@ -1,5 +1,6 @@
 //! Turns sketch geometry into closed kernel profiles (outer loops with holes).
 
+use crate::ellipse::Ellipse2;
 use crate::sketch::{Constraint, Geom, PointId, Sketch};
 use anvil_kernel::profile::{point_in_polygon, Loop2, Profile, Seg2};
 use anvil_kernel::Vec2;
@@ -91,7 +92,24 @@ impl Sketch {
                         edges.push((ei, roots[a], roots[b]));
                     }
                 }
-                Geom::Arc { a, b, .. } => edges.push((ei, roots[a], roots[b])),
+                Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => {
+                    edges.push((ei, roots[a], roots[b]))
+                }
+                Geom::Ellipse { .. } => {
+                    if let Some((el, _, _)) = crate::ellipse::of(self, ei) {
+                        if el.r1 > MERGE_TOL && el.r2 > MERGE_TOL {
+                            loops.push(Loop2::new(vec![Seg2::Ellipse {
+                                center: el.c,
+                                a: el.r1,
+                                b: el.r2,
+                                rotation: el.rotation,
+                                start: 0.0,
+                                sweep: TAU,
+                                source: ei as u32,
+                            }]));
+                        }
+                    }
+                }
             }
         }
 
@@ -138,6 +156,31 @@ impl Sketch {
         Ok(loops)
     }
 
+    /// The boundary segment entity `ei` describes, running from its first end to its
+    /// second (counter-clockwise for arcs and partial ellipses), or a whole loop for a
+    /// circle or ellipse. `None` for a missing entity.
+    pub fn segment_of(&self, ei: usize) -> Option<Seg2> {
+        let src = ei as u32;
+        Some(match self.entities.get(ei)?.geom {
+            Geom::Circle { c, r } => {
+                Seg2::Arc { center: self.pos(c), radius: r, start: 0.0, sweep: TAU, source: src }
+            }
+            Geom::Ellipse { c, axis1, axis2 } => {
+                let el = Ellipse2::from_points(self.pos(c), self.pos(axis1), self.pos(axis2));
+                Seg2::Ellipse {
+                    center: el.c,
+                    a: el.r1,
+                    b: el.r2,
+                    rotation: el.rotation,
+                    start: 0.0,
+                    sweep: TAU,
+                    source: src,
+                }
+            }
+            _ => self.segment(ei, true),
+        })
+    }
+
     fn segment(&self, ei: usize, forward: bool) -> Seg2 {
         let seg = match self.entities[ei].geom {
             Geom::Line { a, b } => Seg2::Line { a: self.pos(a), b: self.pos(b), source: ei as u32 },
@@ -150,7 +193,23 @@ impl Sketch {
                 }
                 Seg2::Arc { center: cc, radius: pa.distance(cc), start, sweep, source: ei as u32 }
             }
-            Geom::Circle { .. } => unreachable!("circles are handled as whole loops"),
+            Geom::EllipseArc { c, axis1, axis2, a, b } => {
+                let el = Ellipse2::from_points(self.pos(c), self.pos(axis1), self.pos(axis2));
+                let start = el.param(self.pos(a));
+                let sweep = crate::sketch::arc_sweep(start, el.param(self.pos(b)));
+                Seg2::Ellipse {
+                    center: el.c,
+                    a: el.r1,
+                    b: el.r2,
+                    rotation: el.rotation,
+                    start,
+                    sweep,
+                    source: ei as u32,
+                }
+            }
+            Geom::Circle { .. } | Geom::Ellipse { .. } => {
+                unreachable!("circles and ellipses are handled as whole loops")
+            }
         };
         if forward {
             seg

@@ -1017,6 +1017,24 @@ impl Host for AppHost<'_> {
                 )
             })?;
         }
+        for e in &spec.ellipses {
+            let c = anvil_kernel::v2(e[0], e[1]);
+            sf.sketch.add_ellipse_sized(c, e[2], e[3], e[4].to_radians()).map_err(|_| {
+                format!(
+                    "anvil.sketch: the ellipse {{{}, {}, {}, {}, {}}} needs two positive radii",
+                    e[0], e[1], e[2], e[3], e[4]
+                )
+            })?;
+        }
+        for e in &spec.partial_ellipses {
+            let v = |i: usize| anvil_kernel::v2(e[i], e[i + 1]);
+            sf.sketch.add_elliptic_arc(v(0), e[2], e[3], e[4].to_radians(), v(5), v(7)).map_err(|_| {
+                format!(
+                    "anvil.sketch: the partial ellipse at {{{}, {}}} needs two positive radii and a start and end in different directions from its centre",
+                    e[0], e[1]
+                )
+            })?;
+        }
         join_coincident_ends(&mut sf.sketch);
         // Free points go in after the joining, so a point that lands on a line's end stays free.
         for p in &spec.points {
@@ -1613,12 +1631,13 @@ fn point_segment_distance(p: anvil_kernel::Vec3, s: [anvil_kernel::Vec3; 2]) -> 
 /// share their ends and close into profiles. Arc and circle centres are left alone.
 fn join_coincident_ends(sk: &mut anvil_sketch::Sketch) {
     loop {
+        // Centres and an ellipse's axis points are not ends, and stay apart.
         let centres: Vec<anvil_sketch::PointId> = sk
             .entities
             .iter()
-            .filter_map(|e| match e.geom {
-                anvil_sketch::Geom::Arc { c, .. } | anvil_sketch::Geom::Circle { c, .. } => Some(c),
-                _ => None,
+            .flat_map(|e| {
+                let ends = e.ends().unwrap_or([usize::MAX; 2]);
+                e.points().into_iter().filter(move |p| !ends.contains(p))
             })
             .collect();
         let ends: Vec<anvil_sketch::PointId> =

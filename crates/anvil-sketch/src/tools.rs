@@ -87,21 +87,21 @@ struct Cut {
 
 fn ends_of(g: Geom) -> Option<(PointId, PointId)> {
     match g {
-        Geom::Line { a, b } | Geom::Arc { a, b, .. } => Some((a, b)),
-        Geom::Circle { .. } => None,
+        Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => Some((a, b)),
+        Geom::Circle { .. } | Geom::Ellipse { .. } => None,
     }
 }
 
 fn set_end(g: &mut Geom, old: PointId, new: PointId) {
     match g {
-        Geom::Line { a, b } | Geom::Arc { a, b, .. } => {
+        Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => {
             if *a == old {
                 *a = new;
             } else if *b == old {
                 *b = new;
             }
         }
-        Geom::Circle { .. } => {}
+        Geom::Circle { .. } | Geom::Ellipse { .. } => {}
     }
 }
 
@@ -123,7 +123,14 @@ impl Sketch {
     }
 
     pub(crate) fn curve_of(&self, e: EntityId) -> Result<Curve2, SketchError> {
-        Curve2::of(self, e).ok_or(SketchError::Missing)
+        match self.entities.get(e) {
+            None => Err(SketchError::Missing),
+            // sketch-entities.md, "Ellipses", "Editing tools".
+            Some(en) if en.is_ellipse() => {
+                Err(SketchError::Unsupported("this tool does not work on ellipses yet"))
+            }
+            Some(_) => Curve2::of(self, e).ok_or(SketchError::Missing),
+        }
     }
 
     /// The relation that holds point `p` on entity `e`: on its infinite line or full

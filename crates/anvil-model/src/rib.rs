@@ -126,6 +126,9 @@ impl Document {
                 Seg2::Arc { center, radius, start, sweep, .. } => {
                     center + Vec2::from_angle(start + 0.5 * sweep) * radius
                 }
+                Seg2::Ellipse { center, a, b, rotation, start, sweep, .. } => {
+                    anvil_kernel::profile::ellipse_point(center, a, b, rotation, start + 0.5 * sweep)
+                }
             };
             let (segs, closed) = if chain.closed {
                 (chain.segs.clone(), true)
@@ -167,6 +170,11 @@ impl Document {
                         Seg2::Line { a, b, .. } => (b - a).normalized(),
                         Seg2::Arc { start, sweep, .. } => {
                             Vec2::from_angle(start + 0.5 * sweep).perp() * sweep.signum()
+                        }
+                        Seg2::Ellipse { a, b, rotation, start, sweep, .. } => {
+                            (anvil_kernel::profile::ellipse_derivative(a, b, rotation, start + 0.5 * sweep)
+                                * sweep.signum())
+                            .normalized()
                         }
                     };
                     let p2 = probe2 + tangent.perp() * side;

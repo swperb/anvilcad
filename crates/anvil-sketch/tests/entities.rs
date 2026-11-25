@@ -26,14 +26,14 @@ fn area(s: &Sketch) -> f64 {
 fn ends(s: &Sketch, e: EntityId) -> (Vec2, Vec2) {
     match s.entities[e].geom {
         Geom::Line { a, b } | Geom::Arc { a, b, .. } => (s.pos(a), s.pos(b)),
-        Geom::Circle { .. } => panic!("a circle has no ends"),
+        _ => panic!("a circle has no ends"),
     }
 }
 
 fn centre(s: &Sketch, e: EntityId) -> Vec2 {
     match s.entities[e].geom {
         Geom::Arc { c, .. } | Geom::Circle { c, .. } => s.pos(c),
-        Geom::Line { .. } => panic!("a line has no centre"),
+        _ => panic!("a line has no centre"),
     }
 }
 
@@ -199,6 +199,7 @@ fn s7_straight_slot() {
         per += match *seg {
             anvil_kernel::profile::Seg2::Line { a, b, .. } => a.distance(b),
             anvil_kernel::profile::Seg2::Arc { radius, sweep, .. } => radius * sweep.abs(),
+            anvil_kernel::profile::Seg2::Ellipse { .. } => panic!("no ellipses in a slot"),
         };
     }
     assert!(near(per, 91.4159, 1e-4), "{per}");

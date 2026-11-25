@@ -1,7 +1,7 @@
 //! Interactive sketch editing: tools, snapping, selection, dragging, dimensions and the
 //! on-screen sketch overlay.
 //!
-//! The entity tools (rectangles, slots, polygons, arcs, circles) follow
+//! The entity tools (rectangles, slots, polygons, arcs, circles, ellipses) follow
 //! `docs/re/sketch-entities.md` and the editing tools (fillet, chamfer, trim, extend,
 //! split, offset, mirror, patterns, move, rotate, scale) follow `docs/re/sketch-tools.md`.
 //! The geometry and relations they add come from `anvil_sketch`; this module turns clicks
@@ -44,6 +44,8 @@ pub enum Tool {
     Polygon,
     Circle,
     PerimeterCircle,
+    Ellipse,
+    PartialEllipse,
     Arc,
     TangentArc,
     Arc3,
@@ -82,6 +84,8 @@ impl Tool {
             Tool::Polygon => "Polygon",
             Tool::Circle => "Circle",
             Tool::PerimeterCircle => "Perimeter Circle",
+            Tool::Ellipse => "Ellipse",
+            Tool::PartialEllipse => "Partial Ellipse",
             Tool::Arc => "Centerpoint Arc",
             Tool::TangentArc => "Tangent Arc",
             Tool::Arc3 => "3 Point Arc",
@@ -114,6 +118,7 @@ impl Tool {
             Tool::ArcSlot3 => "Arc Slot",
             Tool::CenterArcSlot => "Center Arc Slot",
             Tool::PerimeterCircle => "Perim. Circle",
+            Tool::PartialEllipse => "Part. Ellipse",
             Tool::Arc => "Arc",
             Tool::Arc3 => "3 Pt Arc",
             Tool::Fillet => "Fillet",
@@ -134,8 +139,9 @@ impl Tool {
             | Tool::StraightSlot
             | Tool::CenterSlot
             | Tool::PerimeterCircle
+            | Tool::Ellipse
             | Tool::Arc3 => 3,
-            Tool::ArcSlot3 | Tool::CenterArcSlot => 4,
+            Tool::ArcSlot3 | Tool::CenterArcSlot | Tool::PartialEllipse => 4,
             _ => return None,
         })
     }
@@ -183,6 +189,11 @@ impl Tool {
             (Tool::PerimeterCircle, _) => {
                 "Click three points on the circle (right-click after two for a diameter)."
             }
+            (Tool::Ellipse | Tool::PartialEllipse, 0) => "Click the centre.",
+            (Tool::Ellipse | Tool::PartialEllipse, 1) => "Click the end of the first axis.",
+            (Tool::Ellipse, _) => "Click to set the second axis.",
+            (Tool::PartialEllipse, 2) => "Click to set the second axis and the start.",
+            (Tool::PartialEllipse, _) => "Move round the ellipse and click the end.",
             (Tool::Arc3, 0) => "Click the start.",
             (Tool::Arc3, 1) => "Click the end.",
             (Tool::Arc3, _) => "Click a point on the arc.",
@@ -204,7 +215,7 @@ impl Tool {
 
 /// The toolbar families: one button per family shows the last tool used in it
 /// (sketch-entities.md, "Tool families and the property panel", Decision).
-pub const DRAW_FAMILIES: [&[Tool]; 7] = [
+pub const DRAW_FAMILIES: [&[Tool]; 8] = [
     &[Tool::Line, Tool::Centerline],
     &[
         Tool::Rectangle,
@@ -217,6 +228,7 @@ pub const DRAW_FAMILIES: [&[Tool]; 7] = [
     &[Tool::Polygon],
     &[Tool::Circle, Tool::PerimeterCircle],
     &[Tool::Arc, Tool::TangentArc, Tool::Arc3],
+    &[Tool::Ellipse, Tool::PartialEllipse],
     &[Tool::Point],
 ];
 
@@ -505,6 +517,10 @@ impl SketchSession {
                 if let Some(c) = Curve2::of(sk, e) {
                     return Click { p: nearest_on(&c, p), snap: None, on: Some(e), mid: None };
                 }
+                if let Some((el, t0, sweep)) = anvil_sketch::ellipse::of(sk, e) {
+                    let q = el.at(el.nearest_param(p, t0, sweep));
+                    return Click { p: q, snap: None, on: Some(e), mid: None };
+                }
             }
         }
         Click::at(p)
@@ -620,6 +636,10 @@ impl SketchSession {
             (Tool::PerimeterCircle, [a, b]) => sk.add_circle_2pt(*a, *b).map(|_| None),
             (Tool::Arc3, [a, b, t]) => sk.add_3pt_arc(*a, *b, *t).map(|_| None),
             (Tool::Arc, [o, s, e]) => sk.add_centerpoint_arc(*o, *s, *e, self.swept).map(|_| None),
+            (Tool::Ellipse, [o, a, t]) => sk.add_ellipse(*o, *a, *t).map(|_| None),
+            (Tool::PartialEllipse, [o, a, t, e]) => {
+                sk.add_partial_ellipse(*o, *a, *t, *e, self.swept).map(|_| None)
+            }
             (Tool::TangentArc, [_, e]) => {
                 let (from, at) = self.tangent_from.ok_or(SketchError::Degenerate)?;
                 sk.add_tangent_arc(from, at, *e, self.tangent_zone.unwrap_or(TangentZone::Forward))
@@ -784,7 +804,12 @@ impl SketchSession {
     /// Follows the pointer between clicks: the angle swept round an arc's centre, and the
     /// tangent arc's intent zone.
     fn track_pointer(&mut self, sk: &Sketch, mouse: Vec2, radius: f64) {
-        if matches!(self.tool, Tool::Arc | Tool::CenterArcSlot) && self.pending.len() == 2 {
+        let sweeping = match self.tool {
+            Tool::Arc | Tool::CenterArcSlot => self.pending.len() == 2,
+            Tool::PartialEllipse => self.pending.len() == 3,
+            _ => false,
+        };
+        if sweeping {
             let c = self.pending[0].p;
             let a = (mouse - c).angle();
             if mouse.distance(c) > 1e-12 {
@@ -842,7 +867,12 @@ impl SketchSession {
             } else if self.pending.len() + 1 >= n {
                 modified = self.commit_shape(sf, c);
             } else {
-                if matches!(self.tool, Tool::CenterArcSlot) && self.pending.len() == 1 {
+                let sweep_starts = match self.tool {
+                    Tool::CenterArcSlot => self.pending.len() == 1,
+                    Tool::PartialEllipse => self.pending.len() == 2,
+                    _ => false,
+                };
+                if sweep_starts {
                     self.swept = 0.0;
                     self.swept_last = Some((c.p - self.pending[0].p).angle());
                 }
@@ -1357,10 +1387,12 @@ impl SketchSession {
         let mut pts = Vec::new();
         let mut lines = Vec::new();
         let mut rounds = Vec::new();
+        let mut ellipses = Vec::new();
         for s in &self.selection {
             match *s {
                 SkSel::Point(p) if p < sk.points.len() => pts.push(p),
                 SkSel::Entity(e) if e < sk.entities.len() && sk.entities[e].is_line() => lines.push(e),
+                SkSel::Entity(e) if e < sk.entities.len() && sk.entities[e].is_ellipse() => ellipses.push(e),
                 SkSel::Entity(e) if e < sk.entities.len() => rounds.push(e),
                 _ => {}
             }
@@ -1368,11 +1400,12 @@ impl SketchSession {
         let pairwise = |ids: &[usize], f: &dyn Fn(usize, usize) -> Constraint| -> Vec<Constraint> {
             ids.iter().skip(1).map(|&b| f(ids[0], b)).collect()
         };
-        let center = |e: EntityId| match sk.entities[e].geom {
-            Geom::Circle { c, .. } | Geom::Arc { c, .. } => c,
-            Geom::Line { a, .. } => a,
-        };
+        let center = |e: EntityId| sk.entities[e].center().unwrap_or(ORIGIN);
         let mut out: Vec<(&'static str, Vec<Constraint>)> = Vec::new();
+        if !ellipses.is_empty() {
+            ellipse_relations(sk, &pts, &lines, &rounds, &ellipses, &mut out);
+            return out;
+        }
         match (pts.len(), lines.len(), rounds.len()) {
             (0, 1, 0) => {
                 let l = lines[0];
@@ -1806,8 +1839,20 @@ impl SketchSession {
                 (Tool::CenterArcSlot, 3) => {
                     tmp.add_centerpoint_arc(pts[0], pts[1], pts[2], self.swept).map(|_| ())
                 }
+                // The whole outline stays as a guide while the end is chosen.
+                (Tool::PartialEllipse, 3) => tmp.add_ellipse(pts[0], pts[1], pts[2]).map(|_| ()),
                 _ => Err(SketchError::Degenerate),
             };
+            // While a partial ellipse's end is chosen, its whole outline stays as a dashed
+            // guide (sketch-entities.md, "Ellipses", S66).
+            if let (Tool::PartialEllipse, [c, a, t, _]) = (self.tool, pts.as_slice()) {
+                let mut guide = sk.clone();
+                let first = guide.entities.len();
+                if let Ok(ids) = guide.add_ellipse(*c, *a, *t) {
+                    guide.entities[ids.ellipse].construction = true;
+                    new_entities(&guide, first);
+                }
+            }
             if partial.is_ok() {
                 new_entities(&tmp, first);
             } else if pts.len() >= 2 {
@@ -1934,6 +1979,13 @@ fn entity_polyline(sk: &Sketch, e: EntityId, to: &dyn Fn(Vec2) -> Pos2) -> Vec<P
             let n = ((sweep / TAU) * 72.0).ceil().max(4.0) as usize;
             (0..=n).map(|i| to(cc + Vec2::from_angle(a0 + sweep * i as f64 / n as f64) * r)).collect()
         }
+        Geom::Ellipse { .. } | Geom::EllipseArc { .. } => match anvil_sketch::ellipse::of(sk, e) {
+            Some((el, t0, sweep)) => {
+                let n = ((sweep / TAU) * 96.0).ceil().max(6.0) as usize;
+                (0..=n).map(|i| to(el.at(t0 + sweep * i as f64 / n as f64))).collect()
+            }
+            None => Vec::new(),
+        },
     }
 }
 
@@ -2007,13 +2059,54 @@ fn auto_tangent(sk: &mut Sketch, line: EntityId, start: PointId) {
     }
 }
 
+/// The relations an ellipse takes (sketch-entities.md, "Ellipses", "Relations"): with a
+/// point, Coincident and Concentric; with a line, Tangent; with a circle, arc or another
+/// ellipse, Concentric, and Tangent where they share an end point; alone, Fix (its centre
+/// and axis points, leaving a partial ellipse's ends free).
+fn ellipse_relations(
+    sk: &Sketch,
+    pts: &[PointId],
+    lines: &[EntityId],
+    rounds: &[EntityId],
+    ellipses: &[EntityId],
+    out: &mut Vec<(&'static str, Vec<Constraint>)>,
+) {
+    let center = |e: EntityId| sk.entities[e].center().unwrap_or(ORIGIN);
+    match (pts, lines, rounds, ellipses) {
+        ([], [], [], [e]) => {
+            if let Geom::Ellipse { c, axis1, axis2 } | Geom::EllipseArc { c, axis1, axis2, .. } =
+                sk.entities[*e].geom
+            {
+                let fix = |p: PointId| {
+                    let q = sk.pos(p);
+                    Constraint::Fix { p, x: q.x, y: q.y }
+                };
+                out.push(("Fix", vec![fix(c), fix(axis1), fix(axis2)]));
+            }
+        }
+        ([p], [], [], [e]) => {
+            out.push(("Coincident", vec![Constraint::PointOnCircle { p: *p, entity: *e }]));
+            out.push(("Concentric", vec![Constraint::Coincident { p: *p, q: center(*e) }]));
+        }
+        ([], [l], [], [e]) => out.push(("Tangent", vec![Constraint::Tangent { line: *l, entity: *e }])),
+        ([], [], _, _) if rounds.len() + ellipses.len() == 2 => {
+            let (a, b) = match (rounds, ellipses) {
+                ([r], [e]) => (*r, *e),
+                ([], [e, f]) => (*e, *f),
+                _ => return,
+            };
+            if shared_end(sk, a, b).is_some() {
+                out.push(("Tangent", vec![Constraint::TangentCircles { a, b, inside: false }]));
+            }
+            out.push(("Concentric", vec![Constraint::Concentric { a, b }]));
+        }
+        _ => {}
+    }
+}
+
 /// An end point two entities share.
 fn shared_end(sk: &Sketch, e1: EntityId, e2: EntityId) -> Option<PointId> {
-    let ends = |e: EntityId| match sk.entities.get(e)?.geom {
-        Geom::Line { a, b } | Geom::Arc { a, b, .. } => Some([a, b]),
-        Geom::Circle { .. } => None,
-    };
-    let (x, y) = (ends(e1)?, ends(e2)?);
+    let (x, y) = (sk.entities.get(e1)?.ends()?, sk.entities.get(e2)?.ends()?);
     x.into_iter().find(|p| y.contains(p))
 }
 

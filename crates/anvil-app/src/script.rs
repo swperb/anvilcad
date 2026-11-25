@@ -274,6 +274,12 @@ pub struct SketchSpec {
     pub polylines: Vec<Vec<[f64; 2]>>,
     /// Arcs through three points: start x, y, a point on the arc x, y, end x, y.
     pub arcs: Vec<[f64; 6]>,
+    /// Ellipses: centre x, y, first radius, second radius, angle of the first axis in
+    /// degrees.
+    pub ellipses: Vec<[f64; 5]>,
+    /// Partial ellipses: an ellipse as above, then points in the directions of its start
+    /// and its end from the centre (x, y, x, y); it runs counter-clockwise between them.
+    pub partial_ellipses: Vec<[f64; 9]>,
     /// Free points, such as where holes go: x, y.
     pub points: Vec<[f64; 2]>,
 }
@@ -1216,6 +1222,19 @@ fn read_sketch(t: &Table) -> Result<SketchSpec, String> {
             s.arcs.push(numbers(&a.map_err(lua_err)?, "anvil.sketch arcs: {x0, y0, x_on, y_on, x1, y1}")?);
         }
     }
+    if let Some(list) = t.get::<Option<Table>>("ellipses").map_err(lua_err)? {
+        for e in list.sequence_values::<Table>() {
+            s.ellipses.push(numbers(&e.map_err(lua_err)?, "anvil.sketch ellipses: {x, y, r1, r2, angle}")?);
+        }
+    }
+    if let Some(list) = t.get::<Option<Table>>("partial_ellipses").map_err(lua_err)? {
+        for e in list.sequence_values::<Table>() {
+            s.partial_ellipses.push(numbers(
+                &e.map_err(lua_err)?,
+                "anvil.sketch partial_ellipses: {x, y, r1, r2, angle, x_start, y_start, x_end, y_end}",
+            )?);
+        }
+    }
     if let Some(points) = t.get::<Option<Table>>("points").map_err(lua_err)? {
         for p in points.sequence_values::<Table>() {
             s.points.push(numbers(&p.map_err(lua_err)?, "anvil.sketch points: {{x, y}, ...}")?);
@@ -1225,10 +1244,13 @@ fn read_sketch(t: &Table) -> Result<SketchSpec, String> {
         && s.circles.is_empty()
         && s.polylines.is_empty()
         && s.arcs.is_empty()
+        && s.ellipses.is_empty()
+        && s.partial_ellipses.is_empty()
         && s.points.is_empty()
     {
         return Err(
-            "anvil.sketch: give rects, circles, polylines, arcs or points (see docs/SCRIPTING.md)".into()
+            "anvil.sketch: give rects, circles, polylines, arcs, ellipses, partial_ellipses or points (see docs/SCRIPTING.md)"
+                .into(),
         );
     }
     Ok(s)
