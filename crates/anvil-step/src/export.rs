@@ -189,6 +189,17 @@ pub fn write(solids: &[Solid], name: &str) -> String {
                     let a = w.placement(&frame);
                     w.ent(format!("CONICAL_SURFACE('',#{a},{},{})", real(radius), real(half_angle)))
                 }
+                Surface::Torus { frame, major, minor, .. } if major < minor => {
+                    // A spindle torus: the apple (outer part) for a positive major
+                    // radius, the lemon for a negative one.
+                    let a = w.placement(&frame);
+                    let outer = if major >= 0.0 { ".T." } else { ".F." };
+                    w.ent(format!(
+                        "DEGENERATE_TOROIDAL_SURFACE('',#{a},{},{},{outer})",
+                        real(major.abs()),
+                        real(minor)
+                    ))
+                }
                 Surface::Torus { frame, major, minor, .. } => {
                     let a = w.placement(&frame);
                     w.ent(format!("TOROIDAL_SURFACE('',#{a},{},{})", real(major), real(minor)))

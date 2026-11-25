@@ -295,11 +295,19 @@ impl<'a> Reader<'a> {
                 frame: self.placement(self.reference(p.get(1))?)?,
                 radius: self.length(p.get(2))?,
             }),
-            "TOROIDAL_SURFACE" | "DEGENERATE_TOROIDAL_SURFACE" => Ok(Surface::Torus {
-                frame: self.placement(self.reference(p.get(1))?)?,
-                major: self.length(p.get(2))?,
-                minor: self.length(p.get(3))?,
-            }),
+            "TOROIDAL_SURFACE" | "DEGENERATE_TOROIDAL_SURFACE" => {
+                // A degenerate torus's tube crosses its axis. `select_outer` false picks
+                // the lemon, the part of the tube centred across the axis that lies on
+                // this side of it: a negative major radius (see anvil-brep's torus).
+                let major = self.length(p.get(2))?;
+                let lemon = e.name() == "DEGENERATE_TOROIDAL_SURFACE"
+                    && p.get(4).and_then(Param::as_bool) == Some(false);
+                Ok(Surface::Torus {
+                    frame: self.placement(self.reference(p.get(1))?)?,
+                    major: if lemon { -major } else { major },
+                    minor: self.length(p.get(3))?,
+                })
+            }
             other => Err(format!("{other} surfaces are not supported yet")),
         }
     }

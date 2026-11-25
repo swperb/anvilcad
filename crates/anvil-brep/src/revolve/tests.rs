@@ -174,11 +174,6 @@ fn refuses_bad_profiles() {
         Segment::Line { a: DVec2::new(1.5, 1.0), b: DVec2::new(1.5, -1.0) },
     ])]);
     assert!(revolve(&Frame::world(), &c, DVec2::new(0.0, 0.0), DVec2::Y, TAU).is_ok());
-    let spindle = region(&[Loop2::new(vec![
-        Segment::Arc { center: DVec2::new(0.8, 0.0), radius: 1.0, start: -0.5 * PI, sweep: PI },
-        Segment::Line { a: DVec2::new(0.8, 1.0), b: DVec2::new(0.8, -1.0) },
-    ])]);
-    assert!(revolve(&Frame::world(), &spindle, DVec2::ZERO, DVec2::Y, TAU).is_err());
     assert!(revolve(&Frame::world(), &across, DVec2::ZERO, DVec2::Y, 0.0).is_err());
 }
 
@@ -278,4 +273,158 @@ fn sphere_band_measures_true() {
         })
         .fold(0.0, f64::max);
     assert!(sag <= crate::tol::CHORD, "{sag}");
+}
+
+/// Exact volume and area, against closed forms to 1e-8 (as `mass`'s own tests), and the
+/// tessellation's volume (watertight) to 1e-3: a tube this fine meets the tessellator's
+/// cap on grid points, as in `tori`.
+fn measures(s: &Solid, v: f64, a: f64) {
+    let m = mass::exact_properties(s).expect("exact");
+    assert!(close(m.volume, v, 1e-8), "volume {} vs {v}", m.volume);
+    assert!(close(m.area, a, 1e-8), "area {} vs {a}", m.area);
+    let t = volume(s);
+    assert!(close(t, v, 1e-3), "tessellated volume {t} vs {v}");
+}
+
+/// The arc of the circle about (`cx`, 0) of radius `r` from the axis at (0, -h) to
+/// (0, h) on the side x >= 0, closed by the axis: the apple of a spindle torus when the
+/// centre is on that side, the lemon when it is across the axis.
+fn axis_to_axis(cx: f64, r: f64) -> Region {
+    let h = (r * r - cx * cx).sqrt();
+    let a = h.atan2(-cx);
+    region(&[Loop2::new(vec![
+        Segment::Arc { center: DVec2::new(cx, 0.0), radius: r, start: -a, sweep: 2.0 * a },
+        Segment::Line { a: DVec2::new(0.0, h), b: DVec2::new(0.0, -h) },
+    ])])
+}
+
+#[test]
+fn horn_torus() {
+    // brep-bench's geometry/horn-torus: a circle of radius 5 touching the axis.
+    // Volume 2 pi^2 R r^2 = 250 pi^2, area 4 pi^2 R r = 100 pi^2.
+    let r = region(&[Loop2::new(vec![Segment::circle(DVec2::new(5.0, 0.0), 5.0)])]);
+    let s = turn(&r, TAU);
+    // The two halves of the tube, each pinched to the pole at the origin.
+    assert_eq!(s.faces.len(), 2);
+    assert!(s.faces.iter().all(|f| f.surface.is_pinched_torus()));
+    assert_eq!(check::genus(&s).expect("valid"), 0);
+    measures(&s, 250.0 * PI * PI, 100.0 * PI * PI);
+    // Any circle start, and a partial turn (with caps touching at the pole).
+    let r = region(&[Loop2::new(vec![Segment::Arc {
+        center: DVec2::new(5.0, 0.0),
+        radius: 5.0,
+        start: 1.0,
+        sweep: -TAU,
+    }])]);
+    let s = turn(&r, 0.5 * PI);
+    measures(&s, 62.5 * PI * PI, 25.0 * PI * PI + 2.0 * 25.0 * PI);
+}
+
+#[test]
+fn torus_nearly_horn() {
+    // brep-bench's geometry/torus-nearly-horn: a ring torus whose hole is 0.02 across.
+    let (big, small) = (5.0, 4.99);
+    let r = region(&[Loop2::new(vec![Segment::circle(DVec2::new(big, 0.0), small)])]);
+    let s = turn(&r, TAU);
+    assert!(s.faces.iter().all(|f| !f.surface.is_pinched_torus()));
+    measures(&s, 2.0 * PI * PI * big * small * small, 4.0 * PI * PI * big * small);
+}
+
+#[test]
+fn spindle_torus_apple() {
+    // brep-bench's geometry/spindle-torus: middle circle 3, tube 5. The outer arc,
+    // axis to axis, turned: 2 pi (75 (pi - t) + 236 / 3), area 20 pi (3 (pi - t) + 4),
+    // t = acos(3 / 5).
+    let t = (0.6f64).acos();
+    let r = axis_to_axis(3.0, 5.0);
+    let s = turn(&r, TAU);
+    assert!(s.faces.iter().all(|f| f.surface.is_pinched_torus()));
+    measures(&s, TAU * (75.0 * (PI - t) + 236.0 / 3.0), 20.0 * PI * (3.0 * (PI - t) + 4.0));
+    // A third of a turn: a third of the volume, the caps the disc's part x >= 0, of area
+    // pi r^2 less the segment cut off, r^2 t - R sqrt(r^2 - R^2).
+    let s = turn(&r, TAU / 3.0);
+    let cap = 25.0 * PI - (25.0 * t - 12.0);
+    measures(
+        &s,
+        TAU * (75.0 * (PI - t) + 236.0 / 3.0) / 3.0,
+        20.0 * PI * (3.0 * (PI - t) + 4.0) / 3.0 + 2.0 * cap,
+    );
+}
+
+#[test]
+fn lemon() {
+    // brep-bench's geometry/lemon: the segment of the disc of radius 5 about (-3, 0)
+    // cut off by the axis, turned: 2 pi (236 / 3 - 75 t), area 20 pi (4 - 3 t).
+    let t = (0.6f64).acos();
+    let r = axis_to_axis(-3.0, 5.0);
+    let s = turn(&r, TAU);
+    assert!(s.faces.iter().all(|f| matches!(f.surface, Surface::Torus { major, .. } if major == -3.0)));
+    measures(&s, TAU * (236.0 / 3.0 - 75.0 * t), 20.0 * PI * (4.0 - 3.0 * t));
+    let s = turn(&r, -0.5 * PI);
+    let cap = 25.0 * t - 12.0;
+    measures(&s, TAU * (236.0 / 3.0 - 75.0 * t) / 4.0, 5.0 * PI * (4.0 - 3.0 * t) + 2.0 * cap);
+}
+
+#[test]
+fn spindle_arc_off_the_axis() {
+    // A half disc of radius 1 whose centre is 0.8 from the axis, flat side in: its
+    // circle crosses the axis but the arc does not reach it. Pappus: 2 pi A (0.8 + 4 /
+    // (3 pi)) with A = pi / 2.
+    let r = region(&[Loop2::new(vec![
+        Segment::Arc { center: DVec2::new(0.8, 0.0), radius: 1.0, start: -0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(0.8, 1.0), b: DVec2::new(0.8, -1.0) },
+    ])]);
+    let s = turn(&r, TAU);
+    assert!(s.faces.iter().any(|f| f.surface.is_pinched_torus()));
+    // The arc turned (2 pi (0.8 pi + 2)) and the cylinder inside (2 pi 0.8 * 2).
+    let v = TAU * 0.5 * PI * (0.8 + 4.0 / (3.0 * PI));
+    measures(&s, v, TAU * (0.8 * PI + 2.0) + TAU * 1.6);
+}
+
+#[test]
+fn horn_arc_through_its_pole() {
+    // A half disc of a horn torus's circle, its arc passing the pole, closed by the
+    // chord x = 5 from (5, -5) to (5, 5): split at the pole, the arc sweeps two pointed
+    // faces. Its volume is a half of the horn torus's less... by Pappus: area 25 pi / 2,
+    // centroid 5 - 20 / (3 pi) from the axis.
+    let r = region(&[Loop2::new(vec![
+        Segment::Arc { center: DVec2::new(5.0, 0.0), radius: 5.0, start: 0.5 * PI, sweep: PI },
+        Segment::Line { a: DVec2::new(5.0, -5.0), b: DVec2::new(5.0, 5.0) },
+    ])]);
+    let s = turn(&r, TAU);
+    assert_eq!(s.faces.iter().filter(|f| f.surface.is_pinched_torus()).count(), 2);
+    let v = TAU * 12.5 * PI * (5.0 - 20.0 / (3.0 * PI));
+    // The inner half of the tube turned, 2 pi r (pi R - 2 r), and the cylinder.
+    measures(&s, v, TAU * 5.0 * (5.0 * PI - 10.0) + TAU * 5.0 * 10.0);
+}
+
+#[test]
+fn pinched_tori_mirror_scale_and_refuse_the_rest() {
+    let t = (0.6f64).acos();
+    let lemon = turn(&axis_to_axis(-3.0, 5.0), TAU);
+    let v = TAU * (236.0 / 3.0 - 75.0 * t);
+    let a = 20.0 * PI * (4.0 - 3.0 * t);
+    // Mirrored and scaled, measured again.
+    let m = crate::mirror::mirrored(&lemon, DVec3::new(1.0, 0.0, 0.0), DVec3::new(1.0, 1.0, 0.0))
+        .expect("mirror");
+    measures(&m, v, a);
+    let s = crate::scale::scaled(&lemon, DVec3::ZERO, &Frame::world(), [2.0; 3]).expect("scale");
+    measures(&s, 8.0 * v, 4.0 * a);
+    // What does not handle a horn or spindle torus yet says so.
+    let block = crate::extrude::extrude(
+        &Frame::world(),
+        &region(&[polygon(&pts(&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]))]),
+        0.0,
+        1.0,
+    )
+    .expect("block");
+    let unsupported = |r: Result<Vec<Solid>>| matches!(r, Err(KernelError::Unsupported(_)));
+    assert!(unsupported(crate::boolean::boolean(&lemon, &block, crate::boolean::BoolOp::Union)));
+    assert!(unsupported(crate::boolean::boolean(&block, &lemon, crate::boolean::BoolOp::Subtract)));
+    let apple = turn(&axis_to_axis(3.0, 5.0), TAU);
+    let equator = crate::blend::edge_near(&apple, DVec3::new(8.0, 0.0, 0.0), 1e-6).expect("equator");
+    assert!(unsupported(crate::blend::blend_edge(&apple, equator, crate::blend::Blend::Fillet(0.5), 1, 0)));
+    let grown = crate::offset::offset_faces(&apple, &vec![0.5; apple.faces.len()]);
+    assert!(matches!(grown, Err(KernelError::Unsupported(_))), "{grown:?}");
+    assert!(crate::shell::shell(&apple, &[0], 0.5).is_err());
 }

@@ -85,6 +85,11 @@ pub fn boolean_with_contacts(
             BoolOp::Intersect => Vec::new(),
         });
     }
+    if a.faces.iter().chain(&b.faces).any(|f| f.surface.is_pinched_torus()) {
+        return Err(KernelError::Unsupported(
+            "combining solids with a horn or spindle torus face (one whose tube reaches its axis)".into(),
+        ));
+    }
     let mut engine = Engine::new([a, b])?;
     engine.contacts = contacts.to_vec();
     engine.run(op)
