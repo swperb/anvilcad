@@ -11,7 +11,7 @@ configuration, and DXF output; it is specified in the sections from "Dimensions"
 third slice (issue #98) adds section views (full and offset) hatched by material, detail
 views and hole callouts; it is specified in "Section views", "Hatching", "Detail views" and
 "Hole callouts". Assembly drawings with a bill of materials and balloons, the rest of #98,
-are specified in "Assembly drawings, BOM tables and balloons" but not yet built.
+are specified in "Assembly drawings, BOM tables and balloons" but not yet built (#210).
 
 This specification was written before the implementation, which is in
 `crates/anvil-drawing` (document, projection, layout and PDF) and
@@ -688,7 +688,7 @@ Numbers missing from the table are pages that were read but added nothing used h
   PDF and DXF. Clicking a single hole, callouts on holes made by cuts, section and detail
   views, and tolerances are later work.
 
-## Assembly drawings, BOM tables and balloons (not yet built)
+## Assembly drawings, BOM tables and balloons (not yet built, #210)
 
 - **Observed.** A bill of materials can be inserted into the drawing of an assembly; it
   updates when components are added, deleted or replaced or their properties change
