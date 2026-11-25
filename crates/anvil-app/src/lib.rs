@@ -3,6 +3,7 @@
 
 pub mod app;
 mod camera;
+pub mod file_error;
 pub mod headless;
 pub mod keymap;
 pub mod mcp;

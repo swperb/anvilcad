@@ -9,6 +9,7 @@
 //! is watched, so saving the part updates the drawing.
 
 use super::AnvilApp;
+use crate::file_error::{FileFailure, FileOp};
 use crate::theme::{self, Icon, Palette, RowLook};
 use anvil_drawing::callout::{self, CalloutPicture};
 use anvil_drawing::dims::{self, DimPicture, Pick2, Pickables, ViewContext};
@@ -566,7 +567,7 @@ impl AnvilApp {
                 self.enter_drawing(DrawingSession::new(d, Some(p.to_path_buf())));
                 self.status = format!("Opened {}", p.display());
             }
-            Err(e) => self.message = Some(("Open failed".into(), format!("{}: {e}", p.display()))),
+            Err(e) => self.file_failure = Some(FileFailure::drawing(FileOp::Open, p, &e)),
         }
     }
 
@@ -663,7 +664,7 @@ impl AnvilApp {
                 s.committed = s.drawing.clone();
                 self.status = format!("Saved {}", path.display());
             }
-            Err(e) => self.message = Some(("Save failed".into(), e.to_string())),
+            Err(e) => self.file_failure = Some(FileFailure::drawing(FileOp::Save, &path, &e)),
         }
     }
 
@@ -729,7 +730,7 @@ impl AnvilApp {
                 )
             }
             Ok(()) => self.status = format!("Exported {}", path.display()),
-            Err(e) => self.message = Some(("Export failed".into(), format!("{}: {e}", path.display()))),
+            Err(e) => self.file_failure = Some(FileFailure::io(FileOp::Export, &path, &e)),
         }
     }
 

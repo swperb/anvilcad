@@ -288,6 +288,17 @@ impl BuildState {
     }
 }
 
+/// Passes on the exact kernel's reason for refusing a blend, and keeps in `keep`, as the
+/// cause to give if no kernel builds the blend, a refusal that says it is too large: the
+/// edge it does not fit, the size asked for and the largest that fits there. A limit the
+/// kernel cannot tell is given as 0, which the message leaves out.
+fn keep_too_large(e: kernel::BlendRefusal, keep: &mut Option<Cause>) -> String {
+    if let kernel::BlendRefusal::TooLarge { edge, size, limit } = e {
+        *keep = Some(BlendError::TooLarge { edges: vec![edge], size, limit: limit.unwrap_or(0.0) }.into());
+    }
+    e.to_string()
+}
+
 /// Combines `tool` with the faceted body: a boss adds it, a cut takes it away.
 pub(crate) fn apply(body: &mut Solid, tool: &Solid, op: BodyOp) -> Result<(), Cause> {
     match op {
@@ -549,7 +560,12 @@ impl Document {
                     FilletProfile::CurvatureContinuous => Round::CurvatureContinuous,
                 };
                 let fillet = kernel::Blend::Fillet { radius, round };
-                if st.exact_step(id, |b| EXACT.blend(b, &f.edges, fillet, f.tangent_propagation, id)) {
+                let mut too_large = None;
+                if st.exact_step(id, |b| {
+                    EXACT
+                        .blend(b, &f.edges, fillet, f.tangent_propagation, id)
+                        .map_err(|e| keep_too_large(e, &mut too_large))
+                }) {
                     return Ok(());
                 }
                 if f.profile != FilletProfile::Circular {
@@ -561,6 +577,12 @@ impl Document {
                         check_fit(&st.body, &f.edges, EdgeTreatment::Fillet { radius })
                     {
                         return Err(e.into());
+                    }
+                    // The faceted kernel's mesh may fit where the exact faces do not (a
+                    // curved face's facets cut its corners); the exact kernel then names
+                    // the edge.
+                    if let Some(cause) = too_large {
+                        return Err(cause);
                     }
                     let name_of = |f: u32| self.feature(f).map(|f| f.name.clone()).unwrap_or_default();
                     let what = format!("{} fillets", f.profile.label().to_lowercase());
@@ -581,10 +603,20 @@ impl Document {
                         flip: *flip,
                     },
                 };
-                if st.exact_step(id, |b| EXACT.blend(b, &c.edges, treatment, c.tangent_propagation, id)) {
+                let mut too_large = None;
+                if st.exact_step(id, |b| {
+                    EXACT
+                        .blend(b, &c.edges, treatment, c.tangent_propagation, id)
+                        .map_err(|e| keep_too_large(e, &mut too_large))
+                }) {
                     return Ok(());
                 }
                 if c.kind != ChamferKind::EqualDistance {
+                    // Only the exact kernel builds this kind, so its refusal is the one
+                    // to give: the edge it does not fit, and how large a chamfer does.
+                    if let Some(cause) = too_large {
+                        return Err(cause);
+                    }
                     let name_of = |f: u32| self.feature(f).map(|f| f.name.clone()).unwrap_or_default();
                     let what = format!("{} chamfers", c.kind.label().to_lowercase());
                     let size = ("distance", distance);

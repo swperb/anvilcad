@@ -7,7 +7,7 @@
 //! side faces `2 + sketch entity`, and blend faces `2 + 8k + 2` for the k-th edge.
 
 use crate::document::BodyOp;
-use crate::kernel::{self, ExactKernel};
+use crate::kernel::{self, BlendRefusal, ExactKernel};
 use anvil_brep as brep;
 use anvil_brep::boolean::{self, BoolOp};
 use anvil_brep::topo::{Face, FaceTag as BrepTag};
@@ -269,7 +269,7 @@ pub fn blend(
     treatment: kernel::Blend,
     propagate: bool,
     feature: u32,
-) -> Result<Vec<brep::Solid>, String> {
+) -> Result<Vec<brep::Solid>, BlendRefusal> {
     if edges.is_empty() {
         return Err("select at least one edge".into());
     }
@@ -335,7 +335,14 @@ pub fn blend(
             })
             .collect();
         let result =
-            brep::blend::blend_chain(&bodies[b], &tagged, kind, feature).map_err(|err| err.to_string())?;
+            brep::blend::blend_chain(&bodies[b], &tagged, kind, feature).map_err(|err| match err {
+                // Named after the selected edge it is, or that it runs on from.
+                brep::KernelError::BlendTooLarge { edge, size, limit, .. } => {
+                    let k = found.iter().find(|f| f.0 == b && f.1 == edge).map_or(k, |f| f.2);
+                    BlendRefusal::TooLarge { edge: edges[k], size, limit }
+                }
+                err => BlendRefusal::Other(err.to_string()),
+            })?;
         bodies.splice(b..=b, result);
     }
     for (corner, tags) in &corners {
@@ -347,8 +354,8 @@ pub fn blend(
         else {
             return Err("a rounded corner is no longer in any body".into());
         };
-        let result =
-            brep::corner::close_corner(&bodies[b], corner, feature, tags).map_err(|e| e.to_string())?;
+        let result = brep::corner::close_corner(&bodies[b], corner, feature, tags)
+            .map_err(|e| BlendRefusal::Other(e.to_string()))?;
         bodies.splice(b..=b, result);
     }
     if edges.iter().any(|e| !find_edges(&bodies, e).is_empty()) {
@@ -496,7 +503,7 @@ impl ExactKernel for Brep {
         b: kernel::Blend,
         propagate: bool,
         feature: u32,
-    ) -> Result<Vec<brep::Solid>, String> {
+    ) -> Result<Vec<brep::Solid>, BlendRefusal> {
         blend(bodies, edges, b, propagate, feature)
     }
 

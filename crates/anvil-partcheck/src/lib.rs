@@ -254,8 +254,8 @@ pub fn check_step(bytes: &[u8], req: &Request) -> Result<PartCheckResult, PartCh
     }
     let text = std::str::from_utf8(bytes).map_err(|e| PartCheckError::Step(e.to_string()))?;
     let name = req.file_name.clone().unwrap_or_else(|| "part.step".into());
-    let (mut doc, report) =
-        anvil_model::step::document_from_step(text, &name).map_err(PartCheckError::Step)?;
+    let (mut doc, report) = anvil_model::step::document_from_step(text, &name)
+        .map_err(|e| PartCheckError::Step(e.to_string()))?;
     if report.bodies == 0 {
         return Err(PartCheckError::NoBodies);
     }

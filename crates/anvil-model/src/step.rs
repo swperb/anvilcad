@@ -1,6 +1,8 @@
 //! STEP import into a new part document.
 
 use crate::document::{Document, FeatureKind, ImportedBodyFeature, ImportedFace};
+pub use anvil_step::p21::ParseError as StepParseError;
+pub use anvil_step::StepError;
 
 /// What a STEP import produced, for telling the user.
 #[derive(Debug, Clone, Default)]
@@ -39,8 +41,8 @@ impl StepReport {
 }
 
 /// A new part holding every body of a STEP file as an imported body.
-pub fn document_from_step(text: &str, source: &str) -> Result<(Document, StepReport), String> {
-    let imp = anvil_step::import(text).map_err(|e| e.to_string())?;
+pub fn document_from_step(text: &str, source: &str) -> Result<(Document, StepReport), StepError> {
+    let imp = anvil_step::import(text)?;
     let mut doc = Document::new();
     let mut report = StepReport {
         bodies: imp.bodies.len(),

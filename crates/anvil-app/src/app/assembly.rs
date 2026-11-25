@@ -5,6 +5,7 @@
 
 use super::interference::{InterferenceOptions, InterferenceTool};
 use super::AnvilApp;
+use crate::file_error::{FileFailure, FileOp, Kind};
 use crate::theme::{self, Icon, Palette, RowLook};
 use anvil_kernel::{EdgeRef, FaceId, Frame, Mesh, ModelEdge, Solid, Vec3};
 use anvil_model::assembly::{Assembly, AssemblyStatus, MateEntity, MateRef, Parts, ASSEMBLY_EXT};
@@ -357,7 +358,7 @@ impl AnvilApp {
                     s.committed = s.asm.clone();
                 }
             }
-            Err(e) => self.message = Some(("Open failed".into(), format!("{}: {e}", p.display()))),
+            Err(e) => self.file_failure = Some(FileFailure::file(FileOp::Open, Kind::Assembly, p, &e)),
         }
     }
 
@@ -480,7 +481,7 @@ impl AnvilApp {
                 self.status = format!("Saved {}", path.display());
                 self.refresh_assembly();
             }
-            Err(e) => self.message = Some(("Save failed".into(), e.to_string())),
+            Err(e) => self.file_failure = Some(FileFailure::file(FileOp::Save, Kind::Assembly, &path, &e)),
         }
     }
 

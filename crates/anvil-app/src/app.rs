@@ -1,6 +1,7 @@
 //! Main application window.
 
 use crate::camera::{Camera, StdView};
+use crate::file_error::{FileFailure, FileOp, Kind};
 use crate::render::{Renderer, SceneData};
 use crate::sketcher::{self, OverDefine, SkSel, SketchSession, Tool};
 use crate::theme::{self, Icon, Palette, RowLook};
@@ -130,6 +131,9 @@ pub struct AnvilApp {
     tab: Tab,
     windows: Windows,
     message: Option<(String, String)>,
+    /// A file that could not be opened, saved, imported or exported, shown like `message`
+    /// with the reason and what to try, and the system's words under Details.
+    file_failure: Option<FileFailure>,
     file_props: Option<FilePropsWindow>,
     confirm: Option<PendingAction>,
     show_edges: bool,
@@ -227,6 +231,7 @@ impl AnvilApp {
             tab: Tab::Features,
             windows: Windows::default(),
             message: None,
+            file_failure: None,
             file_props: None,
             confirm: None,
             show_edges: true,
@@ -561,7 +566,7 @@ impl AnvilApp {
                 return;
             }
             Err(e) => {
-                self.message = Some(("Open failed".into(), e.to_string()));
+                self.file_failure = Some(FileFailure::io(FileOp::Open, p, &e));
                 return;
             }
             Ok(None) => {}
@@ -583,7 +588,7 @@ impl AnvilApp {
         match Document::load(p) {
             Ok(d) if is_template => self.load_document(Document::from_template(&d), None),
             Ok(d) => self.load_document(d, Some(p.to_path_buf())),
-            Err(e) => self.message = Some(("Open failed".into(), format!("{}: {e}", p.display()))),
+            Err(e) => self.file_failure = Some(FileFailure::file(FileOp::Open, Kind::Part, p, &e)),
         }
     }
 
@@ -592,7 +597,7 @@ impl AnvilApp {
         let text = match std::fs::read(p) {
             Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(e) => {
-                self.message = Some(("Import failed".into(), format!("{}: {e}", p.display())));
+                self.file_failure = Some(FileFailure::io(FileOp::Import, p, &e));
                 return;
             }
         };
@@ -602,7 +607,7 @@ impl AnvilApp {
                 self.load_document(doc, None);
                 self.message = Some(("STEP import".into(), report.summary()));
             }
-            Err(e) => self.message = Some(("Import failed".into(), format!("{}: {e}", p.display()))),
+            Err(e) => self.file_failure = Some(FileFailure::step(p, &e)),
         }
     }
 
@@ -634,7 +639,7 @@ impl AnvilApp {
                 self.saved = self.doc.clone();
                 self.status = format!("Saved {}", path.display());
             }
-            Err(e) => self.message = Some(("Save failed".into(), e.to_string())),
+            Err(e) => self.file_failure = Some(FileFailure::file(FileOp::Save, Kind::Part, &path, &e)),
         }
     }
 
@@ -647,7 +652,7 @@ impl AnvilApp {
         }) {
             match self.doc.save(&path) {
                 Ok(()) => self.status = format!("Template saved to {}", path.display()),
-                Err(e) => self.message = Some(("Save failed".into(), e.to_string())),
+                Err(e) => self.file_failure = Some(FileFailure::file(FileOp::Save, Kind::Part, &path, &e)),
             }
         }
     }
@@ -669,7 +674,7 @@ impl AnvilApp {
         }) {
             match self.write_export(&path) {
                 Ok(how) => self.status = format!("Exported {}{how}", path.display()),
-                Err(e) => self.message = Some(("Export failed".into(), e.to_string())),
+                Err(e) => self.file_failure = Some(FileFailure::io(FileOp::Export, &path, &e)),
             }
         }
     }
@@ -2994,8 +2999,19 @@ impl AnvilApp {
         if self.fit_pending && rect.width() > 10.0 {
             let mut b = self.state.body.bounds();
             if b.is_empty() {
+                // No body yet (or its first feature failed): fit the sketches, so their
+                // curves, and any loose ends marked on them, are in view.
                 for f in self.state.frames.values() {
                     b.add(f.origin);
+                }
+                for f in self.doc.features.iter().filter(|f| !f.suppressed) {
+                    let (FeatureKind::Sketch(sf), Some(frame)) = (&f.kind, self.state.frames.get(&f.id))
+                    else {
+                        continue;
+                    };
+                    for p in &sf.sketch.points {
+                        b.add(frame.to_world(p.pos()));
+                    }
                 }
             }
             self.camera.fit(&b, rect);
@@ -3201,6 +3217,8 @@ impl AnvilApp {
         } else {
             self.dragging = false;
         }
+        // Over the sketch, so they show while it is edited too.
+        self.draw_failed_points(&painter, rect);
 
         // Axis triad, drawn back to front so the axis nearest the viewer is on top.
         let o = rect.left_bottom() + egui::vec2(46.0, -46.0);
@@ -3393,6 +3411,52 @@ impl AnvilApp {
         ));
     }
 
+    /// The loose sketch ends a failed feature names, to mark in red: while a sketch is
+    /// open, those in it that any feature failed on; otherwise those of the feature being
+    /// edited, or selected in the tree.
+    fn failed_points(&self) -> Vec<anvil_model::failure::SketchPoint> {
+        if let Some(s) = &self.sketch {
+            let mut all: Vec<_> = self
+                .state
+                .errors
+                .values()
+                .flat_map(|e| &e.points)
+                .filter(|p| p.sketch == s.feature)
+                .copied()
+                .collect();
+            all.sort_by_key(|p| p.point);
+            all.dedup();
+            return all;
+        }
+        let id = match (&self.editor, self.selection) {
+            (Some(Editor::Feature { id, .. }), _) => *id,
+            (None, Selection::Feature(id)) => id,
+            _ => return Vec::new(),
+        };
+        self.state.errors.get(&id).map_or_else(Vec::new, |e| e.points.clone())
+    }
+
+    /// Rings round the loose sketch ends of [`Self::failed_points`], in the error colour.
+    fn draw_failed_points(&self, painter: &egui::Painter, rect: egui::Rect) {
+        let points = self.failed_points();
+        if points.is_empty() {
+            return;
+        }
+        let ctx = painter.ctx();
+        let error = Palette::for_ctx(ctx, ctx.style().visuals.dark_mode).error;
+        for p in points {
+            let frame = match &self.sketch {
+                Some(s) if s.feature == p.sketch => Some(s.frame),
+                _ => self.state.frames.get(&p.sketch).copied(),
+            };
+            let at = self.doc.sketch(p.sketch).and_then(|sf| sf.sketch.points.get(p.point)).map(|q| q.pos());
+            let (Some(frame), Some(at)) = (frame, at) else { continue };
+            let c = self.camera.project(frame.to_world(at), rect);
+            painter.circle_filled(c, 3.0, error);
+            painter.circle_stroke(c, 7.0, Stroke::new(2.0_f32, error));
+        }
+    }
+
     fn draw_model_sketches(&self, painter: &egui::Painter, rect: egui::Rect) {
         let consumed: Vec<u32> = self
             .doc
@@ -3405,13 +3469,15 @@ impl AnvilApp {
                 _ => vec![],
             })
             .collect();
+        // A sketch whose loose ends are marked is shown, so the marks sit on its curves.
+        let marked: Vec<u32> = self.failed_points().iter().map(|p| p.sketch).collect();
         for f in &self.doc.features {
             let FeatureKind::Sketch(sf) = &f.kind else { continue };
             if self.sketch.as_ref().is_some_and(|s| s.feature == f.id) || f.suppressed {
                 continue;
             }
             let selected = self.selection == Selection::Feature(f.id);
-            if consumed.contains(&f.id) && !selected {
+            if consumed.contains(&f.id) && !selected && !marked.contains(&f.id) {
                 continue;
             }
             let Some(frame) = self.state.frames.get(&f.id) else { continue };
@@ -4090,6 +4156,21 @@ impl AnvilApp {
                     }
                 });
         }
+        if let Some(f) = self.file_failure.clone() {
+            egui::Window::new(f.title())
+                .id(egui::Id::new("file_failure"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.set_max_width(420.0);
+                    file_failure(ui, &f);
+                    ui.add_space(4.0);
+                    if ui.button("OK").clicked() {
+                        self.file_failure = None;
+                    }
+                });
+        }
 
         if let Some(action) = self.confirm {
             egui::Window::new("Unsaved changes")
@@ -4448,6 +4529,12 @@ impl AnvilApp {
                 "configuration_properties": self.cfg.props.is_some(),
             },
             "message": self.message.as_ref().map(|(t, m)| json!({ "title": t, "text": m })),
+            "file_error": self.file_failure.as_ref().map(|f| json!({
+                "title": f.title(),
+                "cause": f.cause,
+                "suggestion": f.suggestion,
+                "details": f.details,
+            })),
             "confirm": self.confirm.map(|a| format!("{a:?}")),
             "undo": self.undo.len(),
             "redo": self.redo.len(),
@@ -5304,8 +5391,28 @@ fn feature_error(ui: &mut egui::Ui, e: &anvil_model::FeatureError) {
     }
 }
 
+/// Why a file could not be opened, saved, imported or exported: the reason and what to
+/// try, with the path and the system's words folded away under Details, as a feature's
+/// failure is shown.
+fn file_failure(ui: &mut egui::Ui, f: &FileFailure) {
+    let pal = Palette::of(ui);
+    // The window's title says what failed; the first line says why.
+    ui.colored_label(pal.error, f.reason());
+    ui.label(&f.suggestion);
+    if let Some(d) = &f.details {
+        egui::CollapsingHeader::new("Details").id_salt("file-failure-details").show(ui, |ui| {
+            ui.label(egui::RichText::new(d).monospace().size(11.0).color(pal.text_weak));
+        });
+    }
+}
+
 /// Where a failure's geometry is marked, for the line under its message in the editor.
 fn marked_in_view(e: &anvil_model::FeatureError) -> Option<String> {
+    match e.points.len() {
+        0 => {}
+        1 => return Some("The open end of its sketch is marked in red in the view.".into()),
+        n => return Some(format!("The {n} open ends of its sketch are marked in red in the view.")),
+    }
     let what = match (e.edges.len(), e.faces.len()) {
         (0, 0) => return None,
         (1, 0) => "The edge".to_string(),
@@ -5807,6 +5914,93 @@ mod ui_tests {
         assert!([a, b].iter().all(|e| shown.iter().any(|m| m.faces == *e)));
     }
 
+    /// An extrude of an open sketch marks the sketch's two loose ends while it is edited
+    /// or selected, and while its sketch is open for editing, and not otherwise (#199).
+    #[test]
+    fn a_failed_extrude_marks_its_sketchs_open_ends() {
+        use anvil_model::failure::SketchPoint;
+        let mut h = Harness::new();
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Top);
+        let a = sf.sketch.add_point(v2(5.0, 10.0));
+        let corner = sf.sketch.add_point(v2(5.0, 0.0));
+        let b = sf.sketch.add_point(v2(25.0, 0.0));
+        sf.sketch.add_line(a, corner);
+        sf.sketch.add_line(corner, b);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let id = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            op: BodyOp::Boss,
+            ..Default::default()
+        }));
+        h.app.load_document(doc, None);
+        h.step(vec![]);
+        let want = vec![SketchPoint { sketch: sk, point: a }, SketchPoint { sketch: sk, point: b }];
+        assert!(h.app.failed_points().is_empty());
+        h.app.selection = Selection::Feature(id);
+        assert_eq!(h.app.failed_points(), want);
+        h.app.selection = Selection::None;
+        let before = h.app.doc.clone();
+        h.app.open_editor(id, before, false);
+        h.step(vec![]);
+        assert_eq!(h.app.failed_points(), want);
+        let e = h.app.state.errors.get(&id).cloned().expect("the extrude failed");
+        assert_eq!(
+            marked_in_view(&e).as_deref(),
+            Some("The 2 open ends of its sketch are marked in red in the view.")
+        );
+        h.app.editor = None;
+        h.app.edit_sketch(sk);
+        h.step(vec![]);
+        assert_eq!(h.app.failed_points(), want);
+    }
+
+    /// Opening a part that is not there, importing a file that is not STEP and saving
+    /// into a folder that is not there each say what failed, why and what to do, with
+    /// the path under Details, and leave the open part as it was (#199).
+    #[test]
+    fn file_errors_say_what_failed_and_what_to_do() {
+        let mut h = Harness::new();
+        let dir = std::env::temp_dir().join(format!("anvil-file-errors-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let missing = dir.join("bracket.anvprt");
+        h.app.open_path(&missing);
+        h.step(vec![]);
+        let f = h.app.file_failure.take().expect("open failed");
+        assert_eq!(f.title(), "Could not open bracket.anvprt");
+        assert_eq!(f.cause, "the file does not exist; it may have been moved, renamed or deleted");
+        assert!(f.details.as_deref().is_some_and(|d| d.starts_with(&missing.display().to_string())));
+        assert!(h.app.message.is_none());
+
+        let text = dir.join("notes.step");
+        std::fs::write(&text, "these are not STEP data").expect("write");
+        h.app.open_path(&text);
+        let f = h.app.file_failure.take().expect("import failed");
+        assert_eq!(f.title(), "Could not import notes.step");
+        assert_eq!(f.cause, "it is not a STEP file");
+
+        let damaged = dir.join("damaged.anvprt");
+        std::fs::write(&damaged, "{\"format\": ").expect("write");
+        h.app.open_path(&damaged);
+        let f = h.app.file_failure.take().expect("open failed");
+        assert_eq!(f.cause, "the file is damaged, or is not an AnvilCAD part file");
+
+        // Saving into a folder that is not there: the part stays unsaved.
+        let (doc, _) = block_doc();
+        h.app.load_document(doc, None);
+        h.app.path = Some(dir.join("gone").join("block.anvprt"));
+        h.app.save(false);
+        h.step(vec![]);
+        let f = h.app.file_failure.clone().expect("save failed");
+        assert_eq!(f.title(), "Could not save block.anvprt");
+        assert_eq!(f.cause, "the folder it goes in does not exist");
+        assert!(h.app.is_dirty() || h.app.saved != h.app.doc);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn marked_in_view_counts_edges_and_faces() {
         let e = |edges: usize, faces: usize| anvil_model::FeatureError {
@@ -5819,6 +6013,7 @@ mod ui_tests {
                 edges
             ],
             faces: vec![FaceId { feature: 1, index: 0 }; faces],
+            points: Vec::new(),
         };
         assert_eq!(marked_in_view(&e(0, 0)), None);
         assert_eq!(

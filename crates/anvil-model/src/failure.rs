@@ -13,7 +13,7 @@ use anvil_kernel::build::BuildError;
 use anvil_kernel::offset::OffsetError;
 use anvil_kernel::shell::ShellError;
 use anvil_kernel::{EdgeRef, FaceId};
-use anvil_sketch::ProfileError;
+use anvil_sketch::{PointId, ProfileError, Sketch};
 use serde::Serialize;
 
 /// Why a feature could not be built, as the rebuild sees it.
@@ -27,6 +27,9 @@ pub enum Cause {
     /// Like [`Cause::Told`], with technical detail for the Details section, such as the
     /// exact kernel's own reason for refusing a feature.
     Detailed { cause: String, suggestion: String, details: String },
+    /// Like [`Cause::Told`], about a sketch whose curves are open: `ends` are the points of
+    /// sketch feature `sketch` where they stop, which the app marks.
+    Open { sketch: u32, ends: Vec<PointId>, cause: String, suggestion: String },
     /// The sketch's curves do not make closed outlines.
     Profile(ProfileError),
     /// Building a solid from a profile (extrude, revolve) failed.
@@ -113,6 +116,26 @@ impl From<KernelError> for Cause {
     }
 }
 
+/// The sketch's curves are open: a cause naming the loose ends of `sketch`, the sketch of
+/// feature `id`, with its own words.
+pub fn open_sketch(
+    id: u32,
+    sketch: &Sketch,
+    cause: impl Into<String>,
+    suggestion: impl Into<String>,
+) -> Cause {
+    Cause::Open { sketch: id, ends: sketch.open_ends(), cause: cause.into(), suggestion: suggestion.into() }
+}
+
+/// A point of a sketch: a loose end the app marks when a feature fails on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct SketchPoint {
+    /// The sketch feature's id.
+    pub sketch: u32,
+    /// The point, in that sketch.
+    pub point: PointId,
+}
+
 /// A length or angle for a message: up to three decimals, without trailing zeros.
 pub fn mm(x: f64) -> String {
     let s = format!("{x:.3}");
@@ -157,6 +180,9 @@ pub struct FeatureError {
     /// Faces of the part before this feature that the failure is about, such as those a
     /// shell folds over.
     pub faces: Vec<FaceId>,
+    /// Sketch points the failure is about: the loose ends of a sketch whose curves do not
+    /// close, for an extrude, revolve or sweep that needs a closed outline.
+    pub points: Vec<SketchPoint>,
 }
 
 impl FeatureError {
@@ -230,8 +256,8 @@ fn general(d: Does) -> &'static str {
 
 /// Turns the rebuild's `cause` for feature `name` of `kind` into a message a user can act on.
 pub fn explain(name: &str, kind: &FeatureKind, cause: Cause) -> FeatureError {
-    let Described { cause, suggestion, details, edges, faces } = describe(does(kind), cause);
-    FeatureError { feature: name.to_string(), cause, suggestion, details, edges, faces }
+    let Described { cause, suggestion, details, edges, faces, points } = describe(does(kind), cause);
+    FeatureError { feature: name.to_string(), cause, suggestion, details, edges, faces, points }
 }
 
 /// A cause in words, before it is given a feature's name.
@@ -241,15 +267,20 @@ struct Described {
     details: Option<String>,
     edges: Vec<EdgeRef>,
     faces: Vec<FaceId>,
+    points: Vec<SketchPoint>,
 }
 
 fn describe(d: Does, cause: Cause) -> Described {
     let gen = general(d).to_string();
-    let (mut edges, mut faces) = (Vec::new(), Vec::new());
+    let (mut edges, mut faces, mut points) = (Vec::new(), Vec::new(), Vec::new());
     let (cause, suggestion, details): (String, String, Option<String>) = match cause {
         Cause::Plain(s) => (fragment(&s), gen, None),
         Cause::Told { cause, suggestion } => (fragment(&cause), suggestion, None),
         Cause::Detailed { cause, suggestion, details } => (fragment(&cause), suggestion, Some(details)),
+        Cause::Open { sketch, ends, cause, suggestion } => {
+            points = ends.into_iter().map(|point| SketchPoint { sketch, point }).collect();
+            (fragment(&cause), suggestion, None)
+        }
         Cause::Profile(e) => {
             let (what, how) = match e {
                 ProfileError::Empty => (
@@ -354,6 +385,28 @@ fn describe(d: Does, cause: Cause) -> Described {
             };
             (fragment(&e.to_string()), how.into(), None)
         }
+        // The exact kernel's own refusal, as from an operation that calls it directly. It
+        // names the edge by the exact body's numbering, which is no use to a user, so
+        // only the sizes are said.
+        Cause::Kernel(KernelError::BlendTooLarge { edge, blend, size, limit }) => {
+            let detail = Some(KernelError::BlendTooLarge { edge, blend, size, limit }.to_string());
+            match limit {
+                Some(limit) if limit >= 0.0005 => (
+                    format!(
+                        "the {blend} size {} mm does not fit on the faces next to an edge, which allow at most {} mm",
+                        mm(size),
+                        mm(limit)
+                    ),
+                    format!("Try a size under {} mm.", mm(limit)),
+                    detail,
+                ),
+                _ => (
+                    format!("the {blend} size {} mm does not fit on the faces next to an edge", mm(size)),
+                    "Try a smaller size, or leave out the edges that do not fit.".into(),
+                    detail,
+                ),
+            }
+        }
         Cause::Kernel(e) => {
             let detail = Some(e.to_string());
             let (what, how): (&str, String) = match &e {
@@ -387,7 +440,9 @@ fn describe(d: Does, cause: Cause) -> Described {
                 ),
                 KernelError::InvalidDistance => ("its depth is zero", "Give it a depth other than 0.".into()),
                 KernelError::Unsupported(_) => ("it uses something the modeler cannot build yet", gen),
-                KernelError::InvalidInput(_) => ("its inputs do not make a valid shape", gen),
+                KernelError::InvalidInput(_) | KernelError::BlendTooLarge { .. } => {
+                    ("its inputs do not make a valid shape", gen)
+                }
                 KernelError::Topology(_) | KernelError::Boolean(_) => {
                     ("the result would not be a valid solid", gen)
                 }
@@ -400,7 +455,7 @@ fn describe(d: Does, cause: Cause) -> Described {
             (what.to_string(), how, detail)
         }
     };
-    Described { cause, suggestion, details, edges, faces }
+    Described { cause, suggestion, details, edges, faces, points }
 }
 
 #[cfg(test)]
@@ -487,6 +542,18 @@ mod tests {
             KernelError::Unsupported("torus {r: 0}".into()),
             KernelError::Boolean("the result is not a closed solid (edge EdgeKey(1) -> EdgeKey(2))".into()),
             KernelError::Tessellation("InsertionError::NAN".into()),
+            KernelError::BlendTooLarge {
+                edge: anvil_brep::EdgeId(4),
+                blend: "chamfer",
+                size: 12.0,
+                limit: Some(7.5),
+            },
+            KernelError::BlendTooLarge {
+                edge: anvil_brep::EdgeId(4),
+                blend: "fillet",
+                size: 12.0,
+                limit: None,
+            },
         ];
         for k in &kernel {
             match k {
@@ -502,7 +569,8 @@ mod tests {
                 | KernelError::InvalidInput(_)
                 | KernelError::Unsupported(_)
                 | KernelError::Boolean(_)
-                | KernelError::Tessellation(_) => {}
+                | KernelError::Tessellation(_)
+                | KernelError::BlendTooLarge { .. } => {}
             }
         }
         let profile = [
@@ -528,6 +596,12 @@ mod tests {
                 "blend: EdgeKey(1) has no neighbour",
             ),
         ];
+        all.push(Cause::Open {
+            sketch: 1,
+            ends: vec![3, 4],
+            cause: "its sketch's outline is open.".into(),
+            suggestion: "Close the outline.".into(),
+        });
         all.extend(profile.into_iter().map(Cause::Profile));
         all.extend(build.into_iter().map(Cause::Build));
         all.extend(blend.into_iter().map(Cause::Blend));
@@ -622,6 +696,98 @@ mod tests {
         }));
         let e = failed(&mut doc, id);
         assert!(e.message().to_lowercase().contains("closed") || e.message().contains("outline"), "{e}");
+    }
+
+    /// An open L of two lines, from (`x`, 10) down to (`x`, 0) and across to (`x` + 20, 0),
+    /// on `plane`; its sketch's id, and the two loose ends' points.
+    fn open_l(doc: &mut Document, plane: PlaneRef, x: f64) -> (u32, [PointId; 2]) {
+        let mut sf = SketchFeature::new(plane);
+        let a = sf.sketch.add_point(v2(x, 10.0));
+        let corner = sf.sketch.add_point(v2(x, 0.0));
+        let b = sf.sketch.add_point(v2(x + 20.0, 0.0));
+        sf.sketch.add_line(a, corner);
+        sf.sketch.add_line(corner, b);
+        (doc.add_feature(FeatureKind::Sketch(sf)), [a, b])
+    }
+
+    /// An extrude, a thin extrude with capped ends, a revolve and a sweep of an open
+    /// sketch each name its two loose ends, and only those, so the app can mark them
+    /// (#199).
+    #[test]
+    fn features_on_an_open_sketch_name_its_loose_ends() {
+        // Extrude.
+        let mut doc = Document::new();
+        let (sk, [a, b]) = open_l(&mut doc, PlaneRef::Top, 5.0);
+        let id = doc.add_feature(extrude(sk, Dim::Value(10.0), BodyOp::Boss));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "its sketch's outline is open, so it encloses no area to extrude");
+        assert_eq!(
+            e.points,
+            vec![SketchPoint { sketch: sk, point: a }, SketchPoint { sketch: sk, point: b }]
+        );
+        assert!(e.edges.is_empty() && e.faces.is_empty());
+
+        // A thin wall with capped ends needs a closed outline too.
+        let mut doc = Document::new();
+        let (sk, [a, b]) = open_l(&mut doc, PlaneRef::Top, 5.0);
+        let id = doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+            sketch: sk,
+            end: EndCondition::Blind,
+            depth: Dim::Value(10.0),
+            op: BodyOp::Boss,
+            thin: Some(ThinWall {
+                kind: ThinKind::OneDirection,
+                thickness: Dim::Value(1.0),
+                thickness2: Dim::Value(1.0),
+                reverse: false,
+                fillet: None,
+                cap: Some(Dim::Value(1.0)),
+            }),
+            ..Default::default()
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "Cap ends needs a closed outline, and the sketch's curves are open");
+        assert_eq!(
+            e.points,
+            vec![SketchPoint { sketch: sk, point: a }, SketchPoint { sketch: sk, point: b }]
+        );
+
+        // A revolve about a centerline that one end of the L lies on: that end is closed
+        // along the axis, so only the other is named. The axis's own ends are not.
+        let mut doc = Document::new();
+        let mut sf = SketchFeature::new(PlaneRef::Front);
+        let a = sf.sketch.add_point(v2(5.0, 10.0));
+        let corner = sf.sketch.add_point(v2(5.0, 0.0));
+        let on_axis = sf.sketch.add_point(v2(0.0, 0.0));
+        sf.sketch.add_line(a, corner);
+        sf.sketch.add_line(corner, on_axis);
+        let (p, q) = (sf.sketch.add_point(v2(0.0, -20.0)), sf.sketch.add_point(v2(0.0, 20.0)));
+        let axis = sf.sketch.add_line(p, q);
+        let sk = doc.add_feature(FeatureKind::Sketch(sf));
+        let id =
+            doc.add_feature(FeatureKind::Revolve(RevolveFeature { sketch: sk, axis, ..Default::default() }));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "its sketch's outline is open, and its ends are not both on the axis");
+        assert_eq!(e.points, vec![SketchPoint { sketch: sk, point: a }]);
+
+        // A sweep of the L, on the Right plane, along a line from the origin.
+        let mut doc = Document::new();
+        let (profile, [a, b]) = open_l(&mut doc, PlaneRef::Right, 5.0);
+        let mut path = SketchFeature::new(PlaneRef::Top);
+        let (p, q) = (path.sketch.add_point(v2(0.0, 0.0)), path.sketch.add_point(v2(50.0, 0.0)));
+        path.sketch.add_line(p, q);
+        let path = doc.add_feature(FeatureKind::Sketch(path));
+        let id = doc.add_feature(FeatureKind::Sweep(crate::sweep::SweepFeature {
+            profile: Some(profile),
+            path,
+            ..Default::default()
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(e.cause, "its profile's outline is open");
+        assert_eq!(
+            e.points,
+            vec![SketchPoint { sketch: profile, point: a }, SketchPoint { sketch: profile, point: b }]
+        );
     }
 
     /// Issue #172: a fillet too large for its faces used to be refused by the exact kernel
@@ -758,6 +924,46 @@ mod tests {
             let st = doc.rebuild();
             assert_eq!(st.faceted_from, None, "{kind:?}");
             assert_eq!(st.body.mass_properties().volume, 24000.0, "{kind:?}");
+        }
+    }
+
+    /// Chamfers only the exact kernel builds name the edge they do not fit and the largest
+    /// distance that fits, from the exact kernel's typed refusal (#199). The upright edge
+    /// of the 40 x 30 x 20 block lies between side 0, 40 mm wide, and side 1, 30 mm wide.
+    /// A 30 degree chamfer sets back its distance along one face and distance x sin 30 /
+    /// sin 120 = 0.577 of it along the other: along side 0 the 40 mm limits it, along side
+    /// 1 the 30 mm (the other face would allow 30 / 0.577 = 52 and 40 / 0.577 = 69 mm). An
+    /// offset-face chamfer across the right angle sets back its distance along both faces.
+    #[test]
+    fn exact_only_chamfers_too_large_name_the_edge_and_the_limit() {
+        let angle = |flip| ChamferKind::AngleDistance { angle: Dim::Value(30.0), flip };
+        for (kind, limit) in [(angle(false), 40), (angle(true), 30), (ChamferKind::OffsetFace, 30)] {
+            let (mut doc, base) = block();
+            let edge = EdgeRef::new(FaceId::side(base, 0), FaceId::side(base, 1));
+            assert_eq!(edge.a, FaceId::side(base, 0), "the distance runs along side 0 unflipped");
+            let id = doc.add_feature(FeatureKind::Chamfer(ChamferFeature {
+                edges: vec![edge],
+                distance: Dim::Value(100.0),
+                kind: kind.clone(),
+                tangent_propagation: false,
+            }));
+            let e = failed(&mut doc, id);
+            assert_eq!(
+                e.cause,
+                format!(
+                    "the chamfer distance 100 mm does not fit on the faces next to the edge, which allow at most {limit} mm"
+                ),
+                "{kind:?}"
+            );
+            assert_eq!(e.suggestion, format!("Try a distance under {limit} mm."), "{kind:?}");
+            assert_eq!(e.edges, vec![edge], "{kind:?}");
+            // Just under the limit it builds, exactly.
+            if let Some(FeatureKind::Chamfer(c)) = doc.feature_mut(id).map(|f| &mut f.kind) {
+                c.distance = Dim::Value(f64::from(limit) - 0.5);
+            }
+            let st = doc.rebuild();
+            assert!(st.errors.is_empty(), "{kind:?}: {:?}", st.errors);
+            assert!(st.exact_features.contains(&id), "{kind:?}");
         }
     }
 

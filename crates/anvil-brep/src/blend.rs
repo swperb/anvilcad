@@ -141,6 +141,55 @@ fn invalid<T>(msg: impl Into<String>) -> Result<T> {
     Err(KernelError::InvalidInput(msg.into()))
 }
 
+/// Refuses a blend wider than the faces next to `edge`. Each of `sides` is a face, the
+/// direction from `p` on the edge into it, square to the edge, and how far the blend sets
+/// back along it; where it ends must lie on the face. A refusal says how large a blend of
+/// the same kind fits: the setbacks grow in proportion to the size, so it is the size
+/// scaled by the shortest reach across a face over the setback that does not fit. (A
+/// chamfer's second distance does not grow with its first, so where only that one does
+/// not fit, no limit is given.)
+fn check_fit(
+    solid: &Solid,
+    edge: EdgeId,
+    blend: Blend,
+    p: DVec3,
+    sides: [(usize, DVec3, f64); 2],
+) -> Result<()> {
+    let mut limit = Some(f64::INFINITY);
+    let mut fits = true;
+    for (f, w, s) in sides {
+        if boolean::face_contains(solid, f, p + w * s * 0.999) {
+            continue;
+        }
+        fits = false;
+        let scales = !matches!(blend, Blend::ChamferDistances { along, .. } if along != f);
+        limit = match (limit, scales) {
+            (Some(l), true) => Some(l.min(blend.size() * reach(solid, f, p, w, s) / s)),
+            _ => None,
+        };
+    }
+    if fits {
+        return Ok(());
+    }
+    Err(KernelError::BlendTooLarge { edge, blend: blend.name(), size: blend.size(), limit })
+}
+
+/// How far from `p`, on the boundary of face `f`, the face reaches in direction `w`,
+/// given that it ends before `beyond`: the last point on it, found by bisection, so to
+/// within the tolerance [`boolean::face_contains`] allows at a face's boundary.
+fn reach(solid: &Solid, f: usize, p: DVec3, w: DVec3, beyond: f64) -> f64 {
+    let (mut on, mut off) = (0.0, beyond);
+    for _ in 0..60 {
+        let t = 0.5 * (on + off);
+        if boolean::face_contains(solid, f, p + w * t) {
+            on = t;
+        } else {
+            off = t;
+        }
+    }
+    on
+}
+
 /// Blends one edge. New faces are tagged with `owner`, and the tool's three side
 /// faces get the tags `tag_base`, `tag_base + 2` (the round or bevel face) and
 /// `tag_base + 4`, so callers can give blend faces stable names.
@@ -343,14 +392,7 @@ fn analytic_tool(solid: &Solid, edge: EdgeId, blend: Blend, tag_base: u32) -> Re
 
     // The blend must fit on both faces.
     let mid = (p0 + p1) * 0.5;
-    for (f, w, s) in [(fa, wa, sa), (fb, wb, sb)] {
-        if !boolean::face_contains(solid, f, mid + w * s * 0.999) {
-            return invalid(format!(
-                "a {} of {size} does not fit on the faces next to this edge",
-                blend.name()
-            ));
-        }
-    }
+    check_fit(solid, edge, blend, mid, [(fa, wa, sa), (fb, wb, sb)])?;
 
     // Cross-section in a frame with z along the edge and x into face A.
     let frame = Frame::new(p0, d, wa)?;
@@ -569,13 +611,7 @@ fn round_edge_tool(
     let phi = wa.dot(wb).clamp(-1.0, 1.0).acos();
     let (sa, sb) = blend.setbacks(phi, fa, fb)?;
     let setback = sa.max(sb);
-    let too_big =
-        || invalid(format!("a {} of {size} does not fit on the faces next to this edge", blend.name()));
-    for (f, w, s) in [(fa, wa, sa), (fb, wb, sb)] {
-        if !boolean::face_contains(solid, f, p + w * s * 0.999) {
-            return too_big();
-        }
-    }
+    check_fit(solid, edge, blend, p, [(fa, wa, sa), (fb, wb, sb)])?;
 
     // The cross-section in the meridian half-plane through `p`: x away from the axis,
     // y along it, the edge at (radius, 0).
@@ -585,6 +621,16 @@ fn round_edge_tool(
     let (wa2, wb2, na2, nb2) = (to2(wa), to2(wb), to2(na), to2(nb));
     let pa = c + wa2 * sa;
     let pb = c + wb2 * sb;
+    // Wider than the circle: the cross-section reaches the axis. The setbacks grow with
+    // the size, so the largest that fits takes the nearer contact just to the axis.
+    let too_big = || {
+        let limit = [(wa2, sa), (wb2, sb)]
+            .into_iter()
+            .filter(|(w, _)| w.x < 0.0)
+            .map(|(w, s)| size * radius / (-w.x * s))
+            .fold(None, |m: Option<f64>, l| Some(m.map_or(l, |m| m.min(l))));
+        Err(KernelError::BlendTooLarge { edge, blend: blend.name(), size, limit })
+    };
     let round = match blend {
         Blend::Fillet(r) => {
             let center = c + (wa2 + wb2).normalize() * (r / (phi / 2.0).sin());
@@ -808,7 +854,14 @@ mod tests {
     fn too_large_and_curved_edges_are_refused() {
         let c = cube(10.0);
         let e = edge(&c, DVec3::new(5.0, 0.0, 10.0));
-        assert!(matches!(blend_edge(&c, e, Blend::Fillet(20.0), 1, 0), Err(KernelError::InvalidInput(_))));
+        // The 10 mm cube's faces allow a round of at most 10 mm, setting back 10 into each.
+        match blend_edge(&c, e, Blend::Fillet(20.0), 1, 0) {
+            Err(KernelError::BlendTooLarge { edge, blend: "fillet", size, limit: Some(limit) }) => {
+                assert_eq!((edge, size), (e, 20.0));
+                assert!((limit - 10.0).abs() < 1e-4, "{limit}");
+            }
+            other => panic!("{other:?}"),
+        }
         assert!(blend_edge(&c, e, Blend::Fillet(-1.0), 1, 0).is_err());
         let l = Loop2::new(vec![Segment::circle(DVec2::ZERO, 3.0)]);
         let r = build_regions(&[l]).expect("region");
@@ -816,7 +869,14 @@ mod tests {
         // The rim fillets now, but not wider than the cylinder.
         let rim = edge(&cyl, DVec3::new(3.0, 0.0, 5.0));
         assert!(blend_edge(&cyl, rim, Blend::Fillet(1.0), 1, 0).is_ok());
-        assert!(matches!(blend_edge(&cyl, rim, Blend::Fillet(3.5), 1, 0), Err(KernelError::InvalidInput(_))));
+        // The top of the radius 3 cylinder reaches 3 in from the rim.
+        match blend_edge(&cyl, rim, Blend::Fillet(3.5), 1, 0) {
+            Err(KernelError::BlendTooLarge { edge, size, limit: Some(limit), .. }) => {
+                assert_eq!((edge, size), (rim, 3.5));
+                assert!((limit - 3.0).abs() < 1e-4, "{limit}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     /// Issue #200: a round swept by the rolling ball (every profile other than a circular
@@ -829,8 +889,12 @@ mod tests {
         for profile in [Profile::ConicRho(0.5), Profile::ConicRadius(30.0), Profile::CurvatureContinuous] {
             let blend = Blend::Profiled { radius: 20.0, profile };
             match blend_edge(&c, e, blend, 1, 0) {
-                Err(KernelError::InvalidInput(m)) => {
-                    assert_eq!(m, "a fillet of 20 does not fit on the faces next to this edge", "{profile:?}")
+                Err(err @ KernelError::BlendTooLarge { edge, size: 20.0, limit: None, .. }) if edge == e => {
+                    assert_eq!(
+                        err.to_string(),
+                        "a fillet of 20 does not fit on the faces next to this edge",
+                        "{profile:?}"
+                    )
                 }
                 other => panic!("{profile:?}: {other:?}"),
             }

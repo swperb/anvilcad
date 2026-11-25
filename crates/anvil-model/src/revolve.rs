@@ -75,13 +75,27 @@ impl Document {
                 Ok(p) => p,
                 Err(e) => match crate::rebuild::close_along_axis(sk, a, b).map(|s| s.profiles()) {
                     Some(Ok(p)) => p,
-                    _ => return Err(match e {
-                        anvil_sketch::ProfileError::OpenContour { .. } => crate::failure::Cause::told(
-                            "its sketch's outline is open, and its ends are not both on the axis",
-                            "Close the outline, end it on the axis on both sides, or turn on Thin feature.",
-                        ),
-                        e => e.into(),
-                    }),
+                    _ => {
+                        return Err(match e {
+                            anvil_sketch::ProfileError::OpenContour { .. } => {
+                                // The ends off the axis, with the axis left out of the outline:
+                                // an end on it is closed along it.
+                                let mut outline = sk.clone();
+                                if let Some(e) = outline.entities.get_mut(rf.axis) {
+                                    e.construction = true;
+                                }
+                                let dir = (b - a).normalized();
+                                let off_axis = |p: Vec2| (p - a).cross(dir).abs() > 1e-6;
+                                crate::failure::Cause::Open {
+                                sketch: rf.sketch,
+                                ends: outline.open_ends().into_iter().filter(|&p| off_axis(sk.pos(p))).collect(),
+                                cause: "its sketch's outline is open, and its ends are not both on the axis".into(),
+                                suggestion: "Close the outline, end it on the axis on both sides, or turn on Thin feature.".into(),
+                            }
+                            }
+                            e => e.into(),
+                        });
+                    }
                 },
             },
         };

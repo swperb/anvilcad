@@ -352,7 +352,9 @@ impl Document {
                     }
                     let hollows = crate::thin::hollows(&walls);
                     if hollows.is_empty() {
-                        return Err(crate::failure::Cause::told(
+                        return Err(crate::failure::open_sketch(
+                            ef.sketch,
+                            &sf.sketch,
                             "Cap ends needs a closed outline, and the sketch's curves are open",
                             "Close the sketch's outline, or turn off Cap ends.",
                         ));
@@ -364,7 +366,9 @@ impl Document {
             None => match sf.sketch.profiles() {
                 Ok(p) => p,
                 Err(anvil_sketch::ProfileError::OpenContour { .. }) => {
-                    return Err(crate::failure::Cause::told(
+                    return Err(crate::failure::open_sketch(
+                        ef.sketch,
+                        &sf.sketch,
                         "its sketch's outline is open, so it encloses no area to extrude",
                         "Close the outline so every end meets another, or turn on Thin feature to extrude the open curves as a wall.",
                     ));

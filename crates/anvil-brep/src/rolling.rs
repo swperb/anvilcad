@@ -881,11 +881,12 @@ impl Roller<'_> {
             if !boolean::face_contains(self.solid, leg.fa, s.a)
                 || !boolean::face_contains(self.solid, leg.fb, s.b)
             {
-                return Err(KernelError::InvalidInput(format!(
-                    "a {} of {} does not fit on the faces next to this edge",
-                    blend.name(),
-                    self.radius
-                )));
+                return Err(KernelError::BlendTooLarge {
+                    edge: leg.id,
+                    blend: blend.name(),
+                    size: self.radius,
+                    limit: None,
+                });
             }
         }
         Ok(())
