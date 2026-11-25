@@ -3,7 +3,7 @@ use anvil_brep::boolean::{BoolOp, boolean};
 use anvil_brep::profile::{Loop2, Segment, build_regions};
 use anvil_brep::{Frame, check, extrude, mass, tess};
 use glam::{DVec2, DVec3};
-use std::f64::consts::PI;
+use std::f64::consts::{PI, TAU};
 
 fn prism(pts: &[DVec2], frame: &Frame, z0: f64, z1: f64) -> anvil_brep::Solid {
     let l = Loop2::new(
@@ -655,4 +655,62 @@ fn loop_through_a_vertex_twice_round_trips_as_one_bound() {
     assert!((v - v0).abs() < 1e-4, "{v} vs {v0}");
     assert!((v - want).abs() / want < 1e-4, "{v} vs {want}");
     assert!(watertight(&imp.bodies[0].mesh));
+}
+
+/// A profile in the xz plane (x the distance from the z axis) turned about z.
+fn turned(l: Loop2, angle: f64) -> anvil_brep::Solid {
+    let reg = build_regions(&[l]).expect("region");
+    let plane = Frame { origin: DVec3::ZERO, x: DVec3::X, y: DVec3::Z, z: -DVec3::Y };
+    anvil_brep::revolve::revolve(&plane, &reg[0], DVec2::ZERO, DVec2::Y, angle).expect("revolve")
+}
+
+/// The segment of the disc of radius 5 about (`cx`, 0) on the side x >= 0, cut off by
+/// the z axis, turned about it: an apple (spindle torus) for `cx` = 3, a lemon for -3.
+fn spindle(cx: f64, angle: f64) -> anvil_brep::Solid {
+    let h = (25.0 - cx * cx).sqrt();
+    let a = h.atan2(-cx);
+    turned(
+        Loop2::new(vec![
+            Segment::Arc { center: DVec2::new(cx, 0.0), radius: 5.0, start: -a, sweep: 2.0 * a },
+            Segment::Line { a: DVec2::new(0.0, h), b: DVec2::new(0.0, -h) },
+        ]),
+        angle,
+    )
+}
+
+#[test]
+fn pinched_tori_round_trip_exactly() {
+    // The apple is the outer part of the tube, the lemon the inner: select_outer says
+    // which. Read back, each is the same exact solid, whole or partly turned.
+    let t = (0.6f64).acos();
+    let apple = 2.0 * PI * (75.0 * (PI - t) + 236.0 / 3.0);
+    let lemon = 2.0 * PI * (236.0 / 3.0 - 75.0 * t);
+    let horn = Loop2::new(vec![Segment::circle(DVec2::new(5.0, 0.0), 5.0)]);
+    let cases = [
+        (spindle(3.0, TAU), Some(".T."), apple),
+        (spindle(-3.0, TAU), Some(".F."), lemon),
+        (spindle(3.0, 1.0), Some(".T."), apple / TAU),
+        (spindle(-3.0, -2.0), Some(".F."), 2.0 * lemon / TAU),
+        (turned(horn.clone(), TAU), None, 250.0 * PI * PI),
+        (turned(horn, 2.5), None, 2.5 / TAU * 250.0 * PI * PI),
+    ];
+    for (s, outer, v) in cases {
+        let text = export::write(std::slice::from_ref(&s), "pinched");
+        match outer {
+            Some(o) => assert!(
+                text.contains("DEGENERATE_TOROIDAL_SURFACE('',")
+                    && text.contains(&format!("3.,5.,{o})")),
+                "{text}"
+            ),
+            None => assert!(text.contains("TOROIDAL_SURFACE('',") && !text.contains("DEGENERATE"), "{text}"),
+        }
+        let imp = import(&text).expect("import");
+        let b = &imp.bodies[0];
+        let e = b.exact.as_ref().unwrap_or_else(|| panic!("not exact: {:?}", b.not_exact));
+        assert_eq!(e.faces.len(), s.faces.len());
+        let got = mass::exact_properties(e).expect("measure").volume;
+        assert!((got - v).abs() <= 1e-8 * v, "{got} vs {v}");
+        assert!(watertight(&b.mesh));
+        assert!((mesh_volume(&b.mesh) - v).abs() / v < 0.01, "{}", mesh_volume(&b.mesh));
+    }
 }

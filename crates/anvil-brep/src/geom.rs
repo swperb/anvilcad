@@ -4,7 +4,7 @@ use crate::spline::Spline;
 use crate::{KernelError, Result, tol};
 use glam::{DVec2, DVec3};
 use serde::{Deserialize, Serialize};
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 use std::sync::Arc;
 
 /// A right-handed orthonormal coordinate frame.
@@ -303,13 +303,28 @@ pub enum Surface {
         #[serde(default)]
         apex: bool,
     },
-    /// The ring torus around axis `frame.z`: a tube of radius `minor` whose centre runs
-    /// round a circle of radius `major` (larger than `minor`) in the plane of
-    /// `frame.x` and `frame.y`. Its natural normal points out of the tube.
+    /// The torus around axis `frame.z`: a tube of radius `minor` whose centre runs
+    /// round a circle of radius `major` in the plane of `frame.x` and `frame.y`. Its
+    /// natural normal points out of the tube.
+    ///
+    /// When `major` is larger than `minor` it is a ring torus. Otherwise the tube reaches
+    /// the axis and the surface pinches there to a point, a pole (see
+    /// [`Surface::torus_pole`]): a horn torus when the two are equal, a spindle torus when
+    /// `minor` is larger. A spindle's tube crosses the axis; with a positive `major` the
+    /// surface is the outer part of the tube (the apple, with a dimple at each pole), and
+    /// with a negative one it is the part of the tube centred across the axis that lies
+    /// on this side of it (the lemon, pointed at each pole). In each case a point at tube
+    /// angle `v` and angle `u` round the axis is `major + minor cos v` from the axis.
     ///
     /// The tube angle (0 on the outside, pi/2 on the `frame.z` side) is measured within
     /// half a turn of `v_mid`, so a face around `v_mid` never meets the place where
-    /// that angle wraps.
+    /// that angle wraps. A ring torus's parameters are the angle round the axis times
+    /// `major` and the tube angle (from `v_mid`) times `minor`. A pinched torus is laid
+    /// out like a pointed cone, about its pole nearest `v_mid`: the point at angle `u`
+    /// round the axis, `s` along the tube from the pole, goes to `s` in direction `u`
+    /// (mirrored when needed so counter-clockwise is about the natural normal). That
+    /// layout has no seam, and a face that runs to the pole has no edge there; faces
+    /// must not reach the other pole.
     Torus {
         frame: Frame,
         major: f64,
@@ -351,6 +366,22 @@ impl Surface {
             Surface::Sphere { frame, .. } => (p - frame.origin).normalize_or(frame.z),
             Surface::BSpline(s) => s.normal_st(s.closest(p)),
         }
+    }
+
+    /// For a torus whose tube reaches its axis (`major <= minor`), the tube angle of the
+    /// pole nearest `v_mid` (within half a turn of it) and the side of it the face lies
+    /// on: 1 when the face's tube angles are larger than the pole's, -1 when smaller.
+    /// `None` for a ring torus, or any other surface.
+    pub fn torus_pole(&self) -> Option<(f64, f64)> {
+        match *self {
+            Surface::Torus { major, minor, v_mid, .. } => torus_pole(major, minor, v_mid),
+            _ => None,
+        }
+    }
+
+    /// Whether the surface is a torus whose tube reaches its axis (a horn or spindle).
+    pub fn is_pinched_torus(&self) -> bool {
+        self.torus_pole().is_some()
     }
 
     /// Angle around a torus's tube at `p`, within half a turn of `v_mid`.
@@ -459,7 +490,13 @@ impl Surface {
             Surface::Torus { frame, major, minor, v_mid } => {
                 let l = frame.to_local(p);
                 let phi = Self::tube_angle(frame, *major, *v_mid, p);
-                DVec2::new(l.y.atan2(l.x) * major, (phi - v_mid) * minor)
+                let u = l.y.atan2(l.x);
+                match torus_pole(*major, *minor, *v_mid) {
+                    Some((pole, side)) => {
+                        DVec2::new(u.cos(), -side * u.sin()) * ((phi - pole) * side * minor)
+                    }
+                    None => DVec2::new(u * major, (phi - v_mid) * minor),
+                }
             }
             Surface::Sphere { frame, radius } => {
                 // Project the direction onto the plane z = 1 from (0, 0, -1).
@@ -497,7 +534,10 @@ impl Surface {
                 frame.origin + (frame.x * t.cos() + frame.y * t.sin()) * r + frame.z * uv.y
             }
             Surface::Torus { frame, major, minor, v_mid } => {
-                let (t, phi) = (uv.x / major, uv.y / minor + v_mid);
+                let (t, phi) = match torus_pole(*major, *minor, *v_mid) {
+                    Some((pole, side)) => ((-side * uv.y).atan2(uv.x), pole + side * uv.length() / minor),
+                    None => (uv.x / major, uv.y / minor + v_mid),
+                };
                 let radial = frame.x * t.cos() + frame.y * t.sin();
                 frame.origin + radial * (major + minor * phi.cos()) + frame.z * (minor * phi.sin())
             }
@@ -518,6 +558,7 @@ impl Surface {
             Surface::BSpline(s) => s.period(),
             Surface::Cone { apex: true, .. } => None,
             Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } => Some(TAU * radius),
+            Surface::Torus { .. } if self.is_pinched_torus() => None,
             Surface::Torus { major, .. } => Some(TAU * major),
         }
     }
@@ -563,7 +604,60 @@ impl Surface {
     }
 }
 
+/// See [`Surface::torus_pole`].
+fn torus_pole(major: f64, minor: f64, v_mid: f64) -> Option<(f64, f64)> {
+    if major.is_nan() || major > minor || minor <= 0.0 {
+        return None;
+    }
+    // The poles are where major + minor cos v = 0; for a horn torus the two are one.
+    let c = (-major / minor).clamp(-1.0, 1.0).acos();
+    let wrap = |a: f64| (a + PI).rem_euclid(TAU) - PI;
+    let (a, b) = (wrap(c - v_mid), wrap(-c - v_mid));
+    let pole = v_mid + if a.abs() <= b.abs() { a } else { b };
+    Some((pole, if v_mid >= pole { 1.0 } else { -1.0 }))
+}
+
 /// The apex of a cone (where its radius reaches zero).
 pub fn cone_apex(frame: &Frame, radius: f64, half_angle: f64) -> DVec3 {
     frame.origin - frame.z * (radius / half_angle.tan())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pinched_torus_layout() {
+        // Horn, apple and lemon, faces on each side of each pole: the layout puts the
+        // pole at the origin, inverts exactly, and runs counter-clockwise about the
+        // natural normal.
+        let frame =
+            Frame::new(DVec3::new(1.0, 2.0, 3.0), DVec3::new(1.0, 1.0, 1.0), DVec3::X).expect("frame");
+        for (major, minor, v_mid) in
+            [(5.0, 5.0, 1.5), (5.0, 5.0, -1.5), (3.0, 5.0, 1.0), (3.0, 5.0, -1.0), (-3.0, 5.0, 0.4)]
+        {
+            let s = Surface::Torus { frame, major, minor, v_mid };
+            let (pole, side) = s.torus_pole().expect("pinched");
+            assert!((major + minor * pole.cos()).abs() < 1e-12);
+            let tip = frame.origin + frame.z * (minor * pole.sin());
+            assert!(s.uv(tip).length() < 1e-9);
+            for k in 1..8 {
+                let uv = DVec2::from_angle(k as f64) * (0.3 * k as f64);
+                let p = s.eval_uv(uv);
+                assert!(s.distance(p) < 1e-12);
+                assert!((s.uv(p) - uv).length() < 1e-9, "{uv} {}", s.uv(p));
+                let h = 1e-6;
+                let du = s.eval_uv(uv + DVec2::X * h) - s.eval_uv(uv - DVec2::X * h);
+                let dv = s.eval_uv(uv + DVec2::Y * h) - s.eval_uv(uv - DVec2::Y * h);
+                assert!(du.cross(dv).dot(s.normal_at(p)) > 0.0);
+                // On the face's side of the pole, towards `v_mid`.
+                let l = frame.to_local(p);
+                let v = l.z.atan2(DVec2::new(l.x, l.y).length() - major);
+                assert!(((v - pole) * side).rem_euclid(TAU) < PI);
+            }
+            assert_eq!(s.u_period(), None);
+        }
+        let ring = Surface::Torus { frame, major: 5.0, minor: 4.99, v_mid: 0.0 };
+        assert!(ring.torus_pole().is_none() && ring.u_period().is_some());
+    }
 }

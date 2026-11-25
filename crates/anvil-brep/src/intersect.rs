@@ -28,6 +28,13 @@ pub fn surfaces(a: &Surface, b: &Surface, tol: f64) -> Result<Ssi> {
 /// hyperbola or parabola) need it: they are returned as the piece reaching past the
 /// box, where [`surfaces`] reports them unsupported.
 pub fn surfaces_within(a: &Surface, b: &Surface, tol: f64, window: Option<(DVec3, DVec3)>) -> Result<Ssi> {
+    // A horn or spindle torus has a pole on its axis and passes through itself there;
+    // nothing here traces curves on one yet (issue #145 added the surface).
+    if a.is_pinched_torus() || b.is_pinched_torus() {
+        return Err(KernelError::Unsupported(
+            "intersecting a horn or spindle torus (one whose tube reaches its axis)".into(),
+        ));
+    }
     if a.coincident(b, tol) {
         return Ok(Ssi::Coincident);
     }
@@ -623,7 +630,7 @@ pub fn curve_surface(curve: &Curve, t0: f64, t1: f64, surface: &Surface, tol: f6
         (_, Surface::Cylinder { .. } | Surface::Cone { .. }) => numeric_roots(curve, lo, hi, surface, tol),
         (Curve::Line { origin, dir }, Surface::Torus { frame, major, minor, .. }) => {
             // Only the stretch of the line inside the torus's bounding sphere can hit it.
-            let (o, r) = (*origin - frame.origin, major + minor);
+            let (o, r) = (*origin - frame.origin, major.abs() + minor);
             let b = o.dot(*dir);
             let disc = b * b - (o.length_squared() - r * r);
             if disc <= 0.0 {

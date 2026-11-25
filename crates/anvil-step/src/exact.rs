@@ -99,6 +99,9 @@ fn surface(
                 apex: false,
             })
         }
+        shapes::Surface::Torus { frame, major, minor } if *minor > 0.0 && *major <= *minor => {
+            pinched_torus(frame, *major, *minor, loops, singular, same_sense)
+        }
         shapes::Surface::Torus { frame, major, minor } => {
             // Ring tori only, and faces that leave a gap round the tube: the tube angle
             // is measured from the middle of the face, away from that gap.
@@ -165,6 +168,82 @@ fn surface(
             Some(Surface::Sphere { frame, radius: *radius })
         }
     }
+}
+
+/// A face of a horn or spindle torus (`major <= minor`, see anvil-brep's torus), whose
+/// surface pinches to a pole at each end of its tube angles `-c..c`. The kernel lays a
+/// face out about one pole and needs `v_mid` on the face, nearer that pole: the one the
+/// face reaches (a boundary point or vertex loop there), or for a face that goes once
+/// round the axis with one loop, the one its loop runs counter-clockwise about seen
+/// from the face's side. A face that reaches neither is laid out about the nearer.
+fn pinched_torus(
+    frame: &Frame,
+    major: f64,
+    minor: f64,
+    loops: &[Vec<DVec3>],
+    singular: &[DVec3],
+    same_sense: bool,
+) -> Option<Surface> {
+    use std::f64::consts::PI;
+    let c = (-major / minor).clamp(-1.0, 1.0).acos();
+    let tol = 1e-6 * minor.max(1.0);
+    let tip = |sign: f64| frame.origin + frame.z * (minor * (sign * c).sin());
+    let at_tip = |p: &DVec3, sign: f64| (*p - tip(sign)).length() < tol;
+    let points: Vec<DVec3> = loops.iter().flatten().copied().collect();
+    // Tube angles of the points away from the poles, in -c..c.
+    let angles: Vec<f64> = points
+        .iter()
+        .filter(|p| !at_tip(p, 1.0) && !at_tip(p, -1.0))
+        .map(|p| {
+            let l = frame.to_local(*p);
+            l.z.atan2((l.x * l.x + l.y * l.y).sqrt() - major)
+        })
+        .collect();
+    let (lo, hi) = angles.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(*v), b.max(*v)));
+    if !lo.is_finite() {
+        return None;
+    }
+    let touches = |sign: f64| singular.iter().chain(&points).any(|p| at_tip(p, sign));
+    // For a horn torus the poles are one point (tube angle pi, or -pi): the face's other
+    // points say which side of it the face is on.
+    let horn = c >= PI - 1e-9;
+    let winding = |l: &[DVec3]| {
+        let angle = |p: &DVec3| {
+            let q = frame.to_local(*p);
+            q.y.atan2(q.x)
+        };
+        let n = l.len();
+        (0..n)
+            .map(|i| {
+                let d = angle(&l[(i + 1) % n]) - angle(&l[i]);
+                d - TAU * (d / TAU).round()
+            })
+            .sum::<f64>()
+    };
+    let by_middle = if 0.5 * (lo + hi) >= 0.0 { 1.0 } else { -1.0 };
+    let sign = match (touches(1.0), touches(-1.0)) {
+        // A horn torus's poles are one point: the face's other points say which side
+        // of it the face is on.
+        (true, true) if horn => by_middle,
+        (true, true) => return None,
+        (true, false) => 1.0,
+        (false, true) => -1.0,
+        (false, false) => {
+            let w = if loops.len() == 1 { winding(&loops[0]) } else { 0.0 };
+            if w.abs() > PI {
+                // Laid out about the pole at +c, the layout turns the same way as the
+                // angle round the axis; its loop runs counter-clockwise when the face's
+                // normal is the surface's.
+                if (w > 0.0) == same_sense { 1.0 } else { -1.0 }
+            } else {
+                by_middle
+            }
+        }
+    };
+    // Half way from the pole to the face's far end.
+    let far = if sign > 0.0 { lo } else { hi };
+    let v_mid = 0.5 * (sign * c + far);
+    Some(Surface::Torus { frame: *frame, major, minor, v_mid })
 }
 
 fn curve(c: &shapes::Curve) -> Option<Curve> {

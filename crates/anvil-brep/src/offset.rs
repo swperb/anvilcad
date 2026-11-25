@@ -151,8 +151,16 @@ fn moved(s: &Surface, d: f64) -> Result<Surface> {
         Surface::Plane { frame } => Surface::Plane { frame: frame.with_origin(frame.origin + frame.z * d) },
         Surface::Cylinder { frame, radius } => Surface::Cylinder { frame, radius: positive(radius + d)? },
         Surface::Sphere { frame, radius } => Surface::Sphere { frame, radius: positive(radius + d)? },
+        Surface::Torus { .. } if s.is_pinched_torus() => {
+            // Its pole would move off the axis, or the tube would pinch where it did not.
+            return refuse("offsetting a horn or spindle torus (one whose tube reaches its axis)");
+        }
         Surface::Torus { frame, major, minor, v_mid } => {
-            Surface::Torus { frame, major, minor: positive(minor + d)?, v_mid }
+            let minor = positive(minor + d)?;
+            if major <= minor {
+                return refuse("the offset would make a torus's tube reach its axis");
+            }
+            Surface::Torus { frame, major, minor, v_mid }
         }
         Surface::Cone { frame, radius, half_angle, apex } => {
             // The normal leans back from the axis by the half angle, so the radius at the
