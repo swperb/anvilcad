@@ -35,7 +35,7 @@ impl Document {
         rf: &RevolveFeature,
         st: &BuildState,
     ) -> Result<RevolvePlan, crate::failure::Cause> {
-        let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
+        let num = |d: &Dim, what: &str| crate::refgeom::value(d, &st.variables, what);
         let sf = self.sketch(rf.sketch).ok_or_else(crate::failure::sketch_missing)?;
         let sk = &sf.sketch;
         let frame = *st.frames.get(&rf.sketch).ok_or_else(crate::failure::sketch_failed)?;
@@ -80,7 +80,7 @@ impl Document {
                             "its sketch's outline is open, and its ends are not both on the axis",
                             "Close the outline, end it on the axis on both sides, or turn on Thin feature.",
                         ),
-                        e => e.to_string().into(),
+                        e => e.into(),
                     }),
                 },
             },

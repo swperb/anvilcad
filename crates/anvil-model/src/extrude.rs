@@ -10,8 +10,10 @@
 //! plan then builds the faceted tool and, when the part is exact, the exact one.
 
 use crate::document::*;
+use crate::failure::{mm, Cause};
 use crate::kernel::ExactKernel;
 use crate::rebuild::{BuildState, ExactBody, EXACT};
+use crate::refgeom::value;
 use anvil_kernel::build::extrude_drafted;
 use anvil_kernel::{v2, Frame, Loop2, Profile, Solid, Vec3};
 
@@ -98,17 +100,39 @@ impl Document {
         }
     }
 
-    pub(crate) fn resolve_point(&self, p: &PointRef, st: &BuildState) -> Result<Vec3, String> {
+    /// Where a picked point is in the model.
+    pub(crate) fn resolve_point(&self, p: &PointRef, st: &BuildState) -> Result<Vec3, Cause> {
+        let name = |id: u32| self.feature(id).map(|f| f.name.clone());
+        let deleted = |what: &str| {
+            Cause::told(
+                format!("the {what} holding the point it uses has been deleted"),
+                "Edit it and pick another point, or undo the deletion.",
+            )
+        };
         match *p {
             PointRef::Model(v) => Ok(v),
-            PointRef::Feature(id) => {
-                st.points.get(&id).copied().ok_or_else(|| "the reference point failed or is missing".into())
-            }
+            PointRef::Feature(id) => st.points.get(&id).copied().ok_or_else(|| match name(id) {
+                Some(n) => Cause::told(
+                    format!("the point {n} it uses failed or is suppressed"),
+                    format!("Fix or unsuppress {n}, or pick another point."),
+                ),
+                None => deleted("reference point"),
+            }),
             PointRef::SketchPoint { sketch, point } => {
-                let frame =
-                    st.frames.get(&sketch).ok_or("the sketch holding the point failed or is missing")?;
-                let sk = &self.sketch(sketch).ok_or("the sketch holding the point is missing")?.sketch;
-                let q = sk.points.get(point).ok_or("the point is no longer in its sketch")?;
+                let sk = &self.sketch(sketch).ok_or_else(|| deleted("sketch"))?.sketch;
+                let n = name(sketch).unwrap_or_default();
+                let frame = st.frames.get(&sketch).ok_or_else(|| {
+                    Cause::told(
+                        format!("the sketch {n} holding the point it uses failed or is suppressed"),
+                        format!("Fix or unsuppress {n}, or pick another point."),
+                    )
+                })?;
+                let q = sk.points.get(point).ok_or_else(|| {
+                    Cause::told(
+                        format!("the point it uses is no longer in the sketch {n}"),
+                        "Edit it and pick the point again.",
+                    )
+                })?;
                 Ok(frame.to_world(q.pos()))
             }
         }
@@ -127,7 +151,7 @@ impl Document {
         profiles: &[Profile],
         st: &BuildState,
     ) -> Result<Reach, crate::failure::Cause> {
-        let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
+        let num = |d: &Dim, what: &str| value(d, &st.variables, what);
         let positive = |d: f64, what: &str| {
             if d > 1e-9 && d.is_finite() {
                 Ok(d)
@@ -306,7 +330,7 @@ impl Document {
         ef: &ExtrudeFeature,
         st: &BuildState,
     ) -> Result<Plan, crate::failure::Cause> {
-        let num = |d: &Dim, what: &str| d.eval(&st.variables).map_err(|e| format!("{what}: {e}"));
+        let num = |d: &Dim, what: &str| value(d, &st.variables, what);
         let sf = self.sketch(ef.sketch).ok_or_else(crate::failure::sketch_missing)?;
         let sketch_frame = *st.frames.get(&ef.sketch).ok_or_else(crate::failure::sketch_failed)?;
         let boss = ef.op == BodyOp::Boss;
@@ -345,7 +369,7 @@ impl Document {
                         "Close the outline so every end meets another, or turn on Thin feature to extrude the open curves as a wall.",
                     ));
                 }
-                Err(e) => return Err(e.to_string().into()),
+                Err(e) => return Err(e.into()),
             },
         };
 
@@ -464,6 +488,26 @@ impl Document {
     }
 }
 
+/// Refuses caps that would meet in the middle of a piece `length` mm long.
+fn caps_fit(cap: f64, length: f64) -> Result<(), Cause> {
+    if length > 2.0 * cap {
+        return Ok(());
+    }
+    Err(Cause::told(
+        format!(
+            "the caps are {} mm thick at each end, and the extrusion is only {} mm long",
+            mm(cap),
+            mm(length)
+        ),
+        format!("Make the caps thinner than {} mm, or the extrusion longer.", mm(length / 2.0)),
+    ))
+}
+
+/// An extrusion with no piece to build.
+fn no_length() -> Cause {
+    Cause::told("it has no length in either direction", "Give it a depth greater than 0.")
+}
+
 /// A square slab in `frame`'s plane, centred on its origin, from `z0` to `z1`.
 fn slab_profile(half: f64) -> Profile {
     Profile::new(Loop2::rectangle(v2(-half, -half), v2(half, half), 0), vec![])
@@ -486,9 +530,7 @@ impl Plan {
             let mut s = match &self.capped {
                 Some((outer, hollow, cap)) => {
                     let (lo, hi) = (p.z0.min(p.z1), p.z0.max(p.z1));
-                    if hi - lo <= 2.0 * cap {
-                        return Err("the caps are thicker than the extrusion is long".into());
-                    }
+                    caps_fit(*cap, hi - lo)?;
                     let full = extrude_drafted(outer, &self.frame, p.z0, p.z1, 0.0, id).map_err(e)?;
                     let inside =
                         extrude_drafted(hollow, &self.frame, lo + cap, hi - cap, 0.0, id).map_err(e)?;
@@ -505,7 +547,7 @@ impl Plan {
                 Some(t) => t.union(&s),
             });
         }
-        let mut tool = tool.ok_or("the extrusion has no length")?;
+        let mut tool = tool.ok_or_else(no_length)?;
         if self.flip {
             let p = self.pieces[0];
             let slab =

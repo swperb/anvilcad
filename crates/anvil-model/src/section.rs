@@ -50,7 +50,7 @@ impl Document {
         view.planes
             .iter()
             .map(|sp| {
-                let f = self.resolve_plane(&sp.plane, st)?;
+                let f = self.resolve_plane(&sp.plane, st).map_err(|c| c.to_string())?;
                 let pivot = centre - f.z * (centre - f.origin).dot(f.z);
                 let (ax, ay) = (sp.rotate_x.to_radians(), sp.rotate_y.to_radians());
                 let (x, y, z) = (f.x, turn(f.y, f.x, ax), turn(f.z, f.x, ax));

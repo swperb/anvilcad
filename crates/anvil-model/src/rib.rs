@@ -85,7 +85,7 @@ impl Document {
         rf: &RibFeature,
         st: &mut BuildState,
     ) -> Result<(), crate::failure::Cause> {
-        let t = rf.thickness.eval(&st.variables).map_err(|e| format!("thickness: {e}"))?;
+        let t = crate::refgeom::value(&rf.thickness, &st.variables, "thickness")?;
         if t <= 0.0 {
             return Err(crate::failure::Cause::told(
                 "the rib thickness must be greater than zero",
@@ -142,7 +142,7 @@ impl Document {
             for s in [1.0, -1.0] {
                 if rf.normal_to_sketch {
                     let walls = thin_wall(&segs, closed, left, right, 1 << 21, 1 << 20)
-                        .map_err(|e| format!("rib: {e}"))?;
+                        .map_err(crate::failure::Cause::Offset)?;
                     let mut it = walls.into_iter();
                     let Some(first) = it.next() else { continue };
                     let profile = match it.next() {
