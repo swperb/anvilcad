@@ -1,7 +1,7 @@
 //! Geometric constraint solver.
 //!
-//! Unknowns are every point coordinate plus each circle radius. Ellipses are held by their
-//! points alone (`docs/re/sketch-entities.md`, "Ellipses"). Each constraint contributes
+//! Unknowns are every point coordinate plus each circle radius. Ellipses and splines are
+//! held by their points alone (`docs/re/sketch-entities.md`, "Ellipses" and "Splines"). Each constraint contributes
 //! one or two residual equations. We minimise the residuals with a damped Gauss-Newton
 //! iteration in its minimum-norm form, dx = -J^T (J J^T + mu I)^-1 r, which moves the
 //! geometry as little as possible. That keeps under-defined sketches stable while the user
@@ -9,6 +9,7 @@
 
 use crate::ellipse::Ellipse2;
 use crate::sketch::{arc_sweep, Constraint, Geom, PointId, Sketch};
+use crate::spline::{curvature_vector, Spline2};
 use anvil_kernel::{v2, Vec2};
 
 const TOL: f64 = 1e-9;
@@ -95,8 +96,8 @@ impl Sketch {
             x[2 * i + 1] = p.y;
         }
         for (e, rv) in l.radius_var.iter().enumerate() {
-            if let (Some(v), Geom::Circle { r, .. }) = (rv, self.entities[e].geom) {
-                x[*v] = r;
+            if let (Some(v), Geom::Circle { r, .. }) = (rv, &self.entities[e].geom) {
+                x[*v] = *r;
             }
         }
         x
@@ -133,6 +134,12 @@ impl Sketch {
                 | Geom::Ellipse { c, .. }
                 | Geom::EllipseArc { c, .. } => p(c),
                 Geom::Line { a, b } => (p(a) + p(b)) * 0.5,
+                Geom::Spline { ref pts, .. } | Geom::ControlSpline { ref pts } => {
+                    match (pts.first(), pts.last()) {
+                        (Some(&a), Some(&b)) => (p(a) + p(b)) * 0.5,
+                        _ => Vec2::ZERO,
+                    }
+                }
             }
         };
         let ellipse = |e: usize| -> Option<Ellipse2> {
@@ -143,6 +150,9 @@ impl Sketch {
                 _ => None,
             }
         };
+        let spline = |e: usize| -> Option<Spline2> { crate::spline::of_geom(&self.entities[e].geom, &p) };
+        // Whether end point `q` of entity `e` is its second end (where it finishes).
+        let is_last = |e: usize, q: PointId| self.entities[e].ends().is_some_and(|[a, b]| b == q && a != q);
         // The outward normal of a circle, arc or ellipse at a point on it.
         let normal = |e: usize, q: Vec2| -> Vec2 {
             match ellipse(e) {
@@ -156,7 +166,48 @@ impl Sketch {
                 Geom::Circle { r, .. } => l.radius_var[e].map_or(r, |v| x[v]),
                 Geom::Arc { c, a, .. } => p(a).distance(p(c)),
                 Geom::Line { a, b } => p(a).distance(p(b)),
-                Geom::Ellipse { .. } | Geom::EllipseArc { .. } => 0.0,
+                Geom::Ellipse { .. }
+                | Geom::EllipseArc { .. }
+                | Geom::Spline { .. }
+                | Geom::ControlSpline { .. } => 0.0,
+            }
+        };
+        // A normal of entity `e` at its end point `q`: square to its direction there.
+        let end_normal = |e: usize, q: PointId| -> Vec2 {
+            match self.entities[e].geom {
+                Geom::Line { a, b } => (p(b) - p(a)).perp(),
+                Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                    spline(e).map_or(Vec2::ZERO, |sp| sp.end_tangent(is_last(e, q)).perp())
+                }
+                _ => normal(e, p(q)),
+            }
+        };
+        // The curvature vector of entity `e` at its end point `q` (towards the centre of
+        // curvature, of length one over the radius).
+        let end_curvature = |e: usize, q: PointId| -> Vec2 {
+            match self.entities[e].geom {
+                Geom::Arc { c, .. } => {
+                    let d = p(c) - p(q);
+                    d / d.dot(d).max(1e-24)
+                }
+                Geom::EllipseArc { .. } => match ellipse(e) {
+                    Some(el) => {
+                        let t = el.param(p(q));
+                        curvature_vector(el.derivative(t), el.c - el.at(t))
+                    }
+                    None => Vec2::ZERO,
+                },
+                Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                    spline(e).map_or(Vec2::ZERO, |sp| sp.end_curvature(is_last(e, q)))
+                }
+                _ => Vec2::ZERO,
+            }
+        };
+        // A length the size of the entity, to scale curvature residuals to lengths.
+        let extent = |e: usize| -> f64 {
+            match self.entities[e].ends() {
+                Some([a, b]) => p(a).distance(p(b)).max(radius(e)),
+                None => radius(e),
             }
         };
         let size = |e: usize| -> f64 {
@@ -225,10 +276,14 @@ impl Sketch {
                     let d = b - a;
                     push(d.cross(p(i) - a) / d.length().max(1e-12));
                 }
-                PointOnCircle { p: i, entity } => match ellipse(entity) {
-                    Some(el) => push(el.residual(p(i))),
-                    None => push(p(i).distance(center(entity)) - radius(entity)),
-                },
+                PointOnCircle { p: i, entity } => {
+                    match (ellipse(entity), self.entities[entity].is_spline()) {
+                        (Some(el), _) => push(el.residual(p(i))),
+                        // On a spline: the signed distance, smooth across the curve.
+                        (None, true) => push(spline(entity).map_or(0.0, |sp| sp.signed_distance(p(i)))),
+                        (None, false) => push(p(i).distance(center(entity)) - radius(entity)),
+                    }
+                }
                 Midpoint { p: i, line: e } => {
                     let (a, b) = line(e);
                     let m = (a + b) * 0.5;
@@ -243,7 +298,10 @@ impl Sketch {
                         // line. Written this way the residual has a useful gradient; the
                         // distance form below is flat at the solution (any point of the
                         // line is at least as far from the centre as the line is).
-                        Some(q) => push(norm_dot(normal(entity, p(q)), d)),
+                        Some(q) => push(norm_dot(end_normal(entity, q), d)),
+                        // A spline touches a line only at a shared end; the tools refuse
+                        // otherwise.
+                        None if self.entities[entity].is_spline() => push(0.0),
                         None => {
                             let dist = (d.cross(center(entity) - a) / d.length().max(1e-12)).abs();
                             // An ellipse touches a line whose distance from its centre is
@@ -265,6 +323,9 @@ impl Sketch {
                     Geom::Arc { c, a, b } => {
                         let (cc, pa, pb) = (p(c), p(a), p(b));
                         push(pa.distance(cc) * arc_sweep((pa - cc).angle(), (pb - cc).angle()) - value);
+                    }
+                    Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                        push(spline(entity).map_or(0.0, |sp| sp.length()) - value)
                     }
                     _ => push(0.0),
                 },
@@ -304,10 +365,16 @@ impl Sketch {
                 TangentCircles { a, b, inside } => match self.shared_end(a, b) {
                     // Touching at a shared end point, both centres lie on one line through
                     // it (see Tangent above for why this form).
-                    Some(q) => push(norm_cross(normal(a, p(q)), normal(b, p(q)))),
-                    // Ellipses touch other curves only at a shared end point; the tools
-                    // that add this relation refuse otherwise.
-                    None if ellipse(a).is_some() || ellipse(b).is_some() => push(0.0),
+                    Some(q) => push(norm_cross(end_normal(a, q), end_normal(b, q))),
+                    // Ellipses and splines touch other curves only at a shared end point;
+                    // the tools that add this relation refuse otherwise.
+                    None if ellipse(a).is_some()
+                        || ellipse(b).is_some()
+                        || self.entities[a].is_spline()
+                        || self.entities[b].is_spline() =>
+                    {
+                        push(0.0)
+                    }
                     None => {
                         let dist = center(a).distance(center(b));
                         let (ra, rb) = (radius(a), radius(b));
@@ -348,6 +415,22 @@ impl Sketch {
                     push(r.x - q.x);
                     push(r.y - q.y);
                 }
+                EqualCurvature { a, b } => match self.shared_end(a, b) {
+                    // Tangent there, and bending alike: the curvature vectors agree along
+                    // the normal. Scaled by the curves' size squared, so the residual is a
+                    // length like the others.
+                    Some(q) => {
+                        let (na, nb) = (end_normal(a, q), end_normal(b, q));
+                        push(norm_cross(na, nb));
+                        let s = 0.5 * (extent(a) + extent(b));
+                        let n = na / na.length().max(1e-12);
+                        push((end_curvature(a, q) - end_curvature(b, q)).dot(n) * s * s);
+                    }
+                    None => {
+                        push(0.0);
+                        push(0.0);
+                    }
+                },
                 RotatedPoint { seed, inst, k0, k1, k } => {
                     let (c, _) = line(k0);
                     let (u, w) = (dir(k0), dir(k1));
@@ -379,7 +462,10 @@ impl Sketch {
                         }
                     }
                 }
-                Geom::Line { .. } | Geom::Circle { .. } => {}
+                Geom::Line { .. }
+                | Geom::Circle { .. }
+                | Geom::Spline { .. }
+                | Geom::ControlSpline { .. } => {}
             }
         }
     }
@@ -399,8 +485,8 @@ impl Sketch {
         base: usize,
         entity: usize,
     ) -> f64 {
-        match (self.entities[base].geom, self.entities[entity].geom) {
-            (Geom::Line { a, b }, Geom::Line { a: ea, .. }) => {
+        match (&self.entities[base].geom, &self.entities[entity].geom) {
+            (&Geom::Line { a, b }, &Geom::Line { a: ea, .. }) => {
                 let d = p(b) - p(a);
                 d.cross(p(ea) - p(a)) / d.length().max(1e-12)
             }
@@ -420,8 +506,8 @@ impl Sketch {
         value: f64,
         push: &mut dyn FnMut(f64),
     ) {
-        match (self.entities[base].geom, self.entities[entity].geom) {
-            (Geom::Line { a, b }, Geom::Line { a: ea, b: eb }) => {
+        match (&self.entities[base].geom, &self.entities[entity].geom) {
+            (&Geom::Line { a, b }, &Geom::Line { a: ea, b: eb }) => {
                 let (pa, d) = (p(a), p(b) - p(a));
                 let len = d.length().max(1e-12);
                 push(d.cross(p(ea) - pa) / len - value);
@@ -566,13 +652,14 @@ impl Sketch {
     }
 }
 
-fn center_point(g: Geom) -> PointId {
-    match g {
+fn center_point(g: &Geom) -> PointId {
+    match *g {
         Geom::Circle { c, .. }
         | Geom::Arc { c, .. }
         | Geom::Ellipse { c, .. }
         | Geom::EllipseArc { c, .. } => c,
         Geom::Line { a, .. } => a,
+        Geom::Spline { ref pts, .. } | Geom::ControlSpline { ref pts } => pts.first().copied().unwrap_or(0),
     }
 }
 

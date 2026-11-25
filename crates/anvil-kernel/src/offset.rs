@@ -19,6 +19,8 @@ pub enum OffsetError {
     Collapsed,
     /// The chain has an ellipse, whose offset is not an ellipse.
     Elliptic,
+    /// The chain has a spline, whose offset is not a cubic.
+    Spline,
 }
 
 impl std::fmt::Display for OffsetError {
@@ -27,6 +29,7 @@ impl std::fmt::Display for OffsetError {
             OffsetError::NotAChain => write!(f, "the curves do not form one chain"),
             OffsetError::Collapsed => write!(f, "the offset is larger than the curves allow"),
             OffsetError::Elliptic => write!(f, "ellipses cannot be offset yet"),
+            OffsetError::Spline => write!(f, "splines cannot be offset yet"),
         }
     }
 }
@@ -50,6 +53,17 @@ pub fn travel(s: &Seg2, at_end: bool) -> Vec2 {
         Seg2::Ellipse { a, b, rotation, start, sweep, .. } => {
             let t = if at_end { start + sweep } else { start };
             (crate::profile::ellipse_derivative(a, b, rotation, t) * sweep.signum()).normalized()
+        }
+        Seg2::Cubic { p, .. } => {
+            // An end whose inner control point sits on it leaves along the next one.
+            let d = crate::profile::cubic_derivative(&p, if at_end { 1.0 } else { 0.0 });
+            if d.length() > 1e-12 {
+                d.normalized()
+            } else if at_end {
+                (p[3] - p[1]).normalized()
+            } else {
+                (p[2] - p[0]).normalized()
+            }
         }
     }
 }
@@ -75,6 +89,7 @@ fn support(s: &Seg2, d: f64) -> Result<Support, OffsetError> {
             Ok(Support::Circle(center, r))
         }
         Seg2::Ellipse { .. } => Err(OffsetError::Elliptic),
+        Seg2::Cubic { .. } => Err(OffsetError::Spline),
     }
 }
 
@@ -167,6 +182,7 @@ fn trimmed(s: &Seg2, d: f64, a: Vec2, b: Vec2) -> Result<Seg2, OffsetError> {
             Ok(Seg2::Arc { center, radius: r, start, sweep: sw, source })
         }
         Seg2::Ellipse { .. } => Err(OffsetError::Elliptic),
+        Seg2::Cubic { .. } => Err(OffsetError::Spline),
     }
 }
 
@@ -179,6 +195,7 @@ fn retag(s: Seg2, add: u32) -> Seg2 {
         Seg2::Ellipse { center, a, b, rotation, start, sweep, source } => {
             Seg2::Ellipse { center, a, b, rotation, start, sweep, source: source.wrapping_add(add) }
         }
+        Seg2::Cubic { p, source } => Seg2::Cubic { p, source: source.wrapping_add(add) },
     }
 }
 
@@ -207,6 +224,9 @@ pub fn offset_chain(segs: &[Seg2], closed: bool, d: f64) -> Result<Vec<Seg2>, Of
     }
     if segs.iter().any(|s| matches!(s, Seg2::Ellipse { .. })) {
         return Err(OffsetError::Elliptic);
+    }
+    if segs.iter().any(|s| matches!(s, Seg2::Cubic { .. })) {
+        return Err(OffsetError::Spline);
     }
     if closed && n == 1 {
         if let Seg2::Arc { center, radius, start, sweep, source } = segs[0] {

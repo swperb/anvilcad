@@ -769,28 +769,30 @@ fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
     let rects = a.number_lists::<4>("rects", "rects: [[x0, y0, x1, y1], ...]")?;
     let circles = a.number_lists::<3>("circles", "circles: [[x, y, radius], ...]")?;
     let arcs = a.number_lists::<6>("arcs", "arcs: [[x0, y0, x_on, y_on, x1, y1], ...]")?;
-    let polylines = match a.get("polylines") {
-        None => Vec::new(),
-        Some(v) => {
-            let usage = "polylines: [[[x, y], [x, y], ...], ...]";
-            let lines = v.as_array().ok_or(usage)?;
-            lines
-                .iter()
-                .map(|l| {
-                    let pts = l.as_array().ok_or(usage)?;
-                    pts.iter()
-                        .map(|p| {
-                            let n: Option<Vec<f64>> =
-                                p.as_array().and_then(|r| r.iter().map(Value::as_f64).collect());
-                            n.and_then(|n| <[f64; 2]>::try_from(n).ok())
-                                .filter(|n| n.iter().all(|x| x.is_finite()))
-                                .ok_or(usage)
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        }
+    let point_lists = |key: &str, usage: &'static str| -> Result<Vec<Vec<[f64; 2]>>, String> {
+        let Some(v) = a.get(key) else { return Ok(Vec::new()) };
+        let lists = v.as_array().ok_or(usage)?;
+        let lists = lists
+            .iter()
+            .map(|l| {
+                let pts = l.as_array().ok_or(usage)?;
+                pts.iter()
+                    .map(|p| {
+                        let n: Option<Vec<f64>> =
+                            p.as_array().and_then(|r| r.iter().map(Value::as_f64).collect());
+                        n.and_then(|n| <[f64; 2]>::try_from(n).ok())
+                            .filter(|n| n.iter().all(|x| x.is_finite()))
+                            .ok_or(usage)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(lists)
     };
+    let splines = point_lists("splines", "splines: [[[x, y], [x, y], ...], ...]")?;
+    let control_splines =
+        point_lists("control_splines", "control_splines: [[[x, y], [x, y], [x, y], [x, y], ...], ...]")?;
+    let polylines = point_lists("polylines", "polylines: [[[x, y], [x, y], ...], ...]")?;
     let points = a.number_lists::<2>("points", "points: [[x, y], ...]")?;
     let ellipses = a.number_lists::<5>("ellipses", "ellipses: [[x, y, r1, r2, angle], ...]")?;
     let partial_ellipses = a.number_lists::<9>(
@@ -803,11 +805,26 @@ fn sketch_spec(a: &Args) -> Result<SketchSpec, String> {
         && arcs.is_empty()
         && ellipses.is_empty()
         && partial_ellipses.is_empty()
+        && splines.is_empty()
+        && control_splines.is_empty()
         && points.is_empty()
     {
-        return Err("give rects, circles, polylines, arcs, ellipses, partial_ellipses or points".into());
+        return Err(
+            "give rects, circles, polylines, arcs, ellipses, partial_ellipses, splines, control_splines or points".into(),
+        );
     }
-    Ok(SketchSpec { plane, rects, circles, polylines, arcs, ellipses, partial_ellipses, points })
+    Ok(SketchSpec {
+        plane,
+        rects,
+        circles,
+        polylines,
+        arcs,
+        ellipses,
+        partial_ellipses,
+        splines,
+        control_splines,
+        points,
+    })
 }
 
 /// A tool's arguments, with readers that say what was wrong.
@@ -950,7 +967,7 @@ const TOOLS: &[Tool] = &[
     Tool {
         name: "add_sketch",
         title: "Add sketch",
-        description: "Add a sketch of rectangles, circles, polylines, three-point arcs, ellipses and partial ellipses, and return its feature id. Lines and arcs whose ends meet are joined, so a polyline whose last point repeats its first, or polylines and arcs end to end, make a closed profile. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on a boss extrusion's end (or start) face instead, with the sketch's x along world X (world Y on a face normal to X) and its origin at the world origin projected onto the face. A cut's faces cannot be sketched on; use the boss's face or a plane.",
+        description: "Add a sketch of rectangles, circles, polylines, three-point arcs, ellipses, partial ellipses and splines, and return its feature id. Lines, arcs and splines whose ends meet are joined, so a polyline whose last point repeats its first, or polylines and arcs end to end, make a closed profile. Coordinates are mm in the sketch plane. Front is the XY plane, top is XZ and right is YZ; on_feature sketches on a boss extrusion's end (or start) face instead, with the sketch's x along world X (world Y on a face normal to X) and its origin at the world origin projected onto the face. A cut's faces cannot be sketched on; use the boss's face or a plane.",
         properties: r#"{
             "plane": { "type": "string", "enum": ["front", "top", "right"], "description": "Default front" },
             "on_feature": { "type": "integer", "description": "Sketch on this extrusion's face instead of a plane" },
@@ -961,6 +978,8 @@ const TOOLS: &[Tool] = &[
             "arcs": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 6, "maxItems": 6 }, "description": "Arcs through three points: [[x_start, y_start, x_on, y_on, x_end, y_end], ...]" },
             "ellipses": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 5, "maxItems": 5 }, "description": "Ellipses: [[x, y, r1, r2, angle], ...]: centre, the radius along the first axis, the radius square to it, and the first axis's angle from x in degrees" },
             "partial_ellipses": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 9, "maxItems": 9 }, "description": "Partial ellipses: [[x, y, r1, r2, angle, x_start, y_start, x_end, y_end], ...]: an ellipse as in ellipses, running counter-clockwise from the point in the direction of (x_start, y_start) from the centre to the point in the direction of (x_end, y_end)" },
+            "splines": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 2 } }, "description": "Splines through points: [[[x, y], [x, y], ...], ...]: a smooth cubic through two or more points, by chord length, with natural ends" },
+            "control_splines": { "type": "array", "items": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "minItems": 4 } }, "description": "Control point splines: [[[x, y], [x, y], [x, y], [x, y], ...], ...]: the clamped cubic B-spline of four or more control points, through the first and last" },
             "points": { "type": "array", "items": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }, "description": "Free points, such as where add_hole puts holes: [[x, y], ...]" }
         }"#,
         required: &[],

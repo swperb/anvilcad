@@ -1,4 +1,5 @@
-//! Planar profiles: closed contours of lines, arcs and elliptic arcs in a 2D frame.
+//! Planar profiles: closed contours of lines, arcs, elliptic arcs and cubic Bézier spans
+//! in a 2D frame.
 //!
 //! [`build_regions`] is the gatekeeper between the sketcher and the solid
 //! modeller. It rejects open, degenerate and self-intersecting input, sorts
@@ -36,7 +37,73 @@ pub enum Segment {
         start: f64,
         sweep: f64,
     },
+    /// Cubic Bézier span from `p[0]` to `p[3]`, with `p[1]` and `p[2]` its inner control
+    /// points: `B(t) = Σ C(3, i) (1 - t)^(3 - i) t^i p[i]` for `t` in [0, 1]. A sketch
+    /// spline reaches the kernel as a chain of these (`docs/re/sketch-entities.md`,
+    /// "Splines").
+    Cubic {
+        p: [DVec2; 4],
+    },
 }
+
+/// The point at `t` of the cubic Bézier span with control points `p`.
+pub fn cubic_at(p: &[DVec2; 4], t: f64) -> DVec2 {
+    let s = 1.0 - t;
+    p[0] * (s * s * s) + p[1] * (3.0 * s * s * t) + p[2] * (3.0 * s * t * t) + p[3] * (t * t * t)
+}
+
+/// The derivative with respect to `t` of [`cubic_at`].
+pub fn cubic_derivative(p: &[DVec2; 4], t: f64) -> DVec2 {
+    let s = 1.0 - t;
+    ((p[1] - p[0]) * (s * s) + (p[2] - p[1]) * (2.0 * s * t) + (p[3] - p[2]) * (t * t)) * 3.0
+}
+
+/// The control points of the piece of a cubic span between parameters `t0` and `t1`
+/// (blossoming: each new control point is the span's polar form at three of t0 and t1).
+pub fn cubic_sub(p: &[DVec2; 4], t0: f64, t1: f64) -> [DVec2; 4] {
+    let blossom = |u: [f64; 3]| {
+        let mut q = *p;
+        for (level, &t) in u.iter().enumerate() {
+            for i in 0..3 - level {
+                q[i] = q[i] * (1.0 - t) + q[i + 1] * t;
+            }
+        }
+        q[0]
+    };
+    [blossom([t0, t0, t0]), blossom([t0, t0, t1]), blossom([t0, t1, t1]), blossom([t1, t1, t1])]
+}
+
+/// The unit direction of travel at `t` of a cubic span. Where the derivative vanishes (an
+/// end whose inner control point sits on it) the direction is the limit, along the next
+/// control point that differs.
+fn cubic_travel(p: &[DVec2; 4], t: f64) -> DVec2 {
+    let d = cubic_derivative(p, t);
+    if d.length() > 1e-12 * (1.0 + p[0].distance(p[3])) {
+        return d.normalize_or_zero();
+    }
+    if t < 0.5 {
+        [p[2] - p[0], p[3] - p[0]]
+            .into_iter()
+            .find(|v| v.length() > 1e-12)
+            .unwrap_or_default()
+            .normalize_or_zero()
+    } else {
+        [p[3] - p[1], p[3] - p[0]]
+            .into_iter()
+            .find(|v| v.length() > 1e-12)
+            .unwrap_or_default()
+            .normalize_or_zero()
+    }
+}
+
+/// Nodes and weights of 5-point Gauss-Legendre quadrature on [0, 1].
+const GAUSS5: [(f64, f64); 5] = [
+    (0.046_910_077_030_668, 0.118_463_442_528_095),
+    (0.230_765_344_947_158, 0.239_314_335_249_683),
+    (0.5, 0.284_444_444_444_444),
+    (0.769_234_655_052_842, 0.239_314_335_249_683),
+    (0.953_089_922_969_332, 0.118_463_442_528_095),
+];
 
 impl Segment {
     pub fn circle(center: DVec2, radius: f64) -> Self {
@@ -87,6 +154,7 @@ impl Segment {
             Segment::Ellipse { center, a, b, rotation, start, .. } => {
                 Self::ellipse_at(center, a, b, rotation, start)
             }
+            Segment::Cubic { p } => p[0],
         }
     }
 
@@ -99,6 +167,7 @@ impl Segment {
             Segment::Ellipse { center, a, b, rotation, start, sweep } => {
                 Self::ellipse_at(center, a, b, rotation, start + sweep)
             }
+            Segment::Cubic { p } => p[3],
         }
     }
 
@@ -111,6 +180,7 @@ impl Segment {
             Segment::Ellipse { center, a, b, rotation, start, sweep } => {
                 Self::ellipse_at(center, a, b, rotation, start + sweep * 0.5)
             }
+            Segment::Cubic { p } => cubic_at(&p, 0.5),
         }
     }
 
@@ -130,6 +200,19 @@ impl Segment {
                 }
                 (sum * h / 3.0).abs()
             }
+            Segment::Cubic { p } => {
+                // Five-point Gauss on 16 equal pieces: the speed is smooth, so this is
+                // exact to well below the linear tolerance for any span a sketch makes.
+                let n = 16;
+                let mut sum = 0.0;
+                for k in 0..n {
+                    for (x, w) in GAUSS5 {
+                        let t = (k as f64 + x) / n as f64;
+                        sum += w * cubic_derivative(&p, t).length();
+                    }
+                }
+                sum / n as f64
+            }
         }
     }
 
@@ -143,6 +226,7 @@ impl Segment {
                 let t = start + sweep * f;
                 ((vb * t.cos() - ua * t.sin()) * sweep.signum()).normalize_or_zero()
             }
+            Segment::Cubic { p } => cubic_travel(&p, f),
         }
     }
 
@@ -153,7 +237,7 @@ impl Segment {
     /// A whole circle or a whole ellipse: a segment that closes on itself.
     pub fn is_closed(&self) -> bool {
         match *self {
-            Segment::Line { .. } => false,
+            Segment::Line { .. } | Segment::Cubic { .. } => false,
             Segment::Arc { sweep, .. } | Segment::Ellipse { sweep, .. } => sweep.abs() >= TAU - 1e-12,
         }
     }
@@ -167,6 +251,7 @@ impl Segment {
             Segment::Ellipse { center, a, b, rotation, start, sweep } => {
                 Segment::Ellipse { center, a, b, rotation, start: start + sweep, sweep: -sweep }
             }
+            Segment::Cubic { p } => Segment::Cubic { p: [p[3], p[2], p[1], p[0]] },
         }
     }
 
@@ -179,6 +264,7 @@ impl Segment {
             Segment::Ellipse { center, a, b, rotation, start, sweep } => {
                 tol::is_finite2(center) && [a, b, rotation, start, sweep].iter().all(|x| x.is_finite())
             }
+            Segment::Cubic { p } => p.iter().all(|q| tol::is_finite2(*q)),
         }
     }
 
@@ -197,6 +283,11 @@ impl Segment {
                 c.perp_dot(ua) * (e.cos() - s.cos())
                     + c.perp_dot(vb) * (e.sin() - s.sin())
                     + ua.perp_dot(vb) * w
+            }
+            // P x P' is a polynomial of degree 5 in t, which three-point Gauss integrates
+            // exactly; five points leave no doubt.
+            Segment::Cubic { p } => {
+                GAUSS5.iter().map(|&(t, w)| w * cubic_at(&p, t).perp_dot(cubic_derivative(&p, t))).sum()
             }
         }
     }
@@ -235,12 +326,16 @@ impl Segment {
                     })
                     .collect()
             }
+            Segment::Cubic { p } => {
+                let n = cubic_steps(&p, chord, max_angle);
+                (0..=n).map(|i| if i == n { p[3] } else { cubic_at(&p, i as f64 / n as f64) }).collect()
+            }
         }
     }
 
     fn angle_on_arc(&self, theta: f64) -> bool {
         match *self {
-            Segment::Line { .. } | Segment::Ellipse { .. } => false,
+            Segment::Line { .. } | Segment::Ellipse { .. } | Segment::Cubic { .. } => false,
             Segment::Arc { radius, start, sweep, .. } => {
                 let eps = tol::LINEAR / radius.max(tol::LINEAR);
                 let d = if sweep >= 0.0 {
@@ -252,6 +347,24 @@ impl Segment {
             }
         }
     }
+}
+
+/// Even parameter steps for a cubic span that keep its chords within `chord` of the curve
+/// and its turn per step within `max_angle`. The second derivative is bounded by six times
+/// the largest second difference of the control points, and a chord of parameter length
+/// h strays at most h² M / 8 from the curve. The curve turns no more than its control
+/// polygon does.
+fn cubic_steps(p: &[DVec2; 4], chord: f64, max_angle: f64) -> usize {
+    let m = 6.0 * (p[2] - p[1] * 2.0 + p[0]).length().max((p[3] - p[2] * 2.0 + p[1]).length());
+    let by_chord = if chord > 0.0 { (m / (8.0 * chord)).sqrt().ceil() } else { 1.0 };
+    let legs = [p[1] - p[0], p[2] - p[1], p[3] - p[2]];
+    let turn: f64 = legs
+        .windows(2)
+        .filter(|w| w[0].length() > 1e-12 && w[1].length() > 1e-12)
+        .map(|w| w[0].perp_dot(w[1]).atan2(w[0].dot(w[1])).abs())
+        .sum();
+    let by_angle = if max_angle > 0.0 { (turn / max_angle).ceil() } else { 1.0 };
+    (by_chord.max(by_angle).max(4.0) as usize).min(4096)
 }
 
 /// A closed contour.
@@ -327,12 +440,17 @@ impl Region {
     }
 }
 
-/// Refuses loops with elliptic segments, for operations that take only lines and arcs
-/// so far (`what` names the operation).
+/// Refuses loops with elliptic or spline segments, for operations that take only lines
+/// and arcs so far (`what` names the operation).
 pub(crate) fn lines_and_arcs_only<'a>(loops: impl IntoIterator<Item = &'a Loop2>, what: &str) -> Result<()> {
-    if loops.into_iter().flat_map(|l| &l.segments).any(|s| matches!(s, Segment::Ellipse { .. })) {
+    for s in loops.into_iter().flat_map(|l| &l.segments) {
+        let kind = match s {
+            Segment::Ellipse { .. } => "an ellipse",
+            Segment::Cubic { .. } => "a spline",
+            Segment::Line { .. } | Segment::Arc { .. } => continue,
+        };
         return Err(KernelError::Unsupported(format!(
-            "{what} a profile with an ellipse in it is not supported yet; only extruding one is"
+            "{what} a profile with {kind} in it is not supported yet; only extruding one is"
         )));
     }
     Ok(())
@@ -479,6 +597,8 @@ fn bbox(s: &Segment) -> (DVec2, DVec2) {
             let half = DVec2::new(ua.x.hypot(vb.x), ua.y.hypot(vb.y));
             (center - half, center + half)
         }
+        // The span lies in the hull of its control points.
+        Segment::Cubic { p } => (p[0].min(p[1]).min(p[2]).min(p[3]), p[0].max(p[1]).max(p[2]).max(p[3])),
     }
 }
 
@@ -487,6 +607,18 @@ fn bbox(s: &Segment) -> (DVec2, DVec2) {
 /// the caller as a point that is not a shared vertex.
 pub fn intersect(a: &Segment, b: &Segment) -> Vec<DVec2> {
     match (a, b) {
+        (Segment::Cubic { p }, Segment::Cubic { p: q }) => {
+            let mut out = Vec::new();
+            cubic_cubic(p, q, 0, &mut out);
+            out
+        }
+        (Segment::Cubic { p }, other) | (other, Segment::Cubic { p }) => {
+            let mut out = Vec::new();
+            for piece in fine_pieces(other) {
+                cubic_piece(p, &piece, bbox(&piece), 0, &mut out);
+            }
+            out
+        }
         (Segment::Ellipse { .. }, _) | (_, Segment::Ellipse { .. }) => with_ellipse(a, b),
         (Segment::Line { a: p0, b: p1 }, Segment::Line { a: q0, b: q1 }) => line_line(*p0, *p1, *q0, *q1),
         (Segment::Line { a: p0, b: p1 }, arc @ Segment::Arc { .. })
@@ -519,6 +651,114 @@ fn with_ellipse(a: &Segment, b: &Segment) -> Vec<DVec2> {
         }
     }
     out
+}
+
+/// A segment as lines and arcs: an ellipse as a fine polyline, as in [`with_ellipse`].
+fn fine_pieces(s: &Segment) -> Vec<Segment> {
+    match s {
+        Segment::Ellipse { .. } => {
+            s.sample(1e-7, 0.05).windows(2).map(|w| Segment::Line { a: w[0], b: w[1] }).collect()
+        }
+        other => vec![*other],
+    }
+}
+
+/// How far a cubic span's subdivision goes before it is taken as its chord. Each level
+/// halves the parameter range, so 40 levels is far below any tolerance.
+const CUBIC_DEPTH: usize = 40;
+
+/// Splits a cubic span at its parameter midpoint (de Casteljau).
+fn cubic_split(p: &[DVec2; 4]) -> ([DVec2; 4], [DVec2; 4]) {
+    let m01 = (p[0] + p[1]) * 0.5;
+    let m12 = (p[1] + p[2]) * 0.5;
+    let m23 = (p[2] + p[3]) * 0.5;
+    let a = (m01 + m12) * 0.5;
+    let b = (m12 + m23) * 0.5;
+    let mid = (a + b) * 0.5;
+    ([p[0], m01, a, mid], [mid, b, m23, p[3]])
+}
+
+/// The box around a cubic span's control points, which holds the span.
+fn cubic_box(p: &[DVec2; 4]) -> (DVec2, DVec2) {
+    bbox(&Segment::Cubic { p: *p })
+}
+
+/// True when the span is within 1e-8 of its chord: its inner control points are, and the
+/// span lies in their hull.
+fn cubic_flat(p: &[DVec2; 4]) -> bool {
+    let d = p[3] - p[0];
+    let len = d.length();
+    let off = |q: DVec2| if len > 1e-15 { (q - p[0]).perp_dot(d).abs() / len } else { q.distance(p[0]) };
+    off(p[1]).max(off(p[2])) < 1e-8
+}
+
+fn boxes_meet(a: (DVec2, DVec2), b: (DVec2, DVec2)) -> bool {
+    let pad = tol::LINEAR;
+    !(a.1.x + pad < b.0.x || b.1.x + pad < a.0.x || a.1.y + pad < b.0.y || b.1.y + pad < a.0.y)
+}
+
+fn push_unique(out: &mut Vec<DVec2>, p: DVec2) {
+    if !out.iter().any(|q| (*q - p).length() < 1e-6) {
+        out.push(p);
+    }
+}
+
+/// Where a cubic span meets a line or arc: the span is halved until each piece near the
+/// other segment is flat, and the flat pieces are crossed as chords.
+fn cubic_piece(
+    p: &[DVec2; 4],
+    other: &Segment,
+    other_box: (DVec2, DVec2),
+    depth: usize,
+    out: &mut Vec<DVec2>,
+) {
+    if !boxes_meet(cubic_box(p), other_box) {
+        return;
+    }
+    if depth >= CUBIC_DEPTH || cubic_flat(p) {
+        for q in intersect(&Segment::Line { a: p[0], b: p[3] }, other) {
+            push_unique(out, q);
+        }
+        return;
+    }
+    let (l, r) = cubic_split(p);
+    cubic_piece(&l, other, other_box, depth + 1, out);
+    cubic_piece(&r, other, other_box, depth + 1, out);
+}
+
+/// Where two cubic spans meet, by halving both where their boxes overlap.
+fn cubic_cubic(p: &[DVec2; 4], q: &[DVec2; 4], depth: usize, out: &mut Vec<DVec2>) {
+    if !boxes_meet(cubic_box(p), cubic_box(q)) {
+        return;
+    }
+    let (fp, fq) = (cubic_flat(p), cubic_flat(q));
+    if depth >= CUBIC_DEPTH || (fp && fq) {
+        for x in line_line(p[0], p[3], q[0], q[3]) {
+            push_unique(out, x);
+        }
+        return;
+    }
+    match (fp, fq) {
+        (true, false) => {
+            let (l, r) = cubic_split(q);
+            cubic_cubic(p, &l, depth + 1, out);
+            cubic_cubic(p, &r, depth + 1, out);
+        }
+        (false, true) => {
+            let (l, r) = cubic_split(p);
+            cubic_cubic(&l, q, depth + 1, out);
+            cubic_cubic(&r, q, depth + 1, out);
+        }
+        _ => {
+            let (pl, pr) = cubic_split(p);
+            let (ql, qr) = cubic_split(q);
+            for a in [&pl, &pr] {
+                for b in [&ql, &qr] {
+                    cubic_cubic(a, b, depth + 1, out);
+                }
+            }
+        }
+    }
 }
 
 fn line_line(p0: DVec2, p1: DVec2, q0: DVec2, q1: DVec2) -> Vec<DVec2> {

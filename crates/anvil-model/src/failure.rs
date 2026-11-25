@@ -382,6 +382,9 @@ fn describe(d: Does, cause: Cause) -> Described {
                 OffsetError::Elliptic => {
                     "Draw the offset curves with lines, arcs and circles instead of an ellipse."
                 }
+                OffsetError::Spline => {
+                    "Draw the offset curves with lines, arcs and circles instead of a spline."
+                }
             };
             (fragment(&e.to_string()), how.into(), None)
         }
@@ -522,10 +525,14 @@ mod tests {
                 ShellError::Invalid(_) | ShellError::TooThick | ShellError::FoldsOver { .. } => {}
             }
         }
-        let offset = [OffsetError::NotAChain, OffsetError::Collapsed, OffsetError::Elliptic];
+        let offset =
+            [OffsetError::NotAChain, OffsetError::Collapsed, OffsetError::Elliptic, OffsetError::Spline];
         for o in &offset {
             match o {
-                OffsetError::NotAChain | OffsetError::Collapsed | OffsetError::Elliptic => {}
+                OffsetError::NotAChain
+                | OffsetError::Collapsed
+                | OffsetError::Elliptic
+                | OffsetError::Spline => {}
             }
         }
         let kernel = [

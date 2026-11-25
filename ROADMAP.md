@@ -33,7 +33,8 @@ The work is split into issues tracked in [#104](https://github.com/swperb/anvilc
    image comparisons and timings) with every release, as a page anyone can read and rerun.
    Every feature failure tells the user why and what to try; none fails with a bare
    "operation failed" ([#89](https://github.com/swperb/anvilcad/issues/89), [#88](https://github.com/swperb/anvilcad/issues/88)).
-3. **Sketching.** Splines ([#207](https://github.com/swperb/anvilcad/issues/207); ellipses are in),
+3. **Sketching.** Trimming and filleting ellipses and splines, and the other leftovers in
+   [#214](https://github.com/swperb/anvilcad/issues/214) (splines and ellipses are in),
    then conics ([#102](https://github.com/swperb/anvilcad/issues/102)); text, with emboss and engrave
    ([#62](https://github.com/swperb/anvilcad/issues/62)). Slots, polygons, trim, extend,
    offset, sketch fillet and chamfer, and symmetric and collinear relations are already in

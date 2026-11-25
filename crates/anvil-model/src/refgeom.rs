@@ -365,7 +365,7 @@ impl Document {
                 };
                 let f = st.frames.get(&sketch).ok_or_else(lost)?;
                 let sk = &self.sketch(sketch).ok_or_else(lost)?.sketch;
-                match sk.entities.get(entity).map(|e| e.geom) {
+                match sk.entities.get(entity).map(|e| e.geom.clone()) {
                     Some(anvil_sketch::Geom::Line { a, b }) => {
                         Ok((f.to_world(sk.pos(a)), f.to_world(sk.pos(b))))
                     }
@@ -516,7 +516,7 @@ impl Document {
                 };
                 let f = st.frames.get(sketch).ok_or_else(lost)?;
                 let sk = &self.sketch(*sketch).ok_or_else(lost)?.sketch;
-                match sk.entities.get(*entity).map(|e| e.geom) {
+                match sk.entities.get(*entity).map(|e| e.geom.clone()) {
                     Some(anvil_sketch::Geom::Arc { c, .. } | anvil_sketch::Geom::Circle { c, .. }) => {
                         f.to_world(sk.pos(c))
                     }

@@ -78,7 +78,7 @@ fn perimeter(s: &Sketch) -> f64 {
         .map(|seg| match *seg {
             Seg2::Line { a, b, .. } => a.distance(b),
             Seg2::Arc { radius, sweep, .. } => radius * sweep.abs(),
-            Seg2::Ellipse { .. } => panic!("no ellipses here"),
+            Seg2::Ellipse { .. } | Seg2::Cubic { .. } => panic!("no ellipses or splines here"),
         })
         .sum()
 }

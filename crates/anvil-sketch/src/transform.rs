@@ -242,6 +242,7 @@ fn map_err(e: OffsetError) -> SketchError {
         OffsetError::NotAChain => SketchError::Unsupported("the curves must join end to end in one chain"),
         OffsetError::Collapsed => SketchError::TooLarge,
         OffsetError::Elliptic => SketchError::Unsupported("ellipses cannot be offset yet"),
+        OffsetError::Spline => SketchError::Unsupported("splines cannot be offset yet"),
     }
 }
 
@@ -364,6 +365,11 @@ impl Sketch {
                 },
                 None => Seg2::Line { a: Vec2::ZERO, b: Vec2::ZERO, source },
             },
+            // Offsetting refuses splines before it gets here; the chord, for completeness.
+            Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                let (a, b) = self.ends(l.e).unwrap_or((0, 0));
+                Seg2::Line { a: self.pos(a), b: self.pos(b), source }
+            }
         };
         if l.reversed {
             s.reversed()
@@ -440,6 +446,10 @@ impl Sketch {
     fn offset_inner(&mut self, sel: &[EntityId], opts: OffsetOptions) -> Result<OffsetResult, SketchError> {
         if sel.iter().any(|&e| self.entities[e].is_ellipse()) {
             return Err(map_err(OffsetError::Elliptic));
+        }
+        // sketch-entities.md, "Splines": the offset of a spline is not a spline.
+        if sel.iter().any(|&e| self.entities[e].is_spline()) {
+            return Err(map_err(OffsetError::Spline));
         }
         let (links, closed) = match sel {
             [e] if matches!(self.entities[*e].geom, Geom::Circle { .. }) => {
@@ -565,6 +575,7 @@ impl Sketch {
                     e
                 }
                 (Seg2::Ellipse { .. }, _) => return Err(map_err(OffsetError::Elliptic)),
+                (Seg2::Cubic { .. }, _) => return Err(map_err(OffsetError::Spline)),
                 (Seg2::Arc { sweep, .. }, _) => {
                     // A round about a corner of the original chain, where two offset arcs
                     // bend apart and never meet.
@@ -707,7 +718,15 @@ impl Sketch {
                 }
             }
             let m = |p: PointId| pmap.get(&p).copied().unwrap_or(p);
-            let g = match self.entities[e].geom {
+            let g = match self.entities[e].geom.clone() {
+                // A move, turn, mirror or uniform scale carries either kind of spline onto
+                // the spline of its moved points (chord lengths only scale), so the copy
+                // just takes the new points.
+                g @ (Geom::Spline { .. } | Geom::ControlSpline { .. }) => {
+                    let mut ent = crate::sketch::Entity { geom: g, construction: false };
+                    ent.remap_points(&m);
+                    ent.geom
+                }
                 Geom::Line { a, b } => Geom::Line { a: m(a), b: m(b) },
                 Geom::Circle { c, r } => Geom::Circle { c: m(c), r },
                 Geom::Arc { c, a, b } if reverse_arcs => Geom::Arc { c: m(c), a: m(b), b: m(a) },

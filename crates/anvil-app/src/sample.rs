@@ -7,7 +7,7 @@ use anvil_sketch::{Constraint, Geom, Sketch, ORIGIN};
 /// Rectangle centered on the origin with driven width/height.
 fn centered_rect(s: &mut Sketch, w: f64, h: f64) -> (usize, usize) {
     let l = s.add_rectangle(v2(-w / 2.0, -h / 2.0), v2(w / 2.0, h / 2.0));
-    let (Geom::Line { a, .. }, Geom::Line { a: c, .. }) = (s.entities[l[0]].geom, s.entities[l[2]].geom)
+    let (&Geom::Line { a, .. }, &Geom::Line { a: c, .. }) = (&s.entities[l[0]].geom, &s.entities[l[2]].geom)
     else {
         unreachable!()
     };

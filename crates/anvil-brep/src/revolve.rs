@@ -174,13 +174,13 @@ pub fn revolve(
                 end.push(None);
                 continue;
             }
-            let (c0, t0, t1) = segment_curve(&meridian, seg);
+            let (c0, t0, t1) = segment_curve(&meridian, seg)?;
             let e0 =
                 solid.add_edge(Edge { curve: c0, start: vertex(v0[k])?, end: vertex(v0[next])?, t0, t1 });
             let e1 = if full || on {
                 e0
             } else {
-                let (c1, t0, t1) = segment_curve(&end_plane, seg);
+                let (c1, t0, t1) = segment_curve(&end_plane, seg)?;
                 solid.add_edge(Edge { curve: c1, start: vertex(v1[k])?, end: vertex(v1[next])?, t0, t1 })
             };
             start.push(Some(e0));
@@ -305,8 +305,8 @@ fn segment_extremes(s: &Segment, d: DVec2) -> Vec<DVec2> {
 /// needs a boundary.
 fn meridian_segment(s: &Segment, to_q: &dyn Fn(DVec2) -> DVec2, full: bool, on_axis: f64) -> Vec<Segment> {
     match *s {
-        // Revolving refuses ellipses (see `lines_and_arcs_only`).
-        Segment::Ellipse { .. } => Vec::new(),
+        // Revolving refuses ellipses and splines (see `lines_and_arcs_only`).
+        Segment::Ellipse { .. } | Segment::Cubic { .. } => Vec::new(),
         Segment::Line { a, b } => vec![Segment::Line { a: to_q(a), b: to_q(b) }],
         Segment::Arc { center, radius, start, sweep } => {
             let c = to_q(center);
@@ -367,7 +367,7 @@ fn meridian_segment(s: &Segment, to_q: &dyn Fn(DVec2) -> DVec2, full: bool, on_a
 /// The middle of a segment and its unit direction of travel there.
 fn midpoint_and_tangent(s: &Segment) -> (DVec2, DVec2) {
     match *s {
-        Segment::Ellipse { .. } => (s.midpoint(), s.travel_at(0.5)),
+        Segment::Ellipse { .. } | Segment::Cubic { .. } => (s.midpoint(), s.travel_at(0.5)),
         Segment::Line { a, b } => (0.5 * (a + b), (b - a).normalize_or_zero()),
         Segment::Arc { center, radius, start, sweep } => {
             let m = start + 0.5 * sweep;
@@ -399,6 +399,9 @@ fn side_surface(axis: &Frame, seg: &Segment, theta: f64, full: bool, on_axis: f6
     match *seg {
         Segment::Ellipse { .. } => {
             Err(KernelError::Unsupported("revolving an ellipse is not supported yet".into()))
+        }
+        Segment::Cubic { .. } => {
+            Err(KernelError::Unsupported("revolving a spline is not supported yet".into()))
         }
         Segment::Line { a, b } => {
             let (dh, dr) = (b.x - a.x, b.y - a.y);

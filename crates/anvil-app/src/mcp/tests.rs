@@ -139,6 +139,24 @@ fn extrudes_an_ellipse() {
     assert!((m["size"][1].as_f64().unwrap() - 60.0).abs() < 0.05, "{m}");
 }
 
+/// Issue #207: a control point spline sketched through MCP extrudes to its exact volume.
+#[test]
+fn extrudes_a_spline() {
+    let mut s = server();
+    call(&mut s, "new_part", json!({}));
+    let sk = call(
+        &mut s,
+        "add_sketch",
+        json!({ "control_splines": [[[0, 0], [0, 30], [40, 30], [40, 0]]], "polylines": [[[40, 0], [0, 0]]] }),
+    );
+    call(&mut s, "add_extrude", json!({ "sketch": sk["sketch"], "depth": 10 }));
+    let m = call(&mut s, "mass_properties", json!({}));
+    let v = m["volume"].as_f64().unwrap();
+    assert!((v - 7200.0).abs() < 2e-3 * 7200.0, "{m}");
+    // The arch rises to 3/4 of its control points' height.
+    assert!((m["size"][1].as_f64().unwrap() - 22.5).abs() < 0.05, "{m}");
+}
+
 #[test]
 fn extrudes_a_10_by_20_by_30_block() {
     let mut s = server();
@@ -332,6 +350,10 @@ fn mistakes_are_tool_errors_and_protocol_errors() {
     assert!(e.contains("radius"), "{e}");
     let e = call_err(&mut s, "add_sketch", json!({ "ellipses": [[0, 0, 5, -1, 0]] }));
     assert!(e.contains("two positive radii"), "{e}");
+    let e = call_err(&mut s, "add_sketch", json!({ "splines": [[[0, 0], [1]]] }));
+    assert!(e.contains("splines: [[[x, y]"), "{e}");
+    let e = call_err(&mut s, "add_sketch", json!({ "control_splines": [[[0, 0], [1, 1], [2, 0]]] }));
+    assert!(e.contains("four control points"), "{e}");
     let e = call_err(&mut s, "add_sketch", json!({ "partial_ellipses": [[0, 0, 5, 3, 0]] }));
     assert!(e.contains("x_start, y_start, x_end, y_end"), "{e}");
     let e = call_err(&mut s, "add_extrude", json!({ "sketch": 42, "depth": 10 }));

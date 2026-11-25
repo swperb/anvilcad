@@ -742,7 +742,7 @@ mod tests {
         let mut sf = SketchFeature::new(PlaneRef::Front);
         let s = &mut sf.sketch;
         let l = s.add_rectangle(v2(0.0, 0.0), v2(40.0, 20.0));
-        let Some(anvil_sketch::Geom::Line { a, .. }) = s.entities.get(l[0]).map(|e| e.geom) else {
+        let Some(anvil_sketch::Geom::Line { a, .. }) = s.entities.get(l[0]).map(|e| e.geom.clone()) else {
             unreachable!()
         };
         s.add_constraint(Constraint::Coincident { p: a, q: ORIGIN });
