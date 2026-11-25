@@ -77,14 +77,11 @@ impl Sketch {
         let roots = self.point_roots();
         let mut ends: std::collections::BTreeMap<PointId, usize> = Default::default();
         for e in self.entities.iter().filter(|e| !e.construction) {
-            let (a, b) = match e.geom {
-                Geom::Circle { .. } | Geom::Ellipse { .. } => continue,
-                Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => {
-                    (roots[a], roots[b])
-                }
-            };
-            // A line whose ends coincide is skipped, as it is for loops; an arc whose ends
-            // coincide is a closed curve.
+            // Circles and whole ellipses have no ends.
+            let Some([a, b]) = e.ends() else { continue };
+            let (a, b) = (roots[a], roots[b]);
+            // A line whose ends coincide is skipped, as it is for loops; an arc, partial
+            // ellipse or spline whose ends coincide is a closed curve.
             if a != b {
                 *ends.entry(a).or_default() += 1;
                 *ends.entry(b).or_default() += 1;
@@ -117,6 +114,12 @@ impl Sketch {
                 }
                 Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => {
                     edges.push((ei, roots[a], roots[b]))
+                }
+                // A spline whose ends meet closes on itself, as a whole arc does.
+                Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                    if let Some([a, b]) = e.ends() {
+                        edges.push((ei, roots[a], roots[b]));
+                    }
                 }
                 Geom::Ellipse { .. } => {
                     if let Some((el, _, _)) = crate::ellipse::of(self, ei) {
@@ -162,7 +165,7 @@ impl Sketch {
                 used[k] = true;
                 let (ei, s, t) = edges[k];
                 let forward = s == from;
-                segs.push(self.segment(ei, forward));
+                self.push_segments(ei, forward, &mut segs);
                 let to = if forward { t } else { s };
                 // Full arcs (start == end) close on themselves.
                 let next = incident[&to].iter().copied().find(|&j| j != k && !used[j]);
@@ -179,9 +182,39 @@ impl Sketch {
         Ok(loops)
     }
 
+    /// The boundary segments entity `ei` describes, from its first end to its second: one
+    /// for most entities, a spline's Bézier spans for a spline. Empty for a missing
+    /// entity or a spline that has no curve (its points coincide).
+    pub fn segments_of(&self, ei: usize) -> Vec<Seg2> {
+        let mut out = Vec::new();
+        match self.entities.get(ei).map(|e| &e.geom) {
+            Some(Geom::Spline { .. } | Geom::ControlSpline { .. }) => self.push_segments(ei, true, &mut out),
+            Some(_) => out.extend(self.segment_of(ei)),
+            None => {}
+        }
+        out
+    }
+
+    /// Appends the segments of entity `ei` to `out`, run forwards or backwards.
+    fn push_segments(&self, ei: usize, forward: bool, out: &mut Vec<Seg2>) {
+        if self.entities[ei].is_spline() {
+            let Some(sp) = crate::spline::of(self, ei) else { return };
+            let source = ei as u32;
+            let spans = sp.spans.into_iter().map(|p| Seg2::Cubic { p, source });
+            if forward {
+                out.extend(spans);
+            } else {
+                out.extend(spans.rev().map(|s| s.reversed()));
+            }
+        } else {
+            out.push(self.segment(ei, forward));
+        }
+    }
+
     /// The boundary segment entity `ei` describes, running from its first end to its
     /// second (counter-clockwise for arcs and partial ellipses), or a whole loop for a
-    /// circle or ellipse. `None` for a missing entity.
+    /// circle or ellipse. `None` for a missing entity, and for a spline, which may be
+    /// several segments (see [`Sketch::segments_of`]).
     pub fn segment_of(&self, ei: usize) -> Option<Seg2> {
         let src = ei as u32;
         Some(match self.entities.get(ei)?.geom {
@@ -200,6 +233,7 @@ impl Sketch {
                     source: src,
                 }
             }
+            Geom::Spline { .. } | Geom::ControlSpline { .. } => return None,
             _ => self.segment(ei, true),
         })
     }
@@ -232,6 +266,12 @@ impl Sketch {
             }
             Geom::Circle { .. } | Geom::Ellipse { .. } => {
                 unreachable!("circles and ellipses are handled as whole loops")
+            }
+            // Splines are several segments and go through `push_segments`; their chord,
+            // should one ever get here.
+            Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                let [a, b] = self.entities[ei].ends().unwrap_or([0, 0]);
+                Seg2::Line { a: self.pos(a), b: self.pos(b), source: ei as u32 }
             }
         };
         if forward {

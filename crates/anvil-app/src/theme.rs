@@ -383,6 +383,10 @@ pub enum Icon {
     Ellipse,
     /// Part of an ellipse with its centre.
     PartialEllipse,
+    /// A spline through three points.
+    Spline,
+    /// A spline with its dashed control polygon.
+    ControlSpline,
     TangentArc,
     Arc3,
     SketchFillet,
@@ -910,6 +914,32 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             dot(8.0, 10.0, accent);
             dot(14.5, 10.0, accent);
             dot(1.5, 10.0, accent);
+        }
+        Icon::Spline | Icon::ControlSpline => {
+            // One S-shaped cubic, through its points or over its control polygon.
+            let ctrl = [(1.5, 12.5), (5.0, 1.5), (11.0, 14.5), (14.5, 3.5)];
+            let at = |t: f32| {
+                let u = 1.0 - t;
+                let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+                let x = ctrl.iter().zip(w).map(|(c, w)| c.0 * w).sum::<f32>();
+                let y = ctrl.iter().zip(w).map(|(c, w)| c.1 * w).sum::<f32>();
+                (x, y)
+            };
+            let v: Vec<(f32, f32)> = (0..=24).map(|i| at(i as f32 / 24.0)).collect();
+            path(&v, ln);
+            if icon == Icon::ControlSpline {
+                for w in ctrl.windows(2) {
+                    dashed(w[0], w[1]);
+                }
+                for (x, y) in ctrl {
+                    dot(x, y, accent);
+                }
+            } else {
+                for t in [0.0, 0.5, 1.0] {
+                    let (x, y) = at(t);
+                    dot(x, y, accent);
+                }
+            }
         }
         Icon::TangentArc => {
             line((1.5, 12.0), (8.0, 12.0), ln);

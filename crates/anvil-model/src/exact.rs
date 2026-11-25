@@ -47,6 +47,7 @@ pub(crate) fn exact_loop(l: &Loop2) -> brep::Loop2 {
                 start,
                 sweep,
             },
+            Seg2::Cubic { p, .. } => brep::Segment::Cubic { p: p.map(|q| DVec2::new(q.x, q.y)) },
         });
         tags.push(s.source());
     }

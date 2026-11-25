@@ -21,8 +21,8 @@ pub enum Curve2 {
 }
 
 impl Curve2 {
-    /// The curve of a line, circle or arc; `None` for ellipses, which have their own
-    /// geometry in [`crate::ellipse`].
+    /// The curve of a line, circle or arc; `None` for ellipses and splines, which have
+    /// their own geometry in [`crate::ellipse`] and [`crate::spline`].
     pub fn of(sk: &Sketch, e: EntityId) -> Option<Curve2> {
         Some(match sk.entities.get(e)?.geom {
             Geom::Line { a, b } => Curve2::Line { a: sk.pos(a), b: sk.pos(b) },
@@ -32,7 +32,10 @@ impl Curve2 {
                 let start = (pa - cc).angle();
                 Curve2::Arc { c: cc, r: pa.distance(cc), start, sweep: arc_sweep(start, (pb - cc).angle()) }
             }
-            Geom::Ellipse { .. } | Geom::EllipseArc { .. } => return None,
+            Geom::Ellipse { .. }
+            | Geom::EllipseArc { .. }
+            | Geom::Spline { .. }
+            | Geom::ControlSpline { .. } => return None,
         })
     }
 

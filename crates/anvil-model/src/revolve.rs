@@ -39,7 +39,7 @@ impl Document {
         let sf = self.sketch(rf.sketch).ok_or_else(crate::failure::sketch_missing)?;
         let sk = &sf.sketch;
         let frame = *st.frames.get(&rf.sketch).ok_or_else(crate::failure::sketch_failed)?;
-        let (a, b) = match sk.entities.get(rf.axis).map(|e| e.geom) {
+        let (a, b) = match sk.entities.get(rf.axis).map(|e| e.geom.clone()) {
             Some(Geom::Line { a, b }) => (sk.pos(a), sk.pos(b)),
             _ => {
                 return Err(crate::failure::Cause::told(

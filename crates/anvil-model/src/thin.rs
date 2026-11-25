@@ -91,6 +91,11 @@ pub fn chains(sk: &Sketch) -> Result<Vec<Chain>, crate::failure::Cause> {
             Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => {
                 edges.push((ei, r[a], r[b]))
             }
+            Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                if let Some([a, b]) = e.ends() {
+                    edges.push((ei, r[a], r[b]));
+                }
+            }
         }
     }
     let mut at: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -145,7 +150,17 @@ fn walk(
         used[k] = true;
         let (ei, s, t) = edges[k];
         let forward = s == from;
-        segs.push(segment(sk, ei, forward));
+        if sk.entities[ei].is_spline() {
+            // A spline's spans, run the way the chain goes.
+            let spans = sk.segments_of(ei);
+            if forward {
+                segs.extend(spans);
+            } else {
+                segs.extend(spans.iter().rev().map(Seg2::reversed));
+            }
+        } else {
+            segs.push(segment(sk, ei, forward));
+        }
         let to = if forward { t } else { s };
         match at.get(&to).and_then(|l| l.iter().copied().find(|&j| !used[j])) {
             Some(j) => {
@@ -174,12 +189,14 @@ fn segment(sk: &Sketch, ei: usize, forward: bool) -> Seg2 {
             sweep: std::f64::consts::TAU,
             source: ei as u32,
         },
-        Geom::Ellipse { .. } | Geom::EllipseArc { .. } => match sk.segment_of(ei) {
-            Some(s) => s,
-            None => {
-                Seg2::Line { a: anvil_kernel::Vec2::ZERO, b: anvil_kernel::Vec2::ZERO, source: ei as u32 }
+        Geom::Ellipse { .. } | Geom::EllipseArc { .. } | Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+            match sk.segment_of(ei) {
+                Some(s) => s,
+                None => {
+                    Seg2::Line { a: anvil_kernel::Vec2::ZERO, b: anvil_kernel::Vec2::ZERO, source: ei as u32 }
+                }
             }
-        },
+        }
     };
     if forward {
         seg

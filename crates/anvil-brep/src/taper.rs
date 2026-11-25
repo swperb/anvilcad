@@ -27,7 +27,7 @@ fn travel(s: &Segment, at_end: bool) -> DVec2 {
             let t = if at_end { start + sweep } else { start };
             DVec2::from_angle(t).perp() * sweep.signum()
         }
-        Segment::Ellipse { .. } => s.travel_at(if at_end { 1.0 } else { 0.0 }),
+        Segment::Ellipse { .. } | Segment::Cubic { .. } => s.travel_at(if at_end { 1.0 } else { 0.0 }),
     }
 }
 
@@ -63,6 +63,8 @@ pub fn offset_loop(l: &Loop2, d: f64) -> Result<Loop2> {
             Segment::Ellipse { .. } => {
                 refuse("drafting a profile with an ellipse in it is not supported yet")
             }
+            // Nor is a spline moved sideways a cubic.
+            Segment::Cubic { .. } => refuse("drafting a profile with a spline in it is not supported yet"),
         })
         .collect::<Result<_>>()?;
     if n == 1 {
@@ -158,8 +160,8 @@ pub fn extrude_drafted(frame: &Frame, region: &Region, z0: f64, z1: f64, taper: 
             Rings { bottom: Vec::with_capacity(n), top: Vec::with_capacity(n), side: Vec::with_capacity(n) };
         for k in 0..n {
             let next = (k + 1) % n;
-            let (cb, b0, b1) = segment_curve(&bottom, &b.segments[k]);
-            let (ct, t0, t1) = segment_curve(&top, &t.segments[k]);
+            let (cb, b0, b1) = segment_curve(&bottom, &b.segments[k])?;
+            let (ct, t0, t1) = segment_curve(&top, &t.segments[k])?;
             r.bottom.push(solid.add_edge(Edge { curve: cb, start: vb[k], end: vb[next], t0: b0, t1: b1 }));
             r.top.push(solid.add_edge(Edge { curve: ct, start: vt[k], end: vt[next], t0, t1 }));
             let (pb, pt) = (bottom.to_world(b.segments[k].start()), top.to_world(t.segments[k].start()));

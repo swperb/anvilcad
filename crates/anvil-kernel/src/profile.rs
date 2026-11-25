@@ -1,5 +1,5 @@
-//! Closed 2D profiles (an outer loop plus holes) built from exact lines, arcs and elliptic
-//! arcs.
+//! Closed 2D profiles (an outer loop plus holes) built from exact lines, arcs, elliptic
+//! arcs and cubic Bézier spans.
 //! These are what sketches hand to the solid-building operations.
 
 use crate::math::{v2, Vec2};
@@ -35,6 +35,65 @@ pub enum Seg2 {
         sweep: f64,
         source: u32,
     },
+    /// Cubic Bézier span from `p[0]` to `p[3]` with inner control points `p[1]` and `p[2]`,
+    /// for `t` in [0, 1]. A sketch spline is a chain of these, all with the spline's
+    /// `source`. Matches the exact kernel's `Segment::Cubic`.
+    Cubic {
+        p: [Vec2; 4],
+        source: u32,
+    },
+}
+
+/// The point at `t` of the cubic Bézier span with control points `p`.
+pub fn cubic_point(p: &[Vec2; 4], t: f64) -> Vec2 {
+    let s = 1.0 - t;
+    p[0] * (s * s * s) + p[1] * (3.0 * s * s * t) + p[2] * (3.0 * s * t * t) + p[3] * (t * t * t)
+}
+
+/// The derivative with respect to `t` of [`cubic_point`].
+pub fn cubic_derivative(p: &[Vec2; 4], t: f64) -> Vec2 {
+    let s = 1.0 - t;
+    ((p[1] - p[0]) * (s * s) + (p[2] - p[1]) * (2.0 * s * t) + (p[3] - p[2]) * (t * t)) * 3.0
+}
+
+/// The second derivative with respect to `t` of [`cubic_point`].
+pub fn cubic_second_derivative(p: &[Vec2; 4], t: f64) -> Vec2 {
+    ((p[2] - p[1] * 2.0 + p[0]) * (1.0 - t) + (p[3] - p[2] * 2.0 + p[1]) * t) * 6.0
+}
+
+/// Nodes and weights of 5-point Gauss-Legendre quadrature on [0, 1].
+pub const GAUSS5: [(f64, f64); 5] = [
+    (0.046_910_077_030_668, 0.118_463_442_528_095),
+    (0.230_765_344_947_158, 0.239_314_335_249_683),
+    (0.5, 0.284_444_444_444_444),
+    (0.769_234_655_052_842, 0.239_314_335_249_683),
+    (0.953_089_922_969_332, 0.118_463_442_528_095),
+];
+
+/// Twice the signed area a cubic span sweeps about the origin, the integral of P x P'.
+/// That is a polynomial of degree 5 in t, which the quadrature integrates exactly.
+pub fn cubic_area2(p: &[Vec2; 4]) -> f64 {
+    GAUSS5.iter().map(|&(t, w)| w * cubic_point(p, t).cross(cubic_derivative(p, t))).sum()
+}
+
+/// Even parameter steps that keep a cubic span's chords within `tol` of it: the second
+/// derivative is at most six times the largest second difference of the control points,
+/// and a chord of parameter length h strays at most h² M / 8. At most 10 degrees of the
+/// control polygon's turn per step, as for arcs.
+pub fn cubic_segments(p: &[Vec2; 4], tol: f64) -> usize {
+    let m = 6.0 * (p[2] - p[1] * 2.0 + p[0]).length().max((p[3] - p[2] * 2.0 + p[1]).length());
+    let by_chord = if tol > 0.0 { (m / (8.0 * tol)).sqrt().ceil() } else { 1.0 };
+    let legs = [p[1] - p[0], p[2] - p[1], p[3] - p[2]];
+    let turn: f64 = legs
+        .windows(2)
+        .filter(|w| w[0].length() > 1e-12 && w[1].length() > 1e-12)
+        .map(|w| w[0].cross(w[1]).atan2(w[0].dot(w[1])).abs())
+        .sum();
+    let by_angle = (turn / 10f64.to_radians()).ceil();
+    if !by_chord.is_finite() || !by_angle.is_finite() {
+        return 1;
+    }
+    (by_chord.max(by_angle).max(2.0) as usize).min(4096)
 }
 
 /// The point at parameter `t` of the ellipse about `center` with semi-axes `a` along the
@@ -53,7 +112,10 @@ pub fn ellipse_derivative(a: f64, b: f64, rotation: f64, t: f64) -> Vec2 {
 impl Seg2 {
     pub fn source(&self) -> u32 {
         match *self {
-            Seg2::Line { source, .. } | Seg2::Arc { source, .. } | Seg2::Ellipse { source, .. } => source,
+            Seg2::Line { source, .. }
+            | Seg2::Arc { source, .. }
+            | Seg2::Ellipse { source, .. }
+            | Seg2::Cubic { source, .. } => source,
         }
     }
     pub fn start_point(&self) -> Vec2 {
@@ -63,6 +125,7 @@ impl Seg2 {
             Seg2::Ellipse { center, a, b, rotation, start, .. } => {
                 ellipse_point(center, a, b, rotation, start)
             }
+            Seg2::Cubic { p, .. } => p[0],
         }
     }
     pub fn end_point(&self) -> Vec2 {
@@ -74,6 +137,7 @@ impl Seg2 {
             Seg2::Ellipse { center, a, b, rotation, start, sweep, .. } => {
                 ellipse_point(center, a, b, rotation, start + sweep)
             }
+            Seg2::Cubic { p, .. } => p[3],
         }
     }
     pub fn reversed(&self) -> Seg2 {
@@ -85,6 +149,7 @@ impl Seg2 {
             Seg2::Ellipse { center, a, b, rotation, start, sweep, source } => {
                 Seg2::Ellipse { center, a, b, rotation, start: start + sweep, sweep: -sweep, source }
             }
+            Seg2::Cubic { p, source } => Seg2::Cubic { p: [p[3], p[2], p[1], p[0]], source },
         }
     }
     pub fn is_arc(&self) -> bool {
@@ -106,6 +171,12 @@ impl Seg2 {
                 let n = ellipse_segments(a, b, sweep, tol);
                 for i in 0..n {
                     out.push(ellipse_point(center, a, b, rotation, start + sweep * (i as f64 / n as f64)));
+                }
+            }
+            Seg2::Cubic { p, .. } => {
+                let n = cubic_segments(&p, tol);
+                for i in 0..n {
+                    out.push(cubic_point(&p, i as f64 / n as f64));
                 }
             }
         }
@@ -214,6 +285,7 @@ impl Loop2 {
                             + c.cross(bb) * (e.sin() - s.sin())
                             + aa.cross(bb) * w);
                 }
+                Seg2::Cubic { p, .. } => a += 0.5 * cubic_area2(&p),
             }
         }
         a

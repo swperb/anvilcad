@@ -1315,6 +1315,36 @@ mod tests {
             h.command(&json!({"cmd": "lua", "code": "anvil.sketch{ ellipses = { { 0, 0, 0, 20, 0 } } }"}));
         assert_eq!(r["ok"], false, "{r}");
         assert!(r["error"].as_str().unwrap_or("").contains("needs two positive radii"), "{r}");
+
+        // Issue #207: a control point spline arch closed by its base, 3/5 of its 40 by 30
+        // box, 10 thick; and a spline through points closed the same way.
+        for (code, want) in [
+            (
+                r#"local s = anvil.sketch{ control_splines = { { {0, 0}, {0, 30}, {40, 30}, {40, 0} } }, polylines = { { {40, 0}, {0, 0} } } }"#,
+                7200.0,
+            ),
+            (
+                r#"local s = anvil.sketch{ splines = { { {0, 0}, {20, 10}, {40, 0} } }, polylines = { { {40, 0}, {0, 0} } } }"#,
+                // Natural ends through three points evenly spaced in x: x runs evenly and
+                // each span is y = 15 u - 5 u^3 for u from 0 to 1, so the area is
+                // 2 * 20 * (15/2 - 5/4) = 250.
+                2500.0,
+            ),
+        ] {
+            run(&mut h, json!({"cmd": "new"}));
+            let r = run(
+                &mut h,
+                json!({"cmd": "lua", "code": format!("{code}\nanvil.extrude{{ sketch = s, depth = 10 }}")}),
+            );
+            let v = vol(&mut h);
+            assert!((v - want).abs() < 2e-3 * want, "{code}: {v} vs {want}; {r}");
+        }
+        run(&mut h, json!({"cmd": "new"}));
+        let r = h.command(
+            &json!({"cmd": "lua", "code": "anvil.sketch{ control_splines = { { {0, 0}, {1, 1}, {2, 0} } } }"}),
+        );
+        assert_eq!(r["ok"], false, "{r}");
+        assert!(r["error"].as_str().unwrap_or("").contains("at least four control points"), "{r}");
     }
 
     /// Issue #71: holes at sketch points, linear and circular patterns, and mirrors from a

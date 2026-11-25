@@ -99,7 +99,7 @@ fn side_walls(lp: &Loop2, frame: &Frame, lo: f64, hi: f64, feature: u32, out: &m
             Seg2::Arc { center, radius, .. } => {
                 SurfaceKind::Cylinder { axis_origin: frame.to_world(center), axis_dir: frame.z, radius }
             }
-            Seg2::Ellipse { .. } => SurfaceKind::Other,
+            Seg2::Ellipse { .. } | Seg2::Cubic { .. } => SurfaceKind::Other,
         };
         let w = |p: Vec2, z: f64| frame.to_world3(v3(p.x, p.y, z));
         out.extend(Polygon::new(vec![w(a, lo), w(b, lo), w(b, hi), w(a, hi)], FaceTag { id, surface }));
@@ -184,7 +184,7 @@ pub fn extrude_drafted(
                     Seg2::Arc { center, .. } => {
                         SurfaceKind::Revolved { axis_origin: frame.to_world(center), axis_dir: frame.z }
                     }
-                    Seg2::Ellipse { .. } => SurfaceKind::Other,
+                    Seg2::Ellipse { .. } | Seg2::Cubic { .. } => SurfaceKind::Other,
                 };
                 let tag = FaceTag { id: FaceId::side(feature, seg.source()), surface };
                 let w = |p: Vec2, z: f64| frame.to_world3(v3(p.x, p.y, z));

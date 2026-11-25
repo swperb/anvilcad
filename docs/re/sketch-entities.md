@@ -689,9 +689,12 @@ not run, for the reason given above: the inputs are prose pages.
 
 ## Splines
 
-Studied on 2026-11-25 for issue #69 from S70–S78, in the same way. **Not implemented
-yet** (issue #207): the exact kernel has no spline segments in profiles (issue #143), so
-the sketcher side waits for it. This section is the specification that work follows.
+Studied on 2026-11-25 for issue #69 from S70–S78, in the same way. Implemented for issue
+#207 from this section: the Spline and Control Point Spline tools, the relations below,
+exact extrusion and STEP export. "Implementation decisions (#207)" at its end records the
+choices made where the sources are silent; REA (`rea-agents` 6.10.1) was set up again and
+its method kept (Observed, Inferred, Decision and Unknown apart). No new sources were
+read and REA's analysis tools were not run, since the inputs are prose pages.
 
 ### Two kinds
 
@@ -772,6 +775,84 @@ the sketcher side waits for it. This section is the specification that work foll
 2. What "Maintain Internal Continuity" and "Relax Spline" compute.
 3. How tangent weights map onto derivative lengths.
 
+### Implementation decisions (#207)
+
+Each of these is a **Decision**; the sources above are silent on them or they are
+AnvilCAD's own design.
+
+- **Curve.** Both kinds are cubic and held as a chain of cubic Bézier spans
+  (`anvil_sketch::spline`). The kernel's profiles take a span as a segment of its own
+  (`Seg2::Cubic`, `anvil_brep::profile::Segment::Cubic`), so a spline is one entity in the
+  sketch and one segment per span in a profile. This answers Unknown 1 for AnvilCAD: a
+  spline through points is the C2 cubic interpolant, parametrised by chord length, with
+  natural ends (no second derivative there). Two points make a straight span.
+- **Control point spline.** The clamped cubic B-spline of its vertices with uniform
+  knots, so it has (vertices − 3) spans; four vertices make one Bézier span (S70, S76).
+  Degrees 5 and 7 and rational weights are left out; inserting a vertex is left out.
+- **Handles.** A spline through points gets a handle at an end only when a relation
+  needs that end's direction (Tangent, or Equal Curvature) or the user drags one in. The
+  handle is a sketch point, the end span's inner control point: the end leaves towards
+  it, with derivative 3 × (handle − end) ÷ chord length. This answers Unknown 3 for
+  AnvilCAD: the weight is the handle's distance. A handle adds two freedoms, so a
+  tangency on it leaves the weight free, as S71 shows the weights to be. Handles at
+  interior points and curvature controls (S74) are left out.
+- **Tangent.** Line to spline, at a shared end: the spline's end direction is along the
+  line. Arc, partial ellipse or spline to spline, at a shared end: their normals there
+  are parallel (`TangentCircles`). Away from a shared end the tools do not offer it.
+  For a control point spline the solver turns the end's second vertex (the end's first
+  two control points are then on the line of the tangent); for a spline through points,
+  its handle.
+- **Equal Curvature** (`Constraint::EqualCurvature`) between a spline and a line, arc,
+  partial ellipse or another spline sharing an end: tangent there, and equal curvature
+  vectors along the normal (residual scaled by the curves' size squared, so it is a
+  length like the solver's other residuals). It includes tangency, as S43 describes.
+- **Coincident** (a point on a spline) holds the point at zero signed distance from the
+  curve, positive on the left of its travel, so the residual is smooth across it.
+- **Length.** The Dimension tool on a spline adds its length (`ArcLength`, S77); the
+  solver holds it.
+- **Fix** on a spline fixes every point that shapes it: through points or vertices, and
+  handles.
+- **Tools.** Each click adds a point; a click on the last point (the second click of a
+  double-click) or Enter finishes; Escape abandons; too few points leave the tool waiting
+  with a message. A click on an existing point shares it, so a spline drawn from a line's
+  end closes a profile with it. No relations are inferred beyond that. While the sketch is
+  edited a control point spline shows its control polygon and a spline its handles, as
+  thin dashed lines.
+- **Errors.** A spline whose neighbouring points coincide, or whose ends meet, is not
+  created; nor is a control point spline of fewer than four vertices. Closed (periodic)
+  splines are left out.
+- **Editing tools.** Move, Copy, Rotate, Scale, Mirror and the patterns carry a spline's
+  points (a similarity maps either kind onto the spline of the moved points). Trim,
+  Extend, Split, Sketch Fillet, Sketch Chamfer and Offset refuse a spline with a plain
+  message, as for ellipses.
+- **Features.** Extrusions of profiles with splines are exact: each span's side is a
+  cubic-by-linear B-spline face. Revolve, loft, drafted extrude and sweep paths refuse a
+  spline in the exact kernel (#143), so the part is built on the faceted kernel and says
+  which feature made it so. Shell and thin features, which offset the profile, refuse a
+  spline with a plain message.
+- **STEP.** Each span's edges export as `B_SPLINE_CURVE_WITH_KNOTS` of degree 3 with four
+  control points, and the side faces as `B_SPLINE_SURFACE_WITH_KNOTS`; reading the file
+  back gives B-spline curves again.
+- **Scripts.** `anvil.sketch{ splines = ..., control_splines = ... }` and the MCP
+  `add_sketch` tool take lists of points.
+
+### Testable statements (splines)
+
+34. The control point spline on (0, 0), (0, 30), (40, 30), (40, 0) is one Bézier span; it
+    passes through (20, 22.5) at its middle and, closed by its base, encloses 720 (3/5 of
+    its box) with centroid height 9 × 30 / 28 = 9.643. Extruded 10 it is a body of volume
+    7200, and its STEP export holds two cubic `B_SPLINE_CURVE_WITH_KNOTS`.
+35. The clamped uniform cubic B-spline of five vertices has two spans joined at
+    p1/4 + p2/2 + p3/4 with equal first and second derivatives.
+36. The spline through (0, 0), (20, 10), (40, 0) has natural ends; closed by its base it
+    encloses 250 (each span is y = 15u − 5u³ over x = 20u).
+37. A spline through (0, 0), (20, 15), (40, 5) with its points fixed and its start
+    tangent to the line from (−30, 0): its start handle comes onto y = 0 ahead of the
+    start, the points stay put and 1 DOF (the handle's weight) is left.
+38. A control point spline of four free vertices has 8 DOF; a spline through three free
+    points has 6.
+39. A control point spline of three vertices, or a spline repeating a point, is refused.
+
 ## Other entities (recommend deferring)
 
 - **Ellipse.** Specified in "Ellipses" below (S66–S69) and implemented.
@@ -784,7 +865,7 @@ the sketcher side waits for it. This section is the specification that work foll
   tangency" makes it tangent at both ends. **Observed (S58).** The API's `CreateConic`
   takes a focus, an apex and two end points, which does not match the help's description;
   the difference is not explained. **Decision.** Defer.
-- **Spline.** Specified in "Splines" below (S70–S78); not implemented yet.
+- **Spline.** Specified in "Splines" below (S70–S78) and implemented.
 - **Text.** **Observed (S39, S58).** Text is placed along selected curves or edges, or
   horizontally from the origin, with a font, alignment, flips, width factor and spacing,
   and can then be extruded or cut. **Decision.** Defer; it needs a font engine and

@@ -70,10 +70,10 @@ mod tests {
         let ws = s.add_constraint(Constraint::Length { line: l[0], value: 40.0 });
         s.add_constraint(Constraint::Length { line: l[1], value: 20.0 });
         // Center the rectangle with a construction diagonal.
-        let Some(anvil_sketch::Geom::Line { a, .. }) = s.entities.get(l[0]).map(|e| e.geom) else {
+        let Some(anvil_sketch::Geom::Line { a, .. }) = s.entities.get(l[0]).map(|e| e.geom.clone()) else {
             unreachable!()
         };
-        let Some(anvil_sketch::Geom::Line { a: c, .. }) = s.entities.get(l[2]).map(|e| e.geom) else {
+        let Some(anvil_sketch::Geom::Line { a: c, .. }) = s.entities.get(l[2]).map(|e| e.geom.clone()) else {
             unreachable!()
         };
         let diag = s.add_line(a, c);

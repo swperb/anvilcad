@@ -85,9 +85,10 @@ struct Cut {
     shared: Option<PointId>,
 }
 
-fn ends_of(g: Geom) -> Option<(PointId, PointId)> {
-    match g {
+fn ends_of(g: &Geom) -> Option<(PointId, PointId)> {
+    match *g {
         Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => Some((a, b)),
+        Geom::Spline { ref pts, .. } | Geom::ControlSpline { ref pts } => Some((*pts.first()?, *pts.last()?)),
         Geom::Circle { .. } | Geom::Ellipse { .. } => None,
     }
 }
@@ -99,6 +100,13 @@ fn set_end(g: &mut Geom, old: PointId, new: PointId) {
                 *a = new;
             } else if *b == old {
                 *b = new;
+            }
+        }
+        Geom::Spline { pts, .. } | Geom::ControlSpline { pts } => {
+            if pts.first() == Some(&old) {
+                pts[0] = new;
+            } else if let Some(last) = pts.last_mut().filter(|p| **p == old) {
+                *last = new;
             }
         }
         Geom::Circle { .. } | Geom::Ellipse { .. } => {}
@@ -128,6 +136,10 @@ impl Sketch {
             // sketch-entities.md, "Ellipses", "Editing tools".
             Some(en) if en.is_ellipse() => {
                 Err(SketchError::Unsupported("this tool does not work on ellipses yet"))
+            }
+            // sketch-entities.md, "Splines", "Editing tools".
+            Some(en) if en.is_spline() => {
+                Err(SketchError::Unsupported("this tool does not work on splines yet"))
             }
             Some(_) => Curve2::of(self, e).ok_or(SketchError::Missing),
         }
@@ -257,7 +269,7 @@ impl Sketch {
         let (_, (c, p1, p2)) = best.ok_or(SketchError::TooLarge)?;
         // A tangent point at the far end would shrink that curve away.
         for (e, p) in [(e1, p1), (e2, p2)] {
-            if let Some((a, b)) = ends_of(self.entities[e].geom) {
+            if let Some((a, b)) = ends_of(&self.entities[e].geom) {
                 let far = if a == x { b } else { a };
                 if self.pos(far).distance(p) <= 1e-7 * scale {
                     return Err(SketchError::TooLarge);
@@ -517,7 +529,7 @@ impl Sketch {
                 if !closed && (t <= lo + step || t >= hi - step) {
                     continue;
                 }
-                let shared = ends_of(self.entities[f].geom).and_then(|(a, b)| {
+                let shared = ends_of(&self.entities[f].geom).and_then(|(a, b)| {
                     [a, b].into_iter().find(|&p| self.pos(p).distance(at) <= 1e-9 * scale)
                 });
                 if out.iter().any(|c| c.at.distance(at) <= 1e-9 * scale) {
@@ -618,7 +630,7 @@ impl Sketch {
         let mut kept = vec![e];
         let mut cons = Vec::new();
         let mut loose = Vec::new();
-        match self.entities[e].geom {
+        match self.entities[e].geom.clone() {
             Geom::Circle { c, .. } => {
                 if cuts.len() < 2 {
                     return Err(SketchError::NoIntersection);
@@ -636,12 +648,12 @@ impl Sketch {
                 }
             }
             g => {
-                let Some((a, b)) = ends_of(g) else { return Err(SketchError::Missing) };
+                let Some((a, b)) = ends_of(&g) else { return Err(SketchError::Missing) };
                 let lo = cuts.iter().rev().find(|k| k.t < tp).copied();
                 let hi = cuts.iter().find(|k| k.t > tp).copied();
                 let piece = |sk: &mut Sketch, p: PointId, q: PointId| -> EntityId {
-                    match g {
-                        Geom::Arc { c, .. } => sk.add_arc(c, p, q),
+                    match &g {
+                        Geom::Arc { c, .. } => sk.add_arc(*c, p, q),
                         _ => sk.add_line(p, q),
                     }
                 };
@@ -729,7 +741,7 @@ impl Sketch {
                 continue;
             }
             let ce = self.curve_of(e)?;
-            let Some((a, b)) = ends_of(self.entities[e].geom) else {
+            let Some((a, b)) = ends_of(&self.entities[e].geom) else {
                 return Err(SketchError::Unsupported("only lines and arcs are trimmed this way"));
             };
             let mut cuts = Vec::new();
@@ -743,7 +755,7 @@ impl Sketch {
                 match hits.as_slice() {
                     [] => {}
                     [at] => {
-                        let shared = ends_of(self.entities[by].geom).and_then(|(p, q)| {
+                        let shared = ends_of(&self.entities[by].geom).and_then(|(p, q)| {
                             [p, q].into_iter().find(|&k| self.pos(k).distance(*at) <= 1e-9 * scale)
                         });
                         cuts.push(Cut { t: ce.param(*at), at: *at, by, shared });
@@ -788,8 +800,8 @@ impl Sketch {
     /// beyond `x` as seen from the pick, so the picked part is kept.
     fn moving_end(&self, e: EntityId, pick: Vec2, x: Vec2) -> Result<PointId, SketchError> {
         let ce = self.curve_of(e)?;
-        let (a, b) =
-            ends_of(self.entities[e].geom).ok_or(SketchError::Unsupported("circles have no ends to move"))?;
+        let (a, b) = ends_of(&self.entities[e].geom)
+            .ok_or(SketchError::Unsupported("circles have no ends to move"))?;
         let (tp, tx) = (ce.param(pick), ce.param(x));
         let (_, hi) = ce.range();
         // Past an end, that end moves; otherwise the end on the far side of x from the pick.
@@ -835,7 +847,7 @@ impl Sketch {
         for (e, p) in [(e1, p1), (e2, p2)] {
             self.points[p].x = x.x;
             self.points[p].y = x.y;
-            if let Some((a, b)) = ends_of(self.entities[e].geom) {
+            if let Some((a, b)) = ends_of(&self.entities[e].geom) {
                 if self.pos(a).distance(self.pos(b)) <= 1e-9 * x.length().max(1.0) {
                     *self = backup;
                     return Err(SketchError::Degenerate);
@@ -854,7 +866,7 @@ impl Sketch {
         self.check_entities(&[e])?;
         let ce = self.curve_of(e)?;
         let (a, b) =
-            ends_of(self.entities[e].geom).ok_or(SketchError::Unsupported("a circle cannot be extended"))?;
+            ends_of(&self.entities[e].geom).ok_or(SketchError::Unsupported("a circle cannot be extended"))?;
         let (_, hi) = ce.range();
         let at_b = ce.param(pick) >= 0.5 * hi;
         let scale = 1.0_f64.max(self.pos(a).length().max(self.pos(b).length()));
@@ -904,7 +916,7 @@ impl Sketch {
         let p = self.own_end(e, end);
         self.points[p].x = x.x;
         self.points[p].y = x.y;
-        let shared = ends_of(self.entities[by].geom)
+        let shared = ends_of(&self.entities[by].geom)
             .and_then(|(fa, fb)| [fa, fb].into_iter().find(|&q| self.pos(q).distance(x) <= 1e-9 * scale));
         match shared {
             Some(q) => {
@@ -993,13 +1005,13 @@ impl Sketch {
             return None;
         }
         let [e1, e2] = self.entities_ending_at(p)[..] else { return None };
-        let (g1, g2) = (self.entities[e1].geom, self.entities[e2].geom);
+        let (g1, g2) = (&self.entities[e1].geom, &self.entities[e2].geom);
         let related = self.constraints.iter().any(|c| {
             matches!(*c, Constraint::Collinear { a, b } | Constraint::Coradial { a, b }
                 if (a == e1 && b == e2) || (a == e2 && b == e1))
         });
         let fits = match (g1, g2) {
-            (Geom::Line { a, b }, Geom::Line { a: c, b: d }) => {
+            (&Geom::Line { a, b }, &Geom::Line { a: c, b: d }) => {
                 // Collinear, running away from p in opposite directions.
                 let at = self.pos(p);
                 let u1 = self.pos(if a == p { b } else { a }) - at;
@@ -1007,7 +1019,7 @@ impl Sketch {
                 let scale = u1.length().max(u2.length()).max(1.0);
                 u1.cross(u2).abs() <= 1e-9 * scale * scale && u1.dot(u2) < 0.0
             }
-            (Geom::Arc { c: c1, a: a1, .. }, Geom::Arc { c: c2, a: a2, .. }) => {
+            (&Geom::Arc { c: c1, a: a1, .. }, &Geom::Arc { c: c2, a: a2, .. }) => {
                 c1 == c2 && (a1 == p) != (a2 == p)
             }
             _ => false,
@@ -1022,14 +1034,14 @@ impl Sketch {
         let (e1, e2) = self
             .join_pair(p)
             .ok_or(SketchError::Unsupported("that point does not join two pieces of one curve"))?;
-        let (keep, gone) = match (self.entities[e1].geom, self.entities[e2].geom) {
+        let (keep, gone) = match (&self.entities[e1].geom, &self.entities[e2].geom) {
             // The arc that ends at p keeps its start and takes the other's end.
-            (Geom::Arc { b, .. }, Geom::Arc { .. }) if b == p => (e1, e2),
+            (&Geom::Arc { b, .. }, Geom::Arc { .. }) if b == p => (e1, e2),
             (Geom::Arc { .. }, Geom::Arc { .. }) => (e2, e1),
             _ => (e1.min(e2), e1.max(e2)),
         };
-        let other_end = |g: Geom| ends_of(g).map(|(a, b)| if a == p { b } else { a });
-        let far = other_end(self.entities[gone].geom).ok_or(SketchError::Missing)?;
+        let other_end = |g: &Geom| ends_of(g).map(|(a, b)| if a == p { b } else { a });
+        let far = other_end(&self.entities[gone].geom).ok_or(SketchError::Missing)?;
         set_end(&mut self.entities[keep].geom, p, far);
         if let Geom::Arc { c, a, b } = self.entities[keep].geom {
             if a == b {

@@ -21,7 +21,7 @@ impl Point {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Geom {
     Line {
         a: PointId,
@@ -54,9 +54,25 @@ pub enum Geom {
         a: PointId,
         b: PointId,
     },
+    /// Spline through `pts` (two or more): the C2 cubic through them, by chord length,
+    /// with natural ends. An end with a handle leaves towards it instead, the handle
+    /// being the end span's inner control point. See [`crate::spline`] and
+    /// `docs/re/sketch-entities.md`, "Splines".
+    Spline {
+        pts: Vec<PointId>,
+        /// Handles at the start and the end, added when a relation needs the end's
+        /// direction (tangency, equal curvature) or by the user.
+        #[serde(default)]
+        handles: [Option<PointId>; 2],
+    },
+    /// Control point spline: the clamped cubic B-spline of control vertices `pts` (four or
+    /// more), with uniform knots. It runs through its first and last vertex.
+    ControlSpline {
+        pts: Vec<PointId>,
+    },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Entity {
     pub geom: Geom,
     #[serde(default)]
@@ -71,6 +87,10 @@ impl Entity {
             Geom::Arc { c, a, b } => vec![c, a, b],
             Geom::Ellipse { c, axis1, axis2 } => vec![c, axis1, axis2],
             Geom::EllipseArc { c, axis1, axis2, a, b } => vec![c, axis1, axis2, a, b],
+            Geom::Spline { ref pts, handles } => {
+                pts.iter().copied().chain(handles.into_iter().flatten()).collect()
+            }
+            Geom::ControlSpline { ref pts } => pts.clone(),
         }
     }
     /// Renames the entity's points through `f`.
@@ -98,6 +118,16 @@ impl Entity {
                 *a = f(*a);
                 *b = f(*b);
             }
+            Geom::Spline { pts, handles } => {
+                for p in pts.iter_mut().chain(handles.iter_mut().flatten()) {
+                    *p = f(*p);
+                }
+            }
+            Geom::ControlSpline { pts } => {
+                for p in pts {
+                    *p = f(*p);
+                }
+            }
         }
     }
 
@@ -112,6 +142,10 @@ impl Entity {
     pub fn is_ellipse(&self) -> bool {
         matches!(self.geom, Geom::Ellipse { .. } | Geom::EllipseArc { .. })
     }
+    /// A spline of either kind.
+    pub fn is_spline(&self) -> bool {
+        matches!(self.geom, Geom::Spline { .. } | Geom::ControlSpline { .. })
+    }
     /// The centre point of a circle, arc or ellipse.
     pub fn center(&self) -> Option<PointId> {
         match self.geom {
@@ -119,13 +153,17 @@ impl Entity {
             | Geom::Arc { c, .. }
             | Geom::Ellipse { c, .. }
             | Geom::EllipseArc { c, .. } => Some(c),
-            Geom::Line { .. } => None,
+            Geom::Line { .. } | Geom::Spline { .. } | Geom::ControlSpline { .. } => None,
         }
     }
-    /// The end points of an entity that has ends: a line, an arc or a partial ellipse.
+    /// The end points of an entity that has ends: a line, an arc, a partial ellipse or a
+    /// spline.
     pub fn ends(&self) -> Option<[PointId; 2]> {
         match self.geom {
             Geom::Line { a, b } | Geom::Arc { a, b, .. } | Geom::EllipseArc { a, b, .. } => Some([a, b]),
+            Geom::Spline { ref pts, .. } | Geom::ControlSpline { ref pts } => {
+                Some([*pts.first()?, *pts.last()?])
+            }
             Geom::Circle { .. } | Geom::Ellipse { .. } => None,
         }
     }
@@ -331,6 +369,13 @@ pub enum Constraint {
         d2: EntityId,
         j: u32,
     },
+    /// Two curves sharing an end point bend alike there: they are tangent and their
+    /// curvature (its size and the side it bends to) is the same. At least one is a spline
+    /// (`docs/re/sketch-entities.md`, "Splines").
+    EqualCurvature {
+        a: EntityId,
+        b: EntityId,
+    },
     /// A circular sketch pattern instance: `inst` is `seed` turned `k` steps about the
     /// first point of line `k0`, one step being the angle from line `k0` to line `k1`.
     RotatedPoint {
@@ -436,6 +481,7 @@ impl Constraint {
             Offset { .. } => "Offset",
             SameOffset { .. } => "Offset",
             PatternPoint { .. } | RotatedPoint { .. } => "Patterned",
+            EqualCurvature { .. } => "Equal curvature",
         }
     }
 
@@ -479,6 +525,7 @@ impl Constraint {
             Collinear { a, b }
             | Coradial { a, b }
             | TangentCircles { a, b, .. }
+            | EqualCurvature { a, b }
             | Intersection { a, b, .. } => {
                 vec![a, b]
             }
@@ -536,7 +583,10 @@ impl Constraint {
                 *line = em(*line);
                 *entity = em(*entity);
             }
-            Collinear { a, b } | Coradial { a, b } | TangentCircles { a, b, .. } => {
+            Collinear { a, b }
+            | Coradial { a, b }
+            | TangentCircles { a, b, .. }
+            | EqualCurvature { a, b } => {
                 *a = em(*a);
                 *b = em(*b);
             }
@@ -728,6 +778,52 @@ impl Sketch {
         self.add_entity(Geom::Arc { c, a, b })
     }
 
+    /// Adds a relation from the Add Relations panel or a script: as
+    /// [`Sketch::add_constraint`], but first gives a spline through points a handle at an
+    /// end whose direction the relation sets (tangency, equal curvature), so that the
+    /// relation turns the end rather than moving the points the spline runs through.
+    pub fn add_relation(&mut self, c: Constraint) -> usize {
+        use Constraint::*;
+        if let Tangent { line: a, entity: b } | TangentCircles { a, b, .. } | EqualCurvature { a, b } = c {
+            if let Some(q) = self.shared_end_point(a, b) {
+                for e in [a, b] {
+                    self.ensure_spline_handle(e, q);
+                }
+            }
+        }
+        self.add_constraint(c)
+    }
+
+    /// An end point entities `e` and `f` share.
+    pub fn shared_end_point(&self, e: EntityId, f: EntityId) -> Option<PointId> {
+        let (x, y) = (self.entities.get(e)?.ends()?, self.entities.get(f)?.ends()?);
+        x.into_iter().find(|p| y.contains(p))
+    }
+
+    /// Gives spline-through-points `e` a handle at its end `at`, where the end span's inner
+    /// control point is now, so the curve does not move. Returns the handle, or `None` if
+    /// `e` is not such a spline or `at` is not one of its ends.
+    pub fn ensure_spline_handle(&mut self, e: EntityId, at: PointId) -> Option<PointId> {
+        let spline = crate::spline::of(self, e)?;
+        let Geom::Spline { pts, handles } = &self.entities.get(e)?.geom else { return None };
+        let end = if pts.first() == Some(&at) {
+            0
+        } else if pts.last() == Some(&at) {
+            1
+        } else {
+            return None;
+        };
+        if let Some(h) = handles[end] {
+            return Some(h);
+        }
+        let q = if end == 0 { spline.spans.first()?[1] } else { spline.spans.last()?[2] };
+        let h = self.add_point(q);
+        if let Geom::Spline { handles, .. } = &mut self.entities[e].geom {
+            handles[end] = Some(h);
+        }
+        Some(h)
+    }
+
     pub fn add_constraint(&mut self, c: Constraint) -> usize {
         self.constraints.push(c);
         self.constraints.len() - 1
@@ -754,7 +850,11 @@ impl Sketch {
         match self.entities[e].geom {
             Geom::Circle { r, .. } => r,
             Geom::Arc { c, a, .. } => self.pos(a).distance(self.pos(c)),
-            Geom::Line { .. } | Geom::Ellipse { .. } | Geom::EllipseArc { .. } => 0.0,
+            Geom::Line { .. }
+            | Geom::Ellipse { .. }
+            | Geom::EllipseArc { .. }
+            | Geom::Spline { .. }
+            | Geom::ControlSpline { .. } => 0.0,
         }
     }
 
@@ -789,6 +889,9 @@ impl Sketch {
                 Some((el, t0, sweep)) => el.distance(p, t0, sweep),
                 None => f64::INFINITY,
             },
+            Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                crate::spline::of(self, e).map_or(f64::INFINITY, |s| s.distance(p))
+            }
         }
     }
 
@@ -1065,7 +1168,7 @@ impl Sketch {
         let radius = |e: EntityId| match self.entities.get(e)?.geom {
             Geom::Circle { r, .. } => Some(r),
             Geom::Arc { c, a, .. } => Some(pos(a)?.distance(pos(c)?)),
-            Geom::Line { .. } | Geom::Ellipse { .. } | Geom::EllipseArc { .. } => None,
+            _ => None,
         };
         let line_dist = |p: PointId, e: EntityId| {
             let (a, b) = line(e)?;
@@ -1093,6 +1196,7 @@ impl Sketch {
                     let (cc, pa, pb) = (pos(c)?, pos(a)?, pos(b)?);
                     pa.distance(cc) * arc_sweep((pa - cc).angle(), (pb - cc).angle())
                 }
+                Geom::Spline { .. } | Geom::ControlSpline { .. } => crate::spline::of(self, entity)?.length(),
                 _ => return None,
             },
             Angle { a, b, .. } => {
@@ -1116,7 +1220,7 @@ impl Sketch {
     /// positive on its left; for two circles or arcs the difference of their radii.
     pub fn signed_offset(&self, base: EntityId, entity: EntityId) -> Option<f64> {
         let pos = |p: PointId| self.points.get(p).map(|q| q.pos());
-        match (self.entities.get(base)?.geom, self.entities.get(entity)?.geom) {
+        match (self.entities.get(base)?.geom.clone(), self.entities.get(entity)?.geom.clone()) {
             (Geom::Line { a, b }, Geom::Line { a: ea, .. }) => {
                 let (pa, pb, q) = (pos(a)?, pos(b)?, pos(ea)?);
                 let d = pb - pa;

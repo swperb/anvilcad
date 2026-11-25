@@ -186,6 +186,7 @@ fn seg_point(s: &Segment, f: f64) -> DVec2 {
         Segment::Ellipse { center, a, b, rotation, start, sweep } => {
             Segment::Ellipse { center, a, b, rotation, start: start + sweep * f, sweep: 0.0 }.start()
         }
+        Segment::Cubic { p } => crate::profile::cubic_at(&p, f.min(1.0)),
     }
 }
 
@@ -199,6 +200,7 @@ fn seg_piece(s: &Segment, g0: f64, g1: f64) -> Segment {
         Segment::Ellipse { center, a, b, rotation, start, sweep } => {
             Segment::Ellipse { center, a, b, rotation, start: start + sweep * g0, sweep: sweep * (g1 - g0) }
         }
+        Segment::Cubic { p } => Segment::Cubic { p: crate::profile::cubic_sub(&p, g0, g1) },
     }
 }
 
@@ -239,8 +241,8 @@ fn centroid2(l: &Loop2) -> DVec2 {
                 mx += 0.5 * (fx(e) - fx(start));
                 my += 0.5 * (fy(e) - fy(start));
             }
-            // Lofts refuse ellipses; its chords, for completeness.
-            Segment::Ellipse { .. } => {
+            // Lofts refuse ellipses and splines; their chords, for completeness.
+            Segment::Ellipse { .. } | Segment::Cubic { .. } => {
                 for w in s.sample(1e-6, 0.01).windows(2) {
                     let (a, d) = (w[0], w[1] - w[0]);
                     mx += 0.5 * d.y * (a.x * a.x + a.x * d.x + d.x * d.x / 3.0);
@@ -315,7 +317,7 @@ fn start_nearest(r: &Ring, target: DVec3) -> Loop2 {
                 let d = DVec2::new(l.x, l.y) - center;
                 if d.length() < tol::LINEAR { 0.0 } else { d.to_angle() }
             }
-            Segment::Line { .. } | Segment::Ellipse { .. } => 0.0,
+            Segment::Line { .. } | Segment::Ellipse { .. } | Segment::Cubic { .. } => 0.0,
         };
         return circle_from(&r.outline, theta);
     }
@@ -520,7 +522,7 @@ impl Arc3 {
                 start,
                 sweep,
             }),
-            Segment::Line { .. } | Segment::Ellipse { .. } => None,
+            Segment::Line { .. } | Segment::Ellipse { .. } | Segment::Cubic { .. } => None,
         }
     }
 
@@ -624,6 +626,8 @@ fn quintic_spans(s: &Segment) -> usize {
         Segment::Arc { sweep, .. } | Segment::Ellipse { sweep, .. } => {
             (sweep.abs() / QUINTIC_STEP).ceil().max(1.0) as usize
         }
+        // Lofts refuse splines; a few spans, for completeness.
+        Segment::Cubic { .. } => 4,
     }
 }
 
@@ -769,6 +773,7 @@ fn check_blend(m: &Matched) -> Result<()> {
                 .flatten()
                 .map(|s| match *s {
                     Segment::Arc { sweep, .. } | Segment::Ellipse { sweep, .. } => sweep.abs(),
+                    Segment::Cubic { .. } => 1.0,
                     Segment::Line { .. } => 0.0,
                 })
                 .fold(0.0, f64::max);
@@ -832,7 +837,7 @@ pub fn loft_ruled(a: &Section, b: &Section, picks: [Option<DVec3>; 2]) -> Result
     };
     let va = vertices(&m.a, &mut solid);
     let vb = vertices(&m.b, &mut solid);
-    let profile = |p: &Prep, vs: &[VertexId], solid: &mut Solid| -> Vec<EdgeId> {
+    let profile = |p: &Prep, vs: &[VertexId], solid: &mut Solid| -> Result<Vec<EdgeId>> {
         match p {
             Prep::Ring(r) => r
                 .outline
@@ -840,15 +845,15 @@ pub fn loft_ruled(a: &Section, b: &Section, picks: [Option<DVec3>; 2]) -> Result
                 .iter()
                 .enumerate()
                 .map(|(k, s)| {
-                    let (curve, t0, t1) = segment_curve(&r.frame, s);
-                    solid.add_edge(Edge { curve, start: vs[k], end: vs[(k + 1) % n], t0, t1 })
+                    let (curve, t0, t1) = segment_curve(&r.frame, s)?;
+                    Ok(solid.add_edge(Edge { curve, start: vs[k], end: vs[(k + 1) % n], t0, t1 }))
                 })
                 .collect(),
-            Prep::Point(_) => Vec::new(),
+            Prep::Point(_) => Ok(Vec::new()),
         }
     };
-    let ea = profile(&m.a, &va, &mut solid);
-    let eb = profile(&m.b, &vb, &mut solid);
+    let ea = profile(&m.a, &va, &mut solid)?;
+    let eb = profile(&m.b, &vb, &mut solid)?;
     let mut rulings = Vec::new();
     if !pointed {
         for i in 0..n {

@@ -287,6 +287,10 @@ pub struct SketchSpec {
     /// Partial ellipses: an ellipse as above, then points in the directions of its start
     /// and its end from the centre (x, y, x, y); it runs counter-clockwise between them.
     pub partial_ellipses: Vec<[f64; 9]>,
+    /// Splines through points, each a list of x, y (two or more).
+    pub splines: Vec<Vec<[f64; 2]>>,
+    /// Control point splines, each a list of control points x, y (four or more).
+    pub control_splines: Vec<Vec<[f64; 2]>>,
     /// Free points, such as where holes go: x, y.
     pub points: Vec<[f64; 2]>,
 }
@@ -1271,6 +1275,18 @@ fn read_sketch(t: &Table) -> Result<SketchSpec, String> {
             s.polylines.push(pts);
         }
     }
+    for (key, list) in [("splines", &mut s.splines), ("control_splines", &mut s.control_splines)] {
+        if let Some(curves) = t.get::<Option<Table>>(key).map_err(lua_err)? {
+            for c in curves.sequence_values::<Table>() {
+                let mut pts = Vec::new();
+                for p in c.map_err(lua_err)?.sequence_values::<Table>() {
+                    let usage = format!("anvil.sketch {key}: {{{{x, y}}, {{x, y}}, ...}}");
+                    pts.push(numbers(&p.map_err(lua_err)?, &usage)?);
+                }
+                list.push(pts);
+            }
+        }
+    }
     if let Some(arcs) = t.get::<Option<Table>>("arcs").map_err(lua_err)? {
         for a in arcs.sequence_values::<Table>() {
             s.arcs.push(numbers(&a.map_err(lua_err)?, "anvil.sketch arcs: {x0, y0, x_on, y_on, x1, y1}")?);
@@ -1300,10 +1316,12 @@ fn read_sketch(t: &Table) -> Result<SketchSpec, String> {
         && s.arcs.is_empty()
         && s.ellipses.is_empty()
         && s.partial_ellipses.is_empty()
+        && s.splines.is_empty()
+        && s.control_splines.is_empty()
         && s.points.is_empty()
     {
         return Err(
-            "anvil.sketch: give rects, circles, polylines, arcs, ellipses, partial_ellipses or points (see docs/SCRIPTING.md)"
+            "anvil.sketch: give rects, circles, polylines, arcs, ellipses, partial_ellipses, splines, control_splines or points (see docs/SCRIPTING.md)"
                 .into(),
         );
     }

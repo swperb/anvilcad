@@ -1072,6 +1072,25 @@ impl Host for AppHost<'_> {
                 )
             })?;
         }
+        for (curves, control) in [(&spec.splines, false), (&spec.control_splines, true)] {
+            for c in curves.iter() {
+                let pts: Vec<anvil_kernel::Vec2> = c.iter().map(|p| anvil_kernel::v2(p[0], p[1])).collect();
+                let made =
+                    if control { sf.sketch.add_control_spline(&pts) } else { sf.sketch.add_spline(&pts) };
+                made.map_err(|e| {
+                    let what = if control { "control spline" } else { "spline" };
+                    let first = c.first().map_or(String::new(), |p| format!(" from {{{}, {}}}", p[0], p[1]));
+                    match e {
+                        anvil_sketch::SketchError::OutOfRange(why) => {
+                            format!("anvil.sketch: the {what}{first}: {why}")
+                        }
+                        _ => format!(
+                            "anvil.sketch: the {what}{first} repeats a point, or ends where it starts"
+                        ),
+                    }
+                })?;
+            }
+        }
         join_coincident_ends(&mut sf.sketch);
         // Free points go in after the joining, so a point that lands on a line's end stays free.
         for p in &spec.points {

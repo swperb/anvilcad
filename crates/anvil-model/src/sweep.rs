@@ -160,6 +160,8 @@ fn facing(frame: &Frame, profiles: &[Profile], dir: Vec3) -> (Frame, Vec<Profile
                         sweep: -sweep,
                         source,
                     },
+                    // A cubic's mirror image is the cubic of its mirrored control points.
+                    Seg2::Cubic { p, source } => Seg2::Cubic { p: p.map(|q| v2(-q.x, q.y)), source },
                 })
                 .collect(),
         )
@@ -218,6 +220,10 @@ impl Document {
                 }),
                 Seg2::Ellipse { .. } => Err(crate::failure::Cause::told(
                     "its path has an ellipse, and sweeps follow only lines and arcs so far",
+                    "Edit the path's sketch and draw the path with lines and arcs.",
+                )),
+                Seg2::Cubic { .. } => Err(crate::failure::Cause::told(
+                    "its path has a spline, and sweeps follow only lines and arcs so far",
                     "Edit the path's sketch and draw the path with lines and arcs.",
                 )),
             })
@@ -353,6 +359,7 @@ impl Document {
                             Seg2::Ellipse { center, a, b, rotation, start, sweep, source } => {
                                 Seg2::Ellipse { center: center - o, a, b, rotation, start, sweep, source }
                             }
+                            Seg2::Cubic { p, source } => Seg2::Cubic { p: p.map(|q| q - o), source },
                         })
                         .collect(),
                 )

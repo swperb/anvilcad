@@ -1,7 +1,7 @@
 //! Interactive sketch editing: tools, snapping, selection, dragging, dimensions and the
 //! on-screen sketch overlay.
 //!
-//! The entity tools (rectangles, slots, polygons, arcs, circles, ellipses) follow
+//! The entity tools (rectangles, slots, polygons, arcs, circles, ellipses, splines) follow
 //! `docs/re/sketch-entities.md` and the editing tools (fillet, chamfer, trim, extend,
 //! split, offset, mirror, patterns, move, rotate, scale) follow `docs/re/sketch-tools.md`.
 //! The geometry and relations they add come from `anvil_sketch`; this module turns clicks
@@ -46,6 +46,8 @@ pub enum Tool {
     PerimeterCircle,
     Ellipse,
     PartialEllipse,
+    Spline,
+    ControlSpline,
     Arc,
     TangentArc,
     Arc3,
@@ -86,6 +88,8 @@ impl Tool {
             Tool::PerimeterCircle => "Perimeter Circle",
             Tool::Ellipse => "Ellipse",
             Tool::PartialEllipse => "Partial Ellipse",
+            Tool::Spline => "Spline",
+            Tool::ControlSpline => "Control Point Spline",
             Tool::Arc => "Centerpoint Arc",
             Tool::TangentArc => "Tangent Arc",
             Tool::Arc3 => "3 Point Arc",
@@ -119,6 +123,7 @@ impl Tool {
             Tool::CenterArcSlot => "Center Arc Slot",
             Tool::PerimeterCircle => "Perim. Circle",
             Tool::PartialEllipse => "Part. Ellipse",
+            Tool::ControlSpline => "CP Spline",
             Tool::Arc => "Arc",
             Tool::Arc3 => "3 Pt Arc",
             Tool::Fillet => "Fillet",
@@ -194,6 +199,13 @@ impl Tool {
             (Tool::Ellipse, _) => "Click to set the second axis.",
             (Tool::PartialEllipse, 2) => "Click to set the second axis and the start.",
             (Tool::PartialEllipse, _) => "Move round the ellipse and click the end.",
+            (Tool::Spline, 0) => "Click the first point of the spline.",
+            (Tool::Spline, _) => "Click the next point; double-click or press Enter to finish.",
+            (Tool::ControlSpline, 0) => "Click the first control point.",
+            (Tool::ControlSpline, 1..=3) => "Click the next control point (four or more).",
+            (Tool::ControlSpline, _) => {
+                "Click the next control point; double-click or press Enter to finish."
+            }
             (Tool::Arc3, 0) => "Click the start.",
             (Tool::Arc3, 1) => "Click the end.",
             (Tool::Arc3, _) => "Click a point on the arc.",
@@ -215,7 +227,7 @@ impl Tool {
 
 /// The toolbar families: one button per family shows the last tool used in it
 /// (sketch-entities.md, "Tool families and the property panel", Decision).
-pub const DRAW_FAMILIES: [&[Tool]; 8] = [
+pub const DRAW_FAMILIES: [&[Tool]; 9] = [
     &[Tool::Line, Tool::Centerline],
     &[
         Tool::Rectangle,
@@ -229,6 +241,7 @@ pub const DRAW_FAMILIES: [&[Tool]; 8] = [
     &[Tool::Circle, Tool::PerimeterCircle],
     &[Tool::Arc, Tool::TangentArc, Tool::Arc3],
     &[Tool::Ellipse, Tool::PartialEllipse],
+    &[Tool::Spline, Tool::ControlSpline],
     &[Tool::Point],
 ];
 
@@ -521,6 +534,10 @@ impl SketchSession {
                     let q = el.at(el.nearest_param(p, t0, sweep));
                     return Click { p: q, snap: None, on: Some(e), mid: None };
                 }
+                if let Some(sp) = anvil_sketch::spline::of(sk, e) {
+                    let (i, t, _) = sp.nearest(p);
+                    return Click { p: sp.at(i, t), snap: None, on: Some(e), mid: None };
+                }
             }
         }
         Click::at(p)
@@ -649,6 +666,37 @@ impl SketchSession {
         }
     }
 
+    /// Makes the spline the clicks so far describe. Too few points leave the tool waiting
+    /// for more; points that make no spline are dropped, with a notice either way.
+    pub fn finish_spline(&mut self, sf: &mut SketchFeature) -> bool {
+        if !matches!(self.tool, Tool::Spline | Tool::ControlSpline) || self.pending.is_empty() {
+            return false;
+        }
+        let clicks = std::mem::take(&mut self.pending);
+        let pts: Vec<Vec2> = clicks.iter().map(|c| c.p).collect();
+        let first_new = sf.sketch.points.len();
+        let made = if self.tool == Tool::Spline {
+            sf.sketch.add_spline(&pts)
+        } else {
+            sf.sketch.add_control_spline(&pts)
+        };
+        match made {
+            Ok(_) => {
+                let ren = self.infer(&mut sf.sketch, &clicks, first_new);
+                remap_driven(sf, &ren.constraints);
+                self.notice = None;
+                true
+            }
+            Err(e) => {
+                if matches!(e, SketchError::OutOfRange(_)) {
+                    self.pending = clicks;
+                }
+                self.notice = Some(format!("{}: {e}.", self.tool.label()));
+                false
+            }
+        }
+    }
+
     /// Completes a shape from the pending clicks and `last` on the real sketch.
     fn commit_shape(&mut self, sf: &mut SketchFeature, last: Click) -> bool {
         let mut clicks = self.pending.clone();
@@ -695,9 +743,10 @@ impl SketchSession {
             _ => None,
         };
 
-        let (esc, delete, shift, shift_only, ctrl) = ctx.input(|i| {
+        let (esc, enter, delete, shift, shift_only, ctrl) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::Enter),
                 i.key_pressed(egui::Key::Delete),
                 i.modifiers.shift || i.modifiers.ctrl,
                 i.modifiers.shift,
@@ -717,6 +766,10 @@ impl SketchSession {
             } else {
                 self.selection.clear();
             }
+        }
+        // Enter finishes a spline.
+        if enter && !ctx.wants_keyboard_input() && self.finish_spline(sf) {
+            out.modified = true;
         }
         if delete && !self.selection.is_empty() && !ctx.wants_keyboard_input() {
             self.delete_selection(sf);
@@ -759,7 +812,9 @@ impl SketchSession {
                             self.status = sf.sketch.drag_point(p, mouse);
                         }
                         SkSel::Entity(e) => {
-                            if let Some(Geom::Circle { c, .. }) = sf.sketch.entities.get(e).map(|x| x.geom) {
+                            if let Some(Geom::Circle { c, .. }) =
+                                sf.sketch.entities.get(e).map(|x| x.geom.clone())
+                            {
                                 let r = sf.sketch.pos(c).distance(mouse);
                                 let backup = sf.sketch.clone();
                                 if let Geom::Circle { r: rr, .. } = &mut sf.sketch.entities[e].geom {
@@ -961,6 +1016,16 @@ impl SketchSession {
                         }
                         Err(_) => self.pending.push(first),
                     }
+                } else {
+                    self.pending.push(c);
+                }
+            }
+            Tool::Spline | Tool::ControlSpline => {
+                // Each click adds a point; a click on the last one (the second click of a
+                // double-click) finishes (sketch-entities.md, "Splines", "Picks").
+                let c = self.snap(sk, mouse, radius);
+                if self.pending.last().is_some_and(|l| l.p.distance(c.p) <= radius) {
+                    modified = self.finish_spline(sf);
                 } else {
                     self.pending.push(c);
                 }
@@ -1388,9 +1453,11 @@ impl SketchSession {
         let mut lines = Vec::new();
         let mut rounds = Vec::new();
         let mut ellipses = Vec::new();
+        let mut splines = Vec::new();
         for s in &self.selection {
             match *s {
                 SkSel::Point(p) if p < sk.points.len() => pts.push(p),
+                SkSel::Entity(e) if e < sk.entities.len() && sk.entities[e].is_spline() => splines.push(e),
                 SkSel::Entity(e) if e < sk.entities.len() && sk.entities[e].is_line() => lines.push(e),
                 SkSel::Entity(e) if e < sk.entities.len() && sk.entities[e].is_ellipse() => ellipses.push(e),
                 SkSel::Entity(e) if e < sk.entities.len() => rounds.push(e),
@@ -1402,6 +1469,11 @@ impl SketchSession {
         };
         let center = |e: EntityId| sk.entities[e].center().unwrap_or(ORIGIN);
         let mut out: Vec<(&'static str, Vec<Constraint>)> = Vec::new();
+        if !splines.is_empty() {
+            let curves: Vec<EntityId> = rounds.iter().chain(&ellipses).copied().collect();
+            spline_relations(sk, &pts, &lines, &curves, &splines, &mut out);
+            return out;
+        }
         if !ellipses.is_empty() {
             ellipse_relations(sk, &pts, &lines, &rounds, &ellipses, &mut out);
             return out;
@@ -1740,6 +1812,13 @@ impl SketchSession {
             }
         };
         draw_sketch_geometry(&sf.sketch, &self.frame, painter, cam, rect, &style, 1.8);
+        let guide = Stroke::new(1.0_f32, Color32::from_rgb(130, 130, 130));
+        for e in 0..sf.sketch.entities.len() {
+            for g in spline_guides(&sf.sketch, e) {
+                let pts: Vec<Pos2> = g.iter().map(|&p| self.to_screen(cam, rect, p)).collect();
+                painter.extend(Shape::dashed_line(&pts, guide, 4.0, 3.0));
+            }
+        }
 
         // Points. A point no curve ends at but which sits on two curves is a virtual
         // sharp, drawn as a small cross.
@@ -1914,6 +1993,30 @@ impl SketchSession {
             (Tool::Arc | Tool::CenterArcSlot, [c]) => {
                 painter.line_segment([to(c.p), to(m)], preview);
             }
+            // The spline so far, through the pointer; a control point spline shows its
+            // control polygon too.
+            (Tool::Spline | Tool::ControlSpline, [_, ..]) => {
+                let mut pts: Vec<Vec2> = self.pending.iter().map(|c| c.p).collect();
+                let next = self.snap(sk, m, radius).p;
+                if pts.last().is_some_and(|l| l.distance(next) > radius) {
+                    pts.push(next);
+                }
+                let curve = if self.tool == Tool::Spline {
+                    anvil_sketch::spline::Spline2::through(&pts, None, None)
+                } else {
+                    let polygon: Vec<Pos2> = pts.iter().map(|&p| to(p)).collect();
+                    painter.extend(Shape::dashed_line(
+                        &polygon,
+                        Stroke::new(1.0_f32, preview_color),
+                        4.0,
+                        3.0,
+                    ));
+                    anvil_sketch::spline::Spline2::control(&pts)
+                };
+                if let Some(sp) = curve {
+                    painter.add(Shape::line(sp.polyline(32).into_iter().map(to).collect(), preview));
+                }
+            }
             (Tool::Arc, [c, s]) => {
                 // The arc runs the way the pointer went round the centre.
                 let r = c.p.distance(s.p);
@@ -1986,6 +2089,27 @@ fn entity_polyline(sk: &Sketch, e: EntityId, to: &dyn Fn(Vec2) -> Pos2) -> Vec<P
             }
             None => Vec::new(),
         },
+        Geom::Spline { .. } | Geom::ControlSpline { .. } => match anvil_sketch::spline::of(sk, e) {
+            Some(sp) => sp.polyline(32).into_iter().map(to).collect(),
+            None => Vec::new(),
+        },
+    }
+}
+
+/// The thin dashed guides a spline shows while its sketch is edited: a control point
+/// spline's control polygon, and the lines from a spline's ends to their handles
+/// (sketch-entities.md, "Splines").
+fn spline_guides(sk: &Sketch, e: EntityId) -> Vec<Vec<Vec2>> {
+    match &sk.entities[e].geom {
+        Geom::ControlSpline { pts } => vec![pts.iter().map(|&p| sk.pos(p)).collect()],
+        Geom::Spline { pts, handles } => {
+            let ends = [pts.first(), pts.last()];
+            ends.iter()
+                .zip(handles)
+                .filter_map(|(end, h)| Some(vec![sk.pos(**end.as_ref()?), sk.pos((*h)?)]))
+                .collect()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -2104,6 +2228,45 @@ fn ellipse_relations(
     }
 }
 
+/// The relations a spline takes (sketch-entities.md, "Splines", "Handles, tangency and
+/// curvature"): with a point, Coincident (on the curve); with a line, an arc, an ellipse or
+/// another spline sharing an end, Tangent there, and with a curve or spline Equal
+/// Curvature; alone, Fix (every point that shapes it).
+fn spline_relations(
+    sk: &Sketch,
+    pts: &[PointId],
+    lines: &[EntityId],
+    curves: &[EntityId],
+    splines: &[EntityId],
+    out: &mut Vec<(&'static str, Vec<Constraint>)>,
+) {
+    match (pts, lines, curves, splines) {
+        ([], [], [], [e]) => {
+            let fix = |p: PointId| {
+                let q = sk.pos(p);
+                Constraint::Fix { p, x: q.x, y: q.y }
+            };
+            out.push(("Fix", sk.entities[*e].points().into_iter().map(fix).collect()));
+        }
+        ([p], [], [], [e]) => out.push(("Coincident", vec![Constraint::PointOnCircle { p: *p, entity: *e }])),
+        ([], [l], [], [e]) if shared_end(sk, *l, *e).is_some() => {
+            out.push(("Tangent", vec![Constraint::Tangent { line: *l, entity: *e }]));
+        }
+        ([], [], _, _) if curves.len() + splines.len() == 2 => {
+            let (a, b) = match (curves, splines) {
+                ([c], [e]) => (*c, *e),
+                ([], [e, f]) => (*e, *f),
+                _ => return,
+            };
+            if shared_end(sk, a, b).is_some() {
+                out.push(("Tangent", vec![Constraint::TangentCircles { a, b, inside: false }]));
+                out.push(("Equal Curvature", vec![Constraint::EqualCurvature { a, b }]));
+            }
+        }
+        _ => {}
+    }
+}
+
 /// An end point two entities share.
 fn shared_end(sk: &Sketch, e1: EntityId, e2: EntityId) -> Option<PointId> {
     let (x, y) = (sk.entities.get(e1)?.ends()?, sk.entities.get(e2)?.ends()?);
@@ -2113,8 +2276,8 @@ fn shared_end(sk: &Sketch, e1: EntityId, e2: EntityId) -> Option<PointId> {
 /// Symmetric relations that mirror line `a` onto line `b` across line `axis`, pairing each
 /// end of `a` with the end of `b` nearer its mirror image.
 fn symmetric_lines(sk: &Sketch, a: EntityId, b: EntityId, axis: EntityId) -> Option<Vec<Constraint>> {
-    let (Geom::Line { a: a0, b: a1 }, Geom::Line { a: b0, b: b1 }, Geom::Line { a: x0, b: x1 }) =
-        (sk.entities[a].geom, sk.entities[b].geom, sk.entities[axis].geom)
+    let (&Geom::Line { a: a0, b: a1 }, &Geom::Line { a: b0, b: b1 }, &Geom::Line { a: x0, b: x1 }) =
+        (&sk.entities[a].geom, &sk.entities[b].geom, &sk.entities[axis].geom)
     else {
         return None;
     };

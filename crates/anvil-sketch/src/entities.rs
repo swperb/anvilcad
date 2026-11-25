@@ -152,6 +152,19 @@ fn axis_ends(c: Vec2, r1: f64, r2: f64, rotation: f64) -> Result<(Vec2, Vec2), S
     Ok((c + u * r1, c + u.perp() * r2))
 }
 
+/// Refuses spline points that are not finite, neighbours that coincide, and ends that
+/// meet (a spline is open; sketch-entities.md, "Splines", "Dimensions and errors").
+fn check_spline_points(pts: &[Vec2]) -> Result<(), SketchError> {
+    let scale = pts.iter().map(|p| p.length()).fold(1.0, f64::max);
+    let apart = |a: Vec2, b: Vec2| a.distance(b) > EPS * scale;
+    let finite = pts.iter().all(|p| p.x.is_finite() && p.y.is_finite());
+    let (Some(&first), Some(&last)) = (pts.first(), pts.last()) else { return Err(SketchError::Degenerate) };
+    if !finite || !pts.windows(2).all(|w| apart(w[0], w[1])) || !apart(first, last) {
+        return Err(SketchError::Degenerate);
+    }
+    Ok(())
+}
+
 /// The four intent zones of the tangent arc tool (sketch-entities.md, "Tangent arc").
 /// Forward and back make tangent arcs; left and right make normal arcs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -693,6 +706,30 @@ impl Sketch {
         self.elliptic_arc_from(c, p1, p2, start, end)
     }
 
+    /// Spline through `pts` (sketch-entities.md, "Splines"): two or more points, no two
+    /// neighbours coinciding and the ends apart. Natural at both ends until a relation
+    /// gives an end a handle.
+    pub fn add_spline(&mut self, pts: &[Vec2]) -> Result<EntityId, SketchError> {
+        if pts.len() < crate::spline::MIN_THROUGH {
+            return Err(SketchError::OutOfRange("a spline needs at least two points"));
+        }
+        check_spline_points(pts)?;
+        let ids = pts.iter().map(|&p| self.add_point(p)).collect();
+        Ok(self.add_entity(Geom::Spline { pts: ids, handles: [None, None] }))
+    }
+
+    /// Control point spline on control vertices `pts` (sketch-entities.md, "Splines"):
+    /// four or more, no two neighbours coinciding and the ends apart. Four make a single
+    /// Bézier span.
+    pub fn add_control_spline(&mut self, pts: &[Vec2]) -> Result<EntityId, SketchError> {
+        if pts.len() < crate::spline::MIN_CONTROL {
+            return Err(SketchError::OutOfRange("a control point spline needs at least four control points"));
+        }
+        check_spline_points(pts)?;
+        let ids = pts.iter().map(|&p| self.add_point(p)).collect();
+        Ok(self.add_entity(Geom::ControlSpline { pts: ids }))
+    }
+
     /// The whole ellipse about `c` with semi-axes `r1` along the direction at `rotation`
     /// radians and `r2` square to it.
     pub fn add_ellipse_sized(
@@ -749,6 +786,17 @@ impl Sketch {
             Geom::Line { a, b } if at == a => Some((pos(a)? - pos(b)?).normalized()),
             Geom::Arc { c, b, .. } if at == b => Some((pos(b)? - pos(c)?).normalized().perp()),
             Geom::Arc { c, a, .. } if at == a => Some(-(pos(a)? - pos(c)?).normalized().perp()),
+            Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                let [a, b] = self.entities[e].ends()?;
+                let sp = crate::spline::of(self, e)?;
+                if at == b {
+                    Some(sp.end_tangent(true))
+                } else if at == a {
+                    Some(-sp.end_tangent(false))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -767,10 +815,13 @@ impl Sketch {
         zone: TangentZone,
     ) -> Result<ArcIds, SketchError> {
         let t = self.leaving_direction(from, at).ok_or(SketchError::Unsupported(
-            "a tangent arc starts at the end of a line, arc or partial ellipse",
+            "a tangent arc starts at the end of a line, arc, partial ellipse or spline",
         ))?;
         if self.entities[from].is_ellipse() && !zone.is_tangent() {
             return Err(SketchError::Unsupported("a normal arc cannot start from an ellipse yet"));
+        }
+        if self.entities[from].is_spline() && !zone.is_tangent() {
+            return Err(SketchError::Unsupported("a normal arc cannot start from a spline yet"));
         }
         let p = self.pos(at);
         let tau = match zone {
@@ -798,7 +849,8 @@ impl Sketch {
             }
             (true, false) => {
                 let inside = self.circles_inside(from, arc);
-                self.add_constraint(Constraint::TangentCircles { a: from, b: arc, inside });
+                // A spline through points takes a handle at `at`, so the arc turns its end.
+                self.add_relation(Constraint::TangentCircles { a: from, b: arc, inside });
             }
             (false, true) => {
                 self.add_constraint(Constraint::PointOnLine { p: pc, line: from });

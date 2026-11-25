@@ -58,7 +58,7 @@ fn material(name: &str) -> Option<Material> {
 /// Returns the width and height constraints.
 fn centred_rect(s: &mut Sketch, w: f64, h: f64) -> (usize, usize) {
     let l = s.add_rectangle(v2(-w / 2.0, -h / 2.0), v2(w / 2.0, h / 2.0));
-    let (Geom::Line { a, .. }, Geom::Line { a: c, .. }) = (s.entities[l[0]].geom, s.entities[l[2]].geom)
+    let (&Geom::Line { a, .. }, &Geom::Line { a: c, .. }) = (&s.entities[l[0]].geom, &s.entities[l[2]].geom)
     else {
         panic!("rectangle sides are lines")
     };

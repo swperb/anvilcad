@@ -199,7 +199,9 @@ fn s7_straight_slot() {
         per += match *seg {
             anvil_kernel::profile::Seg2::Line { a, b, .. } => a.distance(b),
             anvil_kernel::profile::Seg2::Arc { radius, sweep, .. } => radius * sweep.abs(),
-            anvil_kernel::profile::Seg2::Ellipse { .. } => panic!("no ellipses in a slot"),
+            anvil_kernel::profile::Seg2::Ellipse { .. } | anvil_kernel::profile::Seg2::Cubic { .. } => {
+                panic!("no ellipses or splines in a slot")
+            }
         };
     }
     assert!(near(per, 91.4159, 1e-4), "{per}");

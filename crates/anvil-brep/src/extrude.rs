@@ -44,8 +44,8 @@ pub fn extrude(frame: &Frame, region: &Region, z0: f64, z1: f64) -> Result<Solid
         };
         for (k, seg) in contour.segments.iter().enumerate() {
             let next = (k + 1) % n;
-            let (cb, t0, t1) = segment_curve(&bottom, seg);
-            let (ct, _, _) = segment_curve(&top, seg);
+            let (cb, t0, t1) = segment_curve(&bottom, seg)?;
+            let (ct, _, _) = segment_curve(&top, seg)?;
             r.bottom.push(solid.add_edge(Edge { curve: cb, start: vb[k], end: vb[next], t0, t1 }));
             r.top.push(solid.add_edge(Edge { curve: ct, start: vt[k], end: vt[next], t0, t1 }));
             r.vertical.push(solid.add_edge(Edge {
@@ -103,6 +103,10 @@ pub fn extrude(frame: &Frame, region: &Region, z0: f64, z1: f64) -> Result<Solid
                     sweep < 0.0,
                 ),
                 Segment::Ellipse { .. } => elliptic_side(&bottom, seg, height)?,
+                Segment::Cubic { p } => {
+                    let row: Vec<DVec3> = p.iter().map(|q| bottom.to_world(*q)).collect();
+                    ruled_side(&bottom, seg, height, 3, crate::loft::bezier_knots(3, 1), row, &[])?
+                }
             };
             solid.add_face(Face {
                 surface,
@@ -121,9 +125,10 @@ pub fn extrude(frame: &Frame, region: &Region, z0: f64, z1: f64) -> Result<Solid
     Ok(solid)
 }
 
-/// The 3D curve for a 2D segment placed in `frame`, with its parameter range.
-pub(crate) fn segment_curve(frame: &Frame, seg: &Segment) -> (Curve, f64, f64) {
-    match *seg {
+/// The 3D curve for a 2D segment placed in `frame`, with its parameter range. A cubic
+/// span is a single-span cubic B-spline over [0, 1] (`B_SPLINE_CURVE_WITH_KNOTS` in STEP).
+pub(crate) fn segment_curve(frame: &Frame, seg: &Segment) -> Result<(Curve, f64, f64)> {
+    Ok(match *seg {
         Segment::Line { a, b } => {
             let pa = frame.to_world(a);
             let d = frame.to_world(b) - pa;
@@ -143,7 +148,12 @@ pub(crate) fn segment_curve(frame: &Frame, seg: &Segment) -> (Curve, f64, f64) {
             };
             (Curve::Ellipse { frame: f, a, b }, start, start + sweep)
         }
-    }
+        Segment::Cubic { p } => {
+            let points = p.iter().map(|q| frame.to_world(*q)).collect();
+            let sp = crate::spline::Spline::new(3, crate::loft::bezier_knots(3, 1), points, Vec::new())?;
+            (Curve::Spline(std::sync::Arc::new(sp)), 0.0, 1.0)
+        }
+    })
 }
 
 /// The side an elliptic arc in `bottom` sweeps when extruded `height` along its normal,
@@ -172,8 +182,23 @@ fn elliptic_side(bottom: &Frame, seg: &Segment, height: f64) -> Result<(Surface,
         row.push(at(t0 + phi, 1.0));
         weights.extend([w, 1.0]);
     }
+    ruled_side(bottom, seg, height, 2, crate::loft::bezier_knots(2, k), row, &weights)
+}
+
+/// The side a curved segment in `bottom` sweeps when extruded `height` along its normal:
+/// the patch of `degree` over `knots` ruled between the control points `row` and the same
+/// points moved up, and whether its natural normal points into the solid.
+fn ruled_side(
+    bottom: &Frame,
+    seg: &Segment,
+    height: f64,
+    degree: usize,
+    knots: Vec<f64>,
+    row: Vec<DVec3>,
+    weights: &[f64],
+) -> Result<(Surface, bool)> {
     let top: Vec<DVec3> = row.iter().map(|p| *p + bottom.z * height).collect();
-    let surface = crate::loft::ruled_patch(2, crate::loft::bezier_knots(2, k), &row, &top, &weights)?;
+    let surface = crate::loft::ruled_patch(degree, knots, &row, &top, weights)?;
     // Material is to the left of travel, so outward is travel x the extrusion direction.
     let mid = bottom.to_world(seg.midpoint()) + bottom.z * (0.5 * height);
     let travel = seg.travel_at(0.5);
@@ -267,6 +292,48 @@ mod tests {
         let err =
             crate::revolve::revolve(&Frame::world(), &r[0], DVec2::ZERO, DVec2::Y, PI).expect_err("revolve");
         assert!(matches!(err, crate::KernelError::Unsupported(_)), "{err}");
+    }
+
+    /// Spline spans (cubic Bézier, docs/re/sketch-entities.md "Splines") extrude to B-spline
+    /// side faces of exact volume. The arch from (0, 0) up through control points (0, h)
+    /// and (w, h) to (w, 0), closed by its base, encloses 3 w h / 5; its centroid is at
+    /// height 9 h / 28.
+    #[test]
+    fn spline_spans_extrude_exactly() {
+        let (w, h) = (40.0, 30.0);
+        let p = |x: f64, y: f64| DVec2::new(x, y);
+        let arch = Segment::Cubic { p: [p(0.0, 0.0), p(0.0, h), p(w, h), p(w, 0.0)] };
+        let base = Segment::Line { a: p(w, 0.0), b: p(0.0, 0.0) };
+        let r = build_regions(&[Loop2::new(vec![arch, base])]).expect("valid");
+        assert!((r[0].area() - 0.6 * w * h).abs() < 1e-9, "{}", r[0].area());
+        let s = extrude(&Frame::world(), &r[0], 0.0, 10.0).expect("extrudes");
+        check::validate(&s).expect("valid");
+        assert!(s.edges.iter().any(|e| matches!(e.curve, crate::geom::Curve::Spline(_))));
+        assert!(s.faces.iter().any(|f| matches!(f.surface, crate::geom::Surface::BSpline(_))));
+        let m = mass::exact_properties(&s).expect("measure");
+        // The measure integrates the B-spline faces numerically, to within 1e-8 of the value.
+        assert!((m.volume / 7200.0 - 1.0).abs() < 1e-8, "{}", m.volume);
+        let c = m.centroid;
+        assert!((c - DVec3::new(20.0, 9.0 * h / 28.0, 5.0)).length() < 1e-6, "{c:?}");
+
+        // Two spans closing on each other: a lens of twice the arch's area.
+        let under = Segment::Cubic { p: [p(w, 0.0), p(w, -h), p(0.0, -h), p(0.0, 0.0)] };
+        let r = build_regions(&[Loop2::new(vec![arch, under])]).expect("valid");
+        let s = extrude(&Frame::world(), &r[0], 0.0, 10.0).expect("extrudes");
+        let m = mass::exact_properties(&s).expect("measure");
+        assert!((m.volume / 14400.0 - 1.0).abs() < 1e-8, "{}", m.volume);
+
+        // A base that cuts through the arch is refused.
+        let cut = Segment::Line { a: p(w, 0.0), b: p(0.0, 25.0) };
+        let back = Segment::Line { a: p(0.0, 25.0), b: p(0.0, 0.0) };
+        let err = build_regions(&[Loop2::new(vec![arch, cut, back])]).expect_err("crosses");
+        assert!(matches!(err, crate::KernelError::SelfIntersection { .. }), "{err}");
+
+        // Operations that take only lines and arcs so far say so.
+        let r = build_regions(&[Loop2::new(vec![arch, base])]).expect("valid");
+        let err =
+            crate::revolve::revolve(&Frame::world(), &r[0], p(0.0, -1.0), DVec2::X, PI).expect_err("revolve");
+        assert!(err.to_string().contains("spline"), "{err}");
     }
 
     #[test]

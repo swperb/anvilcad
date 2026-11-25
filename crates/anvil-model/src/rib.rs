@@ -129,6 +129,7 @@ impl Document {
                 Seg2::Ellipse { center, a, b, rotation, start, sweep, .. } => {
                     anvil_kernel::profile::ellipse_point(center, a, b, rotation, start + 0.5 * sweep)
                 }
+                Seg2::Cubic { p, .. } => anvil_kernel::profile::cubic_point(&p, 0.5),
             };
             let (segs, closed) = if chain.closed {
                 (chain.segs.clone(), true)
@@ -175,6 +176,9 @@ impl Document {
                             (anvil_kernel::profile::ellipse_derivative(a, b, rotation, start + 0.5 * sweep)
                                 * sweep.signum())
                             .normalized()
+                        }
+                        Seg2::Cubic { p, .. } => {
+                            anvil_kernel::profile::cubic_derivative(&p, 0.5).normalized()
                         }
                     };
                     let p2 = probe2 + tangent.perp() * side;

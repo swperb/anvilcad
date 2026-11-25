@@ -160,7 +160,7 @@ pub fn infer(sk: &Sketch, picks: &[Pick], at: Vec2) -> Option<Constraint> {
     if !picks.iter().all(valid) {
         return None;
     }
-    let geom = |e: EntityId| sk.entities.get(e).map(|x| x.geom);
+    let geom = |e: EntityId| sk.entities.get(e).map(|x| x.geom.clone());
     match *picks {
         [E(e)] => match geom(e)? {
             // A line's own length when placed beside it, or when it is already horizontal
@@ -180,6 +180,10 @@ pub fn infer(sk: &Sketch, picks: &[Pick], at: Vec2) -> Option<Constraint> {
             Geom::Ellipse { c, axis1, axis2 } | Geom::EllipseArc { c, axis1, axis2, .. } => {
                 let q = if sk.pos(axis1).distance(at) <= sk.pos(axis2).distance(at) { axis1 } else { axis2 };
                 Some(Constraint::Distance { p: c, q, value: sk.pos(c).distance(sk.pos(q)) })
+            }
+            // A spline's length (sketch-entities.md, "Splines", S77).
+            Geom::Spline { .. } | Geom::ControlSpline { .. } => {
+                Some(Constraint::ArcLength { entity: e, value: crate::spline::of(sk, e)?.length() })
             }
         },
         [P(p), P(q)] if p != q => point_distance(sk, p, q, at),

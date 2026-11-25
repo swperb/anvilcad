@@ -325,7 +325,7 @@ fn plate(width: f64) -> (anvil_model::Document, u32) {
     let mut sf = SketchFeature::new(PlaneRef::Front);
     let s = &mut sf.sketch;
     let l = s.add_rectangle(v2(0.0, 0.0), v2(width, 20.0));
-    let Some(Geom::Line { a, .. }) = s.entities.get(l[0]).map(|e| e.geom) else { unreachable!() };
+    let Some(Geom::Line { a, .. }) = s.entities.get(l[0]).map(|e| e.geom.clone()) else { unreachable!() };
     s.add_constraint(Constraint::Coincident { p: a, q: ORIGIN });
     s.add_constraint(Constraint::Length { line: l[0], value: width });
     s.add_constraint(Constraint::Length { line: l[1], value: 20.0 });

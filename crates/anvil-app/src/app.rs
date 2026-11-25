@@ -2904,7 +2904,7 @@ impl AnvilApp {
                 for (name, group) in rels {
                     if ui.button(name).clicked() {
                         for c in group {
-                            sf.sketch.add_constraint(c);
+                            sf.sketch.add_relation(c);
                         }
                         solve = true;
                     }
@@ -5108,7 +5108,7 @@ fn default_near_sink(h: &HoleFeature) -> Option<hole::Sink> {
 }
 
 /// The sketch tools, in the order the sketch panel lists them.
-const SKETCH_TOOLS: [Tool; 35] = [
+const SKETCH_TOOLS: [Tool; 37] = [
     Tool::Select,
     Tool::Line,
     Tool::Centerline,
@@ -5126,6 +5126,8 @@ const SKETCH_TOOLS: [Tool; 35] = [
     Tool::PerimeterCircle,
     Tool::Ellipse,
     Tool::PartialEllipse,
+    Tool::Spline,
+    Tool::ControlSpline,
     Tool::Arc,
     Tool::TangentArc,
     Tool::Arc3,
@@ -5165,6 +5167,8 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::PerimeterCircle => Icon::PerimeterCircle,
         Tool::Ellipse => Icon::Ellipse,
         Tool::PartialEllipse => Icon::PartialEllipse,
+        Tool::Spline => Icon::Spline,
+        Tool::ControlSpline => Icon::ControlSpline,
         Tool::Arc => Icon::Arc,
         Tool::TangentArc => Icon::TangentArc,
         Tool::Arc3 => Icon::Arc3,
@@ -6189,6 +6193,104 @@ mod ui_tests {
         assert!((profile_area(&h) - 600.0 * std::f64::consts::PI).abs() < 0.2, "{}", profile_area(&h));
         let st = &h.app.sketch.as_ref().unwrap().status;
         assert!(st.converged && st.dof == 5, "a free ellipse has 5 freedoms: {st:?}");
+    }
+
+    /// sketch-entities.md, "Splines", "Picks": each click adds a control point, a click
+    /// on the last one finishes, and a line closes the arch into a profile of 3/5 of its
+    /// box.
+    #[test]
+    fn control_spline_by_clicks() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::ControlSpline);
+        for (x, y) in [(0.0, 0.0), (0.0, 30.0), (40.0, 30.0), (40.0, 0.0), (40.0, 0.0)] {
+            h.click_at(x, y);
+        }
+        h.tool(Tool::Line);
+        h.click_at(40.0, 0.0);
+        h.click_at(0.0, 0.0);
+        let sk = h.sketch();
+        let e = sk.entities.iter().position(|e| e.is_spline()).expect("a spline");
+        let Geom::ControlSpline { pts } = &sk.entities[e].geom else { panic!("not a control spline") };
+        assert_eq!(pts.len(), 4);
+        // The spline's first vertex snapped to the origin and the line shares both ends.
+        assert_eq!(pts[0], ORIGIN);
+        assert_eq!(sk.entities.len(), 2);
+        assert!((profile_area(&h) - 720.0).abs() < 0.05, "{}", profile_area(&h));
+    }
+
+    /// A spline through points finishes on Enter; Escape abandons one.
+    #[test]
+    fn spline_finishes_on_enter_and_escape_abandons() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Spline);
+        for (x, y) in [(0.0, 0.0), (15.0, 12.0), (30.0, 0.0)] {
+            h.click_at(x, y);
+        }
+        let key = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        h.step(vec![key(egui::Key::Enter)]);
+        let sk = h.sketch();
+        let e = sk.entities.iter().position(|e| e.is_spline()).expect("a spline");
+        let Geom::Spline { pts, .. } = &sk.entities[e].geom else { panic!("not a spline") };
+        assert_eq!(pts.len(), 3);
+        let st = &h.app.sketch.as_ref().unwrap().status;
+        assert!(st.converged && st.dof == 4, "two free points past the origin: {st:?}");
+
+        h.click_at(0.0, 20.0);
+        h.click_at(10.0, 30.0);
+        h.step(vec![key(egui::Key::Escape)]);
+        h.step(vec![key(egui::Key::Enter)]);
+        assert_eq!(h.sketch().entities.len(), 1, "the second spline was abandoned");
+
+        // A control point spline with too few points waits for more.
+        h.tool(Tool::ControlSpline);
+        h.click_at(0.0, -10.0);
+        h.click_at(10.0, -20.0);
+        h.click_at(10.0, -20.0);
+        assert_eq!(h.sketch().entities.len(), 1);
+        assert_eq!(h.session().pick_count(), 2);
+        assert!(h.session().notice.as_deref().unwrap_or("").contains("four"), "{:?}", h.session().notice);
+    }
+
+    /// A line and a spline sharing an end offer Tangent; adding it gives a spline through
+    /// points a handle there, which the relation turns.
+    #[test]
+    fn spline_tangent_relation_from_the_panel() {
+        let mut h = Harness::new();
+        new_sketch(&mut h);
+        h.tool(Tool::Line);
+        h.click_at(-30.0, 0.0);
+        h.click_at(0.0, 0.0);
+        h.tool(Tool::Spline);
+        for (x, y) in [(0.0, 0.0), (20.0, 15.0), (40.0, 5.0), (40.0, 5.0)] {
+            h.click_at(x, y);
+        }
+        let sk = h.sketch().clone();
+        let line = sk.entities.iter().position(|e| e.is_line()).expect("line");
+        let spline = sk.entities.iter().position(|e| e.is_spline()).expect("spline");
+        let s = h.session();
+        s.selection = vec![SkSel::Entity(line), SkSel::Entity(spline)];
+        let rels = s.available_relations(&sk);
+        let (_, group) = rels.into_iter().find(|(n, _)| *n == "Tangent").expect("Tangent is offered");
+        let id = h.app.sketch.as_ref().unwrap().feature;
+        let sf = h.app.doc.sketch_mut(id).unwrap();
+        for c in group {
+            sf.sketch.add_relation(c);
+        }
+        let r = sf.sketch.solve();
+        assert!(r.converged, "{r:?}");
+        let Geom::Spline { handles, .. } = &sf.sketch.entities[spline].geom else { panic!("not a spline") };
+        assert!(handles[0].is_some());
+        let sp = anvil_sketch::spline::of(&sf.sketch, spline).expect("curve");
+        let (a, b) = line_ends(&sf.sketch, line);
+        assert!((b - a).normalized().cross(sp.end_tangent(false)).abs() < 1e-8);
     }
 
     /// The partial ellipse runs the way the pointer went round the centre after the third
