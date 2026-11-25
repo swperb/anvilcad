@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 mod assembly;
 mod autosave;
 mod configs;
+mod drawing;
 use configs::{ConfigUi, Manager};
 mod navigation;
 mod scripting;
@@ -52,6 +53,7 @@ enum Editor {
 enum PendingAction {
     New,
     NewAssembly,
+    NewDrawing,
     Open,
     OpenSample,
     Exit,
@@ -160,6 +162,8 @@ pub struct AnvilApp {
     scripting: scripting::Scripting,
     /// The assembly open in the window, when one is: the part fields are then unused.
     asm: Option<assembly::AsmSession>,
+    /// The drawing open in the window, when one is: the part fields are then unused.
+    drw: Option<drawing::DrawingSession>,
     /// The 3D mouse, when one is in use.
     mouse3d: navigation::Mouse3dInput,
 }
@@ -244,6 +248,7 @@ impl AnvilApp {
             cfg: ConfigUi::default(),
             scripting: scripting::Scripting::default(),
             asm: None,
+            drw: None,
             mouse3d: navigation::Mouse3dInput::default(),
         };
         if let Some(p) = open {
@@ -298,6 +303,10 @@ impl AnvilApp {
     }
 
     fn rebuild(&mut self) {
+        if self.in_drawing() {
+            self.update_views();
+            return;
+        }
         if self.in_assembly() {
             self.refresh_assembly();
             return;
@@ -339,6 +348,7 @@ impl AnvilApp {
 
     fn load_document(&mut self, doc: Document, path: Option<PathBuf>) {
         self.leave_assembly();
+        self.leave_drawing();
         self.doc = doc;
         self.committed = self.doc.clone();
         self.saved = if path.is_some() { self.doc.clone() } else { Document::new() };
@@ -354,6 +364,9 @@ impl AnvilApp {
     }
 
     fn is_dirty(&self) -> bool {
+        if let Some(d) = &self.drw {
+            return d.is_dirty();
+        }
         match &self.asm {
             Some(s) => s.is_dirty(),
             None => self.doc != self.saved,
@@ -371,7 +384,27 @@ impl AnvilApp {
         }
     }
 
+    fn can_undo(&self) -> bool {
+        match (&self.drw, &self.asm) {
+            (Some(d), _) => d.can_undo(),
+            (None, Some(a)) => !a.undo.is_empty(),
+            (None, None) => !self.undo.is_empty(),
+        }
+    }
+
+    fn can_redo(&self) -> bool {
+        match (&self.drw, &self.asm) {
+            (Some(d), _) => d.can_redo(),
+            (None, Some(a)) => !a.redo.is_empty(),
+            (None, None) => !self.redo.is_empty(),
+        }
+    }
+
     fn undo(&mut self) {
+        if self.in_drawing() {
+            self.drawing_undo(false);
+            return;
+        }
         if self.in_assembly() {
             self.assembly_undo(false);
             return;
@@ -383,6 +416,10 @@ impl AnvilApp {
     }
 
     fn redo(&mut self) {
+        if self.in_drawing() {
+            self.drawing_undo(true);
+            return;
+        }
         if self.in_assembly() {
             self.assembly_undo(true);
             return;
@@ -409,6 +446,9 @@ impl AnvilApp {
     }
 
     fn title(&self) -> String {
+        if let Some(s) = &self.drw {
+            return format!("{}{} - AnvilCAD", s.name(), if s.is_dirty() { " *" } else { "" });
+        }
         if let Some(s) = &self.asm {
             return format!("{}{} - AnvilCAD", s.name(), if s.is_dirty() { " *" } else { "" });
         }
@@ -422,6 +462,9 @@ impl AnvilApp {
     }
 
     fn part_name(&self) -> String {
+        if let Some(s) = &self.drw {
+            return s.name();
+        }
         if let Some(s) = &self.asm {
             return s.name();
         }
@@ -459,6 +502,7 @@ impl AnvilApp {
         match a {
             PendingAction::New => self.start_new_part(),
             PendingAction::NewAssembly => self.new_assembly(),
+            PendingAction::NewDrawing => self.new_drawing(),
             PendingAction::OpenSample => self.load_document(crate::sample::sample_part(), None),
             PendingAction::Open => {
                 let picked = self.file_dialog("Open", || {
@@ -468,6 +512,7 @@ impl AnvilApp {
                             &[
                                 "anvprt",
                                 "anvasm",
+                                anvil_drawing::DRAWING_EXT,
                                 "anvprtdot",
                                 "fprt",
                                 "step",
@@ -480,6 +525,7 @@ impl AnvilApp {
                         )
                         .add_filter("AnvilCAD part", &["anvprt"])
                         .add_filter("AnvilCAD assembly", &[anvil_model::assembly::ASSEMBLY_EXT])
+                        .add_filter("AnvilCAD drawing", &[anvil_drawing::DRAWING_EXT])
                         .add_filter("STEP", &["step", "stp"])
                         .add_filter("AnvilCAD part template", &["anvprtdot"])
                         .add_filter(
@@ -524,6 +570,10 @@ impl AnvilApp {
             self.import_step(p);
             return;
         }
+        if ext == anvil_drawing::DRAWING_EXT {
+            self.open_drawing(p);
+            return;
+        }
         if ext == anvil_model::assembly::ASSEMBLY_EXT {
             self.open_assembly(p);
             return;
@@ -556,6 +606,10 @@ impl AnvilApp {
     }
 
     fn save(&mut self, save_as: bool) {
+        if self.in_drawing() {
+            self.save_drawing(save_as);
+            return;
+        }
         if self.in_assembly() {
             self.save_assembly(save_as);
             return;
@@ -1334,6 +1388,15 @@ impl AnvilApp {
                     ui.close_menu();
                     self.request(PendingAction::NewAssembly);
                 }
+                let part_open = !self.in_assembly() && !self.in_drawing();
+                if ui
+                    .add_enabled(part_open, egui::Button::new("New Drawing"))
+                    .on_hover_text("A drawing of the open part, with the standard views")
+                    .clicked()
+                {
+                    ui.close_menu();
+                    self.request(PendingAction::NewDrawing);
+                }
                 if ui.button("Open...        Ctrl+O").clicked() {
                     ui.close_menu();
                     self.request(PendingAction::Open);
@@ -1351,13 +1414,21 @@ impl AnvilApp {
                     ui.close_menu();
                     self.save(true);
                 }
-                if ui.button("Save as Part Template...").clicked() {
+                if ui.add_enabled(!self.in_drawing(), egui::Button::new("Save as Part Template...")).clicked()
+                {
                     ui.close_menu();
                     self.save_template();
                 }
-                if ui.button("Export (STEP / STL / OBJ)...").clicked() {
+                if ui
+                    .add_enabled(!self.in_drawing(), egui::Button::new("Export (STEP / STL / OBJ)..."))
+                    .clicked()
+                {
                     ui.close_menu();
                     self.export();
+                }
+                if ui.add_enabled(self.in_drawing(), egui::Button::new("Export PDF...")).clicked() {
+                    ui.close_menu();
+                    self.export_drawing_pdf();
                 }
                 ui.separator();
                 if ui.button("Properties...").clicked() {
@@ -1371,11 +1442,11 @@ impl AnvilApp {
                 }
             });
             ui.menu_button("Edit", |ui| {
-                if ui.add_enabled(!self.undo.is_empty(), egui::Button::new("Undo   Ctrl+Z")).clicked() {
+                if ui.add_enabled(self.can_undo(), egui::Button::new("Undo   Ctrl+Z")).clicked() {
                     ui.close_menu();
                     self.undo();
                 }
-                if ui.add_enabled(!self.redo.is_empty(), egui::Button::new("Redo   Ctrl+Y")).clicked() {
+                if ui.add_enabled(self.can_redo(), egui::Button::new("Redo   Ctrl+Y")).clicked() {
                     ui.close_menu();
                     self.redo();
                 }
@@ -1484,13 +1555,13 @@ impl AnvilApp {
                 if theme::icon_button(ui, Icon::Rebuild, "Rebuild", "Rebuild (Ctrl+B)", None).clicked() {
                     self.rebuild();
                 }
-                let r = ui.add_enabled_ui(!self.redo.is_empty(), |ui| {
+                let r = ui.add_enabled_ui(self.can_redo(), |ui| {
                     theme::icon_button(ui, Icon::Redo, "Redo", "Redo (Ctrl+Y)", None)
                 });
                 if r.inner.clicked() {
                     self.redo();
                 }
-                let r = ui.add_enabled_ui(!self.undo.is_empty(), |ui| {
+                let r = ui.add_enabled_ui(self.can_undo(), |ui| {
                     theme::icon_button(ui, Icon::Undo, "Undo", "Undo (Ctrl+Z)", None)
                 });
                 if r.inner.clicked() {
@@ -1502,6 +1573,18 @@ impl AnvilApp {
 
     /// The command bar: tabs, then the open tab's commands in captioned groups.
     fn command_manager(&mut self, ui: &mut egui::Ui) {
+        if self.in_drawing() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                theme::tab(ui, "Drawing", true);
+            });
+            let pal = Palette::of(ui);
+            let y = ui.cursor().top();
+            ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0_f32, pal.border));
+            ui.add_space(4.0);
+            theme::command_bar(ui, "drawing", |ui| self.drawing_commands(ui));
+            return;
+        }
         if self.in_assembly() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -5140,7 +5223,9 @@ impl AnvilApp {
             }))
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    if self.in_assembly() {
+                    if self.in_drawing() {
+                        self.drawing_tree(ui);
+                    } else if self.in_assembly() {
                         self.assembly_tree(ui);
                     } else if self.sketch.is_some() {
                         self.sketch_manager(ui);
@@ -5156,13 +5241,18 @@ impl AnvilApp {
                 });
             });
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
-            self.viewport(ui);
+            if self.in_drawing() {
+                self.drawing_viewport(ui);
+            } else {
+                self.viewport(ui);
+            }
         });
         self.windows(ctx);
         self.bom_window(ctx);
         self.config_windows(ctx);
         self.command_palette(ctx);
         self.commit_if_changed();
+        self.drawing_commit();
         self.handle_screenshot(ctx);
     }
 }

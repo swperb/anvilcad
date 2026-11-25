@@ -94,7 +94,7 @@ sketch tool on the command bar and in the sketch panel, count as one.
 | `recovery` | `dir` | `found`: turns autosave on with its recovery files in `dir` (never the user's data folder unless you name it) and lists work a crash left there; the app's Recover window shows it |
 | `autosave` | | `path`, `written`: writes a copy of unsaved work now |
 | `file_dialog` | `path`, or `null` to cancel; answers the next dialog | |
-| `open` | `path` (part, template, assembly or STEP file) | |
+| `open` | `path` (part, template, assembly, drawing or STEP file) | |
 | `sample`, `new` | | |
 | `frames` | `n` | |
 | `wait` | `seconds` of virtual time, for example for hover tooltips | |
@@ -109,7 +109,8 @@ sketch tool on the command bar and in the sketch panel, count as one.
 `modifiers` is a list of `cmd`, `ctrl`, `shift` and `alt`. `cmd` means Command on macOS
 and Ctrl elsewhere, so `{"cmd":"key","key":"Z","modifiers":["cmd"]}` is Undo on every
 platform. Each input command keeps running frames until the UI settles, so the next
-`state` already shows its effect.
+`state` already shows its effect. Settling also waits for a drawing's views to finish
+projecting; `frames` does not, so a screenshot after `frames` can show the progress.
 
 ### A session
 

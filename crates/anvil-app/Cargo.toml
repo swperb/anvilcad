@@ -23,6 +23,7 @@ path = "src/bin/anvilcad-agent.rs"
 anvil-kernel.workspace = true
 anvil-sketch.workspace = true
 anvil-model.workspace = true
+anvil-drawing.workspace = true
 anvil-io.workspace = true
 anvil-3dmouse.workspace = true
 eframe = { version = "=0.31.1", default-features = false, features = ["accesskit", "wgpu", "default_fonts", "wayland", "x11"] }

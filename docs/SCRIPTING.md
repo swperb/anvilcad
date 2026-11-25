@@ -125,7 +125,7 @@ name. **Ctrl+Shift+P** (Cmd+Shift+P on macOS) opens the command palette, which f
 built-in or user command by typing part of its name or description.
 
 Built-in commands, by the names the toolbar and menus use: New, New Assembly, Insert
-Component, Mate, Bill of Materials, Open, Save, Save As, Save as Part Template, Export, Open Sample Part, Undo, Redo, Rebuild, Delete, Extruded Boss/Base,
+Component, Mate, Bill of Materials, New Drawing, Update Views, Change Part, Export PDF, Open, Save, Save As, Save as Part Template, Export, Open Sample Part, Undo, Redo, Rebuild, Delete, Extruded Boss/Base,
 Revolved Boss/Base, Extruded Cut, Revolved Cut, Linear Pattern, Circular Pattern, Mirror,
 Fillet, Chamfer, Shell, Hole, Sweep, Loft, Draft, Dome, Rib, Combine, Move/Copy Bodies,
 Delete/Keep Bodies, Split, Scale, Plane, Axis, Point, Coordinate System, Sketch, Exit Sketch,
@@ -133,7 +133,10 @@ Convert Entities, Front, Back, Left, Right, Top, Bottom, Isometric, Normal To, Z
 Shaded with edges, Dark Theme, Light Theme, Toggle Theme, Features Tab, Sketch Tab, Evaluate
 Tab, Mass Properties, Check Design (DFM), Measure, Section View, Equations, Custom Properties,
 Configuration Table, Command Palette, Run Script..., Reload Config and Edit Config. Names are
-not case-sensitive. A binding to a name that does not exist is an error when the file loads.
+not case-sensitive. While a drawing is open, only the commands that apply to it run (New, New
+Assembly, New Drawing, Open, Save, Save As, Update Views, Change Part, Export PDF, Open Sample
+Part, Undo, Redo, Rebuild, Zoom to Fit, the theme commands, Command Palette, Run Script...,
+Reload Config and Edit Config); the others say to open a part. A binding to a name that does not exist is an error when the file loads.
 
 ## The scripting API
 

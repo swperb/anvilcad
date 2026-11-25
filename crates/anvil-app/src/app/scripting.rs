@@ -16,6 +16,10 @@ use std::time::SystemTime;
 pub const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("New", "Start a new part"),
     ("New Assembly", "Start a new assembly"),
+    ("New Drawing", "Start a drawing of the open part"),
+    ("Update Views", "Project the drawing's views again"),
+    ("Change Part", "Point the drawing at another part"),
+    ("Export PDF", "Export the drawing as PDF"),
     ("Insert Component", "Place a part in the assembly"),
     ("Mate", "Add a mate between two components"),
     ("Bill of Materials", "Show the assembly's parts list"),
@@ -86,6 +90,31 @@ pub const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("Edit Config", "Create init.lua if needed and show where it is"),
 ];
 
+/// The built-in commands that work while a drawing is open.
+const DRAWING_COMMANDS: &[&str] = &[
+    "New",
+    "New Assembly",
+    "New Drawing",
+    "Open",
+    "Save",
+    "Save As",
+    "Update Views",
+    "Change Part",
+    "Export PDF",
+    "Open Sample Part",
+    "Undo",
+    "Redo",
+    "Rebuild",
+    "Zoom to Fit",
+    "Dark Theme",
+    "Light Theme",
+    "Toggle Theme",
+    "Command Palette",
+    "Run Script...",
+    "Reload Config",
+    "Edit Config",
+];
+
 /// The command palette's state while it is open.
 #[derive(Default)]
 pub(super) struct CommandPalette {
@@ -145,8 +174,15 @@ impl AnvilApp {
         let Some((name, _)) = BUILTIN_COMMANDS.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) else {
             return Err(format!("no built-in command is called \"{name}\""));
         };
+        if self.in_drawing() && !DRAWING_COMMANDS.contains(name) {
+            return Err(format!("\"{name}\" works on parts; open a part to use it"));
+        }
         match *name {
             "New" => self.request(PendingAction::New),
+            "New Drawing" => self.request(PendingAction::NewDrawing),
+            "Update Views" => self.update_views(),
+            "Change Part" => self.change_drawing_part(),
+            "Export PDF" => self.export_drawing_pdf(),
             "New Assembly" => self.request(PendingAction::NewAssembly),
             "Insert Component" => self.insert_component(),
             "Mate" => self.start_mate(),
@@ -214,7 +250,12 @@ impl AnvilApp {
                     self.camera.normal_to(&f);
                 }
             }
-            "Zoom to Fit" => self.fit_pending = true,
+            "Zoom to Fit" => {
+                self.fit_pending = true;
+                if let Some(s) = &mut self.drw {
+                    s.fit_view();
+                }
+            }
             "Shaded with edges" => self.show_edges = !self.show_edges,
             "Dark Theme" | "Light Theme" | "Toggle Theme" => {
                 self.dark = match *name {

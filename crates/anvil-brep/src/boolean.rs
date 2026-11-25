@@ -1474,6 +1474,89 @@ pub fn contains_point(solid: &Solid, p: DVec3) -> Result<bool> {
     point_in_solid(solid, p, |g, q| locate_in(solid, g, &infos[g], q))
 }
 
+/// Rays meeting a surface at less than this cosine to its normal (about 3 degrees from
+/// tangent) are checked for only touching it.
+const GRAZE: f64 = 5e-2;
+/// How far either side of a nearly tangent hit the ray is tested, in millimetres. A ray
+/// that only touches a face from outside stays outside it however far it is tested,
+/// wherever root finding put the touching point; one that crosses or dips into it is inside
+/// it this close unless it dips in by well under a nanometre.
+const TOUCH: f64 = 1e-4;
+
+/// True when `x` is on the outer side of `face` (where its outward normal points).
+fn outside(face: &Face, x: DVec3) -> bool {
+    let foot = face.surface.eval_uv(face.surface.uv(x));
+    (x - foot).dot(face.normal_at(foot)) > 0.0
+}
+
+/// A solid's faces made ready for many point-on-face and ray tests, as hidden-line
+/// removal in drawings needs: the faces' parameter-space boundaries are worked out once.
+pub struct FaceLocator<'a> {
+    solid: &'a Solid,
+    infos: Vec<FaceInfo>,
+}
+
+impl<'a> FaceLocator<'a> {
+    pub fn new(solid: &'a Solid) -> FaceLocator<'a> {
+        FaceLocator { solid, infos: solid.faces.iter().map(|f| face_info(solid, f)).collect() }
+    }
+
+    pub fn solid(&self) -> &'a Solid {
+        self.solid
+    }
+
+    /// True when `p` lies on face `face`, inside it or on its boundary.
+    pub fn on_face(&self, face: usize, p: DVec3) -> bool {
+        match self.infos.get(face) {
+            Some(info) => locate_in(self.solid, face, info, p) != Loc::Outside,
+            None => false,
+        }
+    }
+
+    /// True when the ray from `p` along the unit direction `dir` passes through the inside
+    /// of a face farther than `t_min` along it. Faces the ray runs along, and hits on a
+    /// face's boundary (where the ray grazes an edge), are not counted: a ray past a
+    /// silhouette touches the face beside it there without being hidden by it.
+    ///
+    /// A hit where the ray only touches a surface, without crossing it, is not counted
+    /// either.
+    pub fn ray_blocked(&self, p: DVec3, dir: DVec3, t_min: f64) -> bool {
+        let ray = Curve::Line { origin: p, dir };
+        let inv = DVec3::ONE / dir;
+        for (g, (face, info)) in self.solid.faces.iter().zip(&self.infos).enumerate() {
+            // Slab test against the face's (generous) box first.
+            let (lo, hi) = info.bbox;
+            let (a, b) = ((lo - p) * inv, (hi - p) * inv);
+            let (near, far) = (a.min(b).max_element(), a.max(b).min_element());
+            let (near, far) = if near.is_nan() || far.is_nan() { (f64::MIN, f64::MAX) } else { (near, far) };
+            if far < t_min || near > far {
+                continue;
+            }
+            if let CurveHit::Params(ts) = intersect::curve_surface(&ray, t_min, 1e9, &face.surface, TOL) {
+                for &t in &ts {
+                    if t <= t_min || locate_in(self.solid, g, info, ray.eval(t)) != Loc::Inside {
+                        continue;
+                    }
+                    // A ray that only touches the face from outside (at a silhouette) does
+                    // not pass behind it. Root finding places such a double root a little
+                    // off the touching point, and reports a ray that dips just inside as one
+                    // root too, so a nearly tangent hit is let through only when the ray is
+                    // outside the face just before and just after it.
+                    let q = ray.eval(t);
+                    if face.normal_at(q).dot(dir).abs() < GRAZE
+                        && outside(face, q - dir * TOUCH)
+                        && outside(face, q + dir * TOUCH)
+                    {
+                        continue;
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
 /// Where each of `points` lies against `solid`: `Some(true)` inside it, `Some(false)`
 /// outside, `None` on its boundary.
 pub(crate) fn locate_points(solid: &Solid, points: &[DVec3]) -> Result<Vec<Option<bool>>> {

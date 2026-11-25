@@ -181,6 +181,7 @@ name = "anvil-app"
 version = "0.2.0"
 dependencies = [
  "anvil-3dmouse",
+ "anvil-drawing",
  "anvil-io",
  "anvil-kernel",
  "anvil-model",
@@ -234,6 +235,17 @@ dependencies = [
  "thiserror 2.0.21",
  "toml",
  "ureq",
+]
+
+[[package]]
+name = "anvil-drawing"
+version = "0.2.0"
+dependencies = [
+ "anvil-brep",
+ "anvil-model",
+ "glam",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

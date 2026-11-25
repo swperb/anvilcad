@@ -345,6 +345,10 @@ pub enum Icon {
     InsertComponent,
     /// A mate: two faces brought together.
     Mate,
+    /// A drawing: a sheet with a view on it.
+    Drawing,
+    /// Exporting a PDF: a sheet with an arrow out of it.
+    ExportPdf,
     ViewFront,
     ViewTop,
     ViewRight,
@@ -710,6 +714,16 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             poly(&[(9.5, 2.0), (14.5, 2.0), (14.5, 14.0), (9.5, 14.0)], Color32::TRANSPARENT, ln);
             line((7.0, 8.0), (9.0, 8.0), hi);
             path(&[(7.8, 6.5), (9.0, 8.0), (7.8, 9.5)], hi);
+        }
+        Icon::Drawing => {
+            poly(&[(2.0, 3.0), (14.0, 3.0), (14.0, 13.0), (2.0, 13.0)], Color32::TRANSPARENT, ln);
+            poly(&[(4.5, 6.0), (8.5, 6.0), (8.5, 10.5), (4.5, 10.5)], tint, hi);
+            line((10.0, 11.0), (12.5, 11.0), ln);
+        }
+        Icon::ExportPdf => {
+            path(&[(9.0, 2.0), (3.0, 2.0), (3.0, 14.0), (13.0, 14.0), (13.0, 9.0)], ln);
+            line((7.5, 8.5), (14.0, 2.0), hi);
+            path(&[(10.0, 2.0), (14.0, 2.0), (14.0, 6.0)], hi);
         }
         Icon::ViewFront => cube(1),
         Icon::ViewTop => cube(2),
