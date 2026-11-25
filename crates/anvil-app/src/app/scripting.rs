@@ -21,7 +21,10 @@ pub const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("New Drawing", "Start a drawing of the open part"),
     ("Update Views", "Project the drawing's views again"),
     ("Change Part", "Point the drawing at another part"),
+    ("Model Dimensions", "Bring the part's dimensions into the drawing views"),
+    ("Reference Dimension", "Dimension the drawing views"),
     ("Export PDF", "Export the drawing as PDF"),
+    ("Export DXF", "Export the drawing as DXF"),
     ("Insert Component", "Place a part in the assembly"),
     ("Mate", "Add a mate between two components"),
     ("Bill of Materials", "Show the assembly's parts list"),
@@ -102,7 +105,11 @@ const DRAWING_COMMANDS: &[&str] = &[
     "Save As",
     "Update Views",
     "Change Part",
+    "Model Dimensions",
+    "Reference Dimension",
     "Export PDF",
+    "Export DXF",
+    "Delete",
     "Open Sample Part",
     "Undo",
     "Redo",
@@ -185,6 +192,9 @@ impl AnvilApp {
             "Update Views" => self.update_views(),
             "Change Part" => self.change_drawing_part(),
             "Export PDF" => self.export_drawing_pdf(),
+            "Export DXF" => self.export_drawing_dxf(),
+            "Model Dimensions" => self.drawing_model_dimensions(),
+            "Reference Dimension" => self.drawing_reference_dimension(),
             "New Assembly" => self.request(PendingAction::NewAssembly),
             "Insert Component" => self.insert_component(),
             "Mate" => self.start_mate(),
@@ -203,6 +213,9 @@ impl AnvilApp {
             "Redo" => self.redo(),
             "Rebuild" => self.rebuild(),
             "Delete" if self.asm.is_some() => self.delete_assembly_selection(),
+            "Delete" if self.in_drawing() => {
+                self.drawing_delete();
+            }
             "Delete" => {
                 if matches!(self.selection, Selection::Feature(_)) && self.editor.is_none() {
                     self.delete_selected_feature();

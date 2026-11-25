@@ -1,17 +1,21 @@
-# Drawings: sheets, standard views and PDF
+# Drawings: sheets, views, dimensions, title blocks, PDF and DXF
 
 What an AnvilCAD drawing is and does in its first slice: a drawing document that refers to
 a part, one sheet with a size, a scale and a projection method, the three standard views and
 an isometric projected from the part's exact geometry with hidden lines removed or dashed and
 tangent edges shown, thin or removed, views that follow the part when it changes, and vector
 PDF output. SOLIDWORKS users know the equivalent workflow well, so AnvilCAD follows its
-published behaviour where that makes sense. Dimensions, title blocks and custom properties
-(issue #97) and section, detail and auxiliary views (#98) come later and are noted only
-where the data model must leave room for them.
+published behaviour where that makes sense. The second slice (issue #97) adds model and
+reference dimensions, title blocks filled from the part's custom properties and
+configuration, and DXF output; it is specified in the sections from "Dimensions" on.
+Section, detail and auxiliary views, hole callouts and BOM tables (#98) come later and are
+noted only where the data model must leave room for them.
 
 This specification was written before the implementation, which is in
 `crates/anvil-drawing` (document, projection, layout and PDF) and
-`crates/anvil-app/src/app/drawing.rs` (drawing mode).
+`crates/anvil-app/src/app/drawing.rs` (drawing mode). The second slice is in
+`crates/anvil-drawing/src/dims.rs` (dimensions), `title.rs` (title blocks), `dxf.rs` (DXF)
+and the same app module.
 
 ## How this was studied
 
@@ -41,6 +45,11 @@ This specification was written before the implementation, which is in
   Pointing REA at SOLIDWORKS software is ruled out by
   [INTEROPERABILITY.md](../../INTEROPERABILITY.md). The drawing file format is not covered;
   AnvilCAD's `.anvdrw` format is its own.
+- **Second slice.** The dimension, title-block and DXF sections were studied the same way on
+  2026-11-25, with the same REA version and pin and the same method: only published help
+  pages were read, no `.slddrw` or `.dxf` file written by SOLIDWORKS was studied, and REA's
+  analysis tools were not run. The DXF structure comes from Autodesk's published DXF
+  reference (D1), not from SOLIDWORKS output; it was used for group codes only.
 - **Standards.** Paper sizes and line widths are not given in the SOLIDWORKS help. They come
   from the published standards ISO 216 (A sizes), ASME Y14.1 (inch sizes) and ISO 128 (line
   types and widths), and are marked as such.
@@ -51,8 +60,13 @@ Base A is `https://help.solidworks.com/2025/English/SolidWorks/sldworks/`. Base 
 `https://help.solidworks.com/2024/English/api/swconst/` and base C is
 `https://help.solidworks.com/2024/English/api/sldworksapi/`; enumeration pages there are
 named `SOLIDWORKS.Interop.swconst~SOLIDWORKS.Interop.swconst.<Enum>.html` and interface
-pages `SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.<Interface>.html`. All were
-read on 2026-11-24.
+pages `SOLIDWORKS.Interop.sldworks~SOLIDWORKS.Interop.sldworks.<Interface>.html`. S1 to S54 were
+read on 2026-11-24 and S60 to S72 on 2026-11-25, in the same way (the second slice also
+tried `c_dangling_dimensions.htm`, `c_title_blocks.htm`, `c_sheet_formats.htm`,
+`c_dxf_dwg_files.htm`, `HIDD_OPTIONS_DIMS.htm`, `c_marked_for_drawing.htm` and
+`c_custom_properties.htm` under base A; all were missing). D1 is Autodesk's published DXF
+reference, used for the group codes of the DXF subset written; it is not SOLIDWORKS
+material.
 
 | # | Topic | URL | Version |
 |---|---|---|---|
@@ -97,6 +111,20 @@ read on 2026-11-24.
 | S52 | Drawings overview | A + `c_drawings_overview.htm` | 2025 |
 | S53 | Creating a drawing | A + `c_create_drawing.htm` | 2025 |
 | S54 | Drawing view properties | A + `HIDD_DRVIEW_PROP.htm` | 2025 |
+| S60 | Model items | A + `c_insert_model_items.htm` | 2025 |
+| S61 | Model Items PropertyManager | A + `HIDD_DVE_INSERT_MODEL_ITEMS.htm` | 2025 |
+| S62 | Dimensions in drawings | A + `c_dimensions_in_drawings.htm` | 2025 |
+| S63 | Inserting dimensions into drawings | A + `c_Inserting_Dimensions_into_Drawings.htm` | 2025 |
+| S64 | Reference dimensions | A + `c_Reference_Dimensions.htm` | 2025 |
+| S65 | Linking notes to document properties | A + `t_link_notes_to_document_properties.htm` | 2025 |
+| S66 | Link to Property | A + `HIDD_SELECT_PROPERTY.htm` | 2025 |
+| S67 | Title blocks | `https://help.solidworks.com/2025/English/SolidWorks/acadhelp/c_title_blocks_acadhelp.htm` | 2025 |
+| S68 | Defining or editing title blocks | A + `t_defining_editing_title_blocks.htm` | 2025 |
+| S69 | Title block tables (configuration-specific properties) | A + `c_title_block_tables_2.htm` | 2025 |
+| S70 | Model View PropertyManager, configuration information | A + `HIDD_DVE_NAMED_VIEW.htm` | 2025 |
+| S71 | DXF/DWG file export options | A + `r_dxf_dwg_export_options.htm` | 2025 |
+| S72 | Setting DXF/DWG export options | A + `HIDD_EXPORT_OPTION_DXF.htm` | 2025 |
+| D1 | DXF Reference (Autodesk, AutoCAD 2012 edition) | `https://images.autodesk.com/adsk/files/autocad_2012_pdf_dxf-reference_enu.pdf` | AutoCAD 2012 |
 
 Numbers missing from the table are pages that were read but added nothing used here.
 
@@ -117,6 +145,10 @@ Numbers missing from the table are pages that were read but added nothing used h
   message naming the version. Saving writes a temporary file and renames it, so a crash
   never leaves half a drawing. Ids are kept stable so that dimensions (#97) can refer to
   views; a view does not yet store a position, and adding one later is a new optional field.
+- **Decision (second slice).** The format moves to version 2, which adds the dimensions,
+  the title block and the configuration shown (see below). Version 1 files open, with no
+  dimensions, the standard title block and the part's saved configuration; a build that
+  only knows version 1 refuses a version 2 file instead of dropping its dimensions.
 - **Decision.** A drawing holds no geometry of its own in this slice: views are projected
   again whenever the drawing is opened. Keeping projected geometry in the file, so a drawing
   can be shown and printed without its part, is left for later (see "Unknown or not
@@ -147,8 +179,9 @@ Numbers missing from the table are pages that were read but added nothing used h
   1:5, 1:10, 1:20, 1:50, 1:100, 1:200, 1:500, 1:1000) at which all its views fit inside the
   frame, so the "unusual scale" S41 warns about never happens. Fit sets that scale again;
   any whole-number ratio can be typed.
-- **Decision.** The sheet shows a frame 10 mm inside the paper's edge and, until title blocks
-  arrive (#97), a note in the lower right corner giving the scale and the projection method.
+- **Decision.** The sheet shows a frame 10 mm inside the paper's edge and a title block in
+  its lower right corner (see "Title blocks"), which gives the scale and the projection
+  method among its fields. The first slice showed a plain note there instead.
 
 ## Standard views
 
@@ -275,6 +308,173 @@ Numbers missing from the table are pages that were read but added nothing used h
   Helvetica font, which every PDF reader has, so no font is embedded. Nothing is drawn as an
   image. It is written by AnvilCAD's own writer, with no new dependency.
 
+## Dimensions
+
+### Model dimensions
+
+- **Observed.** Dimensions in a drawing are associated with the model: changing the model
+  changes the drawing (S62, S63). The usual practice is to dimension each feature while
+  modelling and then insert those dimensions into the drawing views; changing an inserted
+  dimension in the drawing changes the model (S62, S63).
+- **Observed.** Model Items inserts dimensions (and annotations and reference geometry) from
+  the model, for the entire model or a selected feature, into all views or chosen views; in
+  all views each dimension goes to "the most appropriate view" (S60, S61, S63). A dimension
+  inserted in one view is not inserted again into another, and an option removes duplicates
+  (S61, S63). Dimensions go only into views where they are appropriate, and can be moved
+  only to a view whose orientation suits them (S62, S63).
+- **Observed.** Dimensions can be filtered by "marked for drawing"; new model dimensions are
+  marked by default (S61). An option keeps the placement the dimension had in the sketch
+  (S61). Dimensions of a sketch that is not absorbed into a feature are inserted only if the
+  sketch is shown (S60).
+- **Observed.** Inserted dimensions are drawn black, including those that are blue in the
+  model, such as an extrusion's depth; reference dimensions are grey with parentheses (S63).
+  Model items can be deleted with Delete (S60).
+- **Unknown.** How "the most appropriate view" is chosen, and what "appropriate" means for a
+  view's orientation.
+- **Inferred.** A dimension measured in a plane belongs in a view that looks square onto that
+  plane, where it is seen at its true size; a depth belongs in a view that sees the depth
+  direction side on.
+- **Decision.** Model Dimensions (AnvilCAD's name for Model Items, dimensions only) brings
+  in, for the whole part, the dimensions of every sketch and the depth of every extrude:
+  - a sketch dimension goes to the first orthographic view, in the order front, top, side,
+    that looks square onto the sketch's plane; a depth goes to the first such view that
+    sees the extrude direction side on (Blind and Mid Plane depths only, since the others
+    have no depth value). The isometric view never gets model dimensions, because lengths
+    are foreshortened there;
+  - each dimension is inserted once: running Model Dimensions again adds only those not
+    yet in the drawing, and says so when there are none;
+  - reference dimensions of the sketch are left out (AnvilCAD has no "marked for drawing"
+    flag, and a sketch's reference dimension is a check, not a manufacturing size); every
+    driving dimension, including those set by equations, comes in, except a distance of
+    zero (two points held level), which says nothing on a drawing;
+  - placement: a dimension the user moved in the sketch keeps that placement (S61's
+    option, always on); one left at its default place is moved 8 sheet millimetres out
+    from the view's centre, so its value does not sit on the part's lines;
+  - suppressed and rolled-back features bring nothing.
+- **Decision.** A model dimension stores only the feature and the dimension it is (the
+  sketch dimension's index and kind, or "depth") and where its value is placed. Its value
+  and its geometry come from the rebuilt part every time the views update, so the drawing
+  always shows what the model is. If the dimension is gone from the model (deleted,
+  suppressed, or a different kind at that index), it is left out and the left pane counts
+  it as no longer in the model; Delete removes it for good.
+- **Decision.** Editing a model dimension's value from the drawing (which S62 says changes
+  the model) is not in this slice. The value is shown; the part is changed in the part.
+
+### Reference dimensions
+
+- **Observed.** Dimensions added in the drawing are reference dimensions: they are driven,
+  their value cannot be edited, and they update when the model changes (S62, S64). They are
+  enclosed in parentheses by default (except ordinate dimensions), with a document option to
+  turn that off (S64). They are made with the same tool, and the same methods, as sketch
+  dimensions, including horizontal, vertical and parallel dimensions, and they can measure
+  to silhouette edges (S62, S64). A reference dimension is hidden when its feature is
+  suppressed (S64).
+- **Unknown.** What a reference dimension does when the edge it measured disappears
+  ("dangling" dimensions; the 2025 page `c_dangling_dimensions.htm` is missing).
+- **Decision.** Reference Dimension in drawing mode is the sketch Dimension tool on a view's
+  lines, with the same inference rules (`docs/re/sketch-dimension.md`): one line gives its
+  length, or its horizontal or vertical extent by placement; two points give a horizontal,
+  vertical or aligned distance by placement; a point and a line or two parallel lines give
+  the distance between them; two crossing lines give the angle of the sector the value is
+  placed in; a circle gives its diameter, an arc its radius; a circle or arc with anything
+  else measures from its centre. Pickable things are the ends of lines and arcs, circle and
+  arc centres, straight lines (pieces of one edge split into seen and hidden parts count as
+  one line) and circles and arcs seen square on. Ellipses and traced curves cannot be
+  picked. Only the front, top and side views take reference dimensions; in the isometric
+  the tool says why not.
+- **Decision.** Values are shown in parentheses. There is no option to turn that off yet.
+- **Decision.** A reference dimension stores what it measured as points in model space on
+  the view's plane (so the side view turning from left to right with the projection method
+  keeps it), and the inferred measurement. When the views update, each pick is found again
+  among the new lines: the same point, a line with the same ends, a circle or arc with the
+  same centre and radius. If it is found the value is measured again; if not, the dimension
+  no longer attaches: it is drawn in the error colour on screen at its old place, counted in
+  the left pane, and left out of PDF and DXF output, so a stale value is never printed.
+  Following an edge that moved (true associativity) needs edge identities that survive a
+  rebuild and is later work.
+
+### Drawing dimensions
+
+- **Unknown.** Factory arrow, text and gap sizes, and precision (the Document Properties -
+  Dimensions page, `HIDD_OPTIONS_DIMS.htm`, is missing for 2025).
+- **Decision (after ISO 129-1 practice).** Dimension and extension lines are thin (0.25 mm);
+  arrowheads are filled, 3 mm long and 1 mm wide; text is 3.5 mm high, upright on the sheet
+  (unidirectional), centred on its place, with the dimension and extension lines broken
+  round it. Lengths are in millimetres to two decimals with trailing zeros dropped;
+  diameters start with Ø, radii with R, angles end with °.
+
+## Title blocks
+
+- **Observed.** A new drawing starts from a template with a paper size and a sheet format;
+  standard formats hold a title block, whose lines and text can be edited; notes in it can
+  be linked to document properties or custom properties (S67). A title block can be defined
+  so that chosen notes are fields a user fills in, and saved as a template (S68).
+- **Observed.** A note links to a property with `$PRP:"name"` (the current document) or
+  `$PRPSHEET:"name"` (the model in the view named in Sheet Properties, by default the first
+  view); a note can mix text and several links; if the property cannot be found the note
+  shows an error naming it (S65, S66). Properties can be the document's own, its custom
+  properties or configuration-specific properties (S66); configuration-specific values are
+  those of the configuration shown (S69). System properties include the configuration
+  name, file name and the sheet's scale and size (S65).
+- **Observed.** A drawing view uses either the model's in-use or last saved configuration or
+  a named configuration (S70).
+- **Decision.** Each drawing has a title block: a list of fields, each a label and a text.
+  The text mixes plain words and `{Name}` placeholders (AnvilCAD's syntax, not `$PRP`);
+  `{{` and `}}` give braces. A placeholder is filled, in this order, from:
+  - the part's custom properties as they apply in the configuration the drawing shows
+    (configuration-specific ones replace file ones of the same name, as AnvilCAD's
+    Custom Properties already do), matched without regard to case;
+  - built-in names: `Configuration`, `FileName` (the part's file name without extension),
+    `Material` (the part's material), `DrawingName`, `Scale`, `Size` and `Projection`.
+  A name found nowhere prints nothing, and the left pane lists it as not set in the part,
+  which is clearer on paper than an `ERROR!` text.
+- **Decision.** The standard title block, for new drawings and for version 1 files: Title
+  `{Description}`; Part number `{PartNo}`; Revision `{Revision}`; Material `{Material}`;
+  Configuration `{Configuration}`; Drawn by `{DrawnBy}`; Scale `{Scale}`; Projection
+  `{Projection}`; Sheet `{Size}`. These are the custom properties every new AnvilCAD part
+  has.
+- **Decision (layout, after ISO 7200).** The block is 180 mm wide (the width of the frame
+  when that is less), in the lower right corner of the frame: the first field spans the
+  width in a 12 mm row with 5 mm text, the others follow two to a row in 9 mm rows with a
+  1.8 mm label above 3.5 mm text. Text that does not fit its cell is made smaller, down to
+  2 mm, and then shortened with "...". Views are placed above the block.
+- **Decision.** The fields are edited in the left pane, in the drawing: add, remove, rename,
+  reorder, edit text, and go back to the standard block. Saving a block as a template of its
+  own for other drawings is later work.
+- **Decision.** The drawing chooses which configuration of the part it shows (by name; none
+  means the part's active configuration as saved). The views, the model dimensions and the
+  title block all come from that configuration. A name the part no longer has is reported
+  with what to do.
+
+## DXF export
+
+- **Observed.** Drawings can be saved as DXF or DWG. Options: the target AutoCAD version;
+  AutoCAD standard or TrueType fonts; mapping SOLIDWORKS line fonts to AutoCAD stock line
+  types (and, from R2000, line weights) or keeping SOLIDWORKS styles; custom layer and
+  colour maps; "scale output 1:1", which writes model geometry at full size based on the
+  most common view scale instead of the sheet scale; end point merging; splines as splines
+  or polylines; views as blocks; and the active sheet, all sheets to separate files, all
+  sheets to one file, or all sheets to paper space (S71, S72).
+- **Unknown.** The default of each option, and how dimensions and title-block text are
+  written (as DXF dimension entities or as plain lines and text).
+- **Standard (D1).** DXF is a tagged text format of group-code and value pairs in sections
+  (`HEADER`, `TABLES`, `ENTITIES`); R12 (`AC1009`) is read by every DXF reader and has
+  `LINE`, `CIRCLE`, `ARC`, `POLYLINE`/`VERTEX`/`SEQEND`, `SOLID` and `TEXT` entities and
+  `LTYPE` and `LAYER` tables.
+- **Decision.** Export DXF writes the sheet as R12 ASCII DXF at sheet size (one drawing unit
+  is one sheet millimetre, `$INSUNITS` 4 and `$MEASUREMENT` 1), the same picture as the PDF:
+  - lines are `LINE`; circles and circular arcs are exact `CIRCLE` and `ARC`; ellipses
+    (circles seen at an angle) and traced curves are 2D `POLYLINE`s within 0.01 mm, since
+    R12 has no ellipse;
+  - layers by role: `VISIBLE`, `HIDDEN` (linetype `DASHED`, 3 mm dashes and 1 mm gaps),
+    `THIN`, `FRAME`, `DIMENSIONS` and `TITLE`, all colour 7 (black on white, white on
+    black);
+  - dimensions are written as plain lines, filled `SOLID` arrowheads and `TEXT`, so every
+    reader shows them as they are on the sheet; Ø and ° are written as `%%c` and `%%d`;
+  - the title block as lines and `TEXT`.
+  "Scale output 1:1", other versions, DWG and several sheets are not offered: a drawing has
+  one sheet, and DXF at sheet size matches the PDF.
+
 ## Unknown or not covered
 
 1. The `.slddrw` format and how SOLIDWORKS stores model references and cached view
@@ -287,7 +487,12 @@ Numbers missing from the table are pages that were read but added nothing used h
    (`HIDD_OPTIONS_ORTHO_LABEL.htm`) are missing, as are the 2025 pages
    `c_scales_in_drawings.htm`, `c_replace_model_drawing_views.htm` and
    `HIDD_SHOW_HIDDEN_EDGES.htm`.
-6. Later slices: dimensions, annotations, title blocks and custom properties (#97); section,
-   detail, auxiliary and broken views (#98); several sheets, portrait and custom sizes,
-   moving views by hand, shaded views, assemblies, DXF output, and keeping projected geometry
-   in the drawing so it opens without its part.
+6. How "the most appropriate view" for a model dimension is chosen (S60, S63), and how
+   dangling reference dimensions behave.
+7. Factory dimension styles (arrow and text sizes, precision) and DXF export defaults.
+8. Later slices: section, detail, auxiliary and broken views, hole callouts and BOM tables
+   (#98); editing model dimensions from the drawing; dimensions of other features (fillet
+   radii, hole sizes, pattern counts, revolve angles); title-block templates saved apart
+   from a drawing; annotations; several sheets, portrait and custom sizes, moving views by
+   hand, shaded views, assemblies, and keeping projected geometry in the drawing so it opens
+   without its part.

@@ -3,15 +3,19 @@
 //!
 //! A drawing holds no geometry of its own. It refers to a part file by a path relative to
 //! the drawing, and its views are projected from that part's exact bodies whenever the part
-//! is loaded or changes.
+//! is loaded or changes. Dimensions refer to views by id and to the part's features by
+//! id; their values come from the part every time the views update.
 
+use crate::dims::Dimension;
 use crate::hlr::Orientation;
 use crate::sheet::{Projection, Sheet};
+use crate::title::TitleBlock;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const DRAWING_FORMAT: &str = "anvil-drawing";
-pub const DRAWING_FORMAT_VERSION: u32 = 1;
+/// Version 2 added dimensions, the title block and the configuration shown.
+pub const DRAWING_FORMAT_VERSION: u32 = 2;
 pub const DRAWING_EXT: &str = "anvdrw";
 
 /// What a view is for, which decides its direction and where it sits.
@@ -105,7 +109,16 @@ pub struct Drawing {
     pub model: String,
     pub sheet: Sheet,
     pub views: Vec<View>,
+    /// The next id for a view or a dimension; ids are never reused.
     pub next_id: u32,
+    /// The part's configuration the drawing shows, by name; `None` for the configuration
+    /// the part was saved in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<String>,
+    #[serde(default)]
+    pub dimensions: Vec<Dimension>,
+    #[serde(default)]
+    pub title_block: TitleBlock,
 }
 
 #[derive(Debug)]
@@ -161,6 +174,9 @@ impl Drawing {
             sheet,
             views: Vec::new(),
             next_id: 1,
+            configuration: None,
+            dimensions: Vec::new(),
+            title_block: TitleBlock::standard(),
         }
     }
 
@@ -191,6 +207,23 @@ impl Drawing {
 
     pub fn view_mut(&mut self, id: u32) -> Option<&mut View> {
         self.views.iter_mut().find(|v| v.id == id)
+    }
+
+    /// Adds a dimension and returns its id.
+    pub fn add_dimension(&mut self, mut d: Dimension) -> u32 {
+        d.id = self.next_id;
+        self.next_id += 1;
+        let id = d.id;
+        self.dimensions.push(d);
+        id
+    }
+
+    pub fn dimension(&self, id: u32) -> Option<&Dimension> {
+        self.dimensions.iter().find(|d| d.id == id)
+    }
+
+    pub fn dimension_mut(&mut self, id: u32) -> Option<&mut Dimension> {
+        self.dimensions.iter_mut().find(|d| d.id == id)
     }
 
     /// The part file, found from the drawing's own path.
@@ -232,7 +265,8 @@ impl Drawing {
             return Err(DrawingFileError::TooNew(ver));
         }
         let mut d: Drawing = serde_json::from_value(v)?;
-        d.next_id = d.next_id.max(d.views.iter().map(|v| v.id + 1).max().unwrap_or(1));
+        let used = d.views.iter().map(|v| v.id).chain(d.dimensions.iter().map(|x| x.id)).max();
+        d.next_id = d.next_id.max(used.map_or(1, |m| m + 1));
         Ok(d)
     }
 
@@ -283,9 +317,11 @@ mod tests {
         };
         let mut d = Drawing::standard("parts/bracket.anvprt".into(), sheet);
         d.views[1].display = DisplayStyle::HiddenDashed;
+        d.configuration = Some("Long".into());
+        d.title_block.fields[0].text = "{Description} ({PartNo})".into();
         let text = d.to_json().expect("json");
         assert!(text.contains("\"format\": \"anvil-drawing\""));
-        assert!(text.contains("\"format_version\": 1"));
+        assert!(text.contains("\"format_version\": 2"));
         assert_eq!(Drawing::from_json(&text).expect("read"), d);
     }
 
@@ -296,9 +332,22 @@ mod tests {
         let text = Drawing::default()
             .to_json()
             .expect("json")
-            .replace("\"format_version\": 1", "\"format_version\": 99");
+            .replace("\"format_version\": 2", "\"format_version\": 99");
         assert!(matches!(Drawing::from_json(&text), Err(DrawingFileError::TooNew(99))));
         assert!(matches!(Drawing::from_json("{"), Err(DrawingFileError::Json(_))));
+    }
+
+    #[test]
+    fn version_1_files_open_with_the_standard_title_block() {
+        let v1 = r#"{"format": "anvil-drawing", "format_version": 1, "model": "p.anvprt",
+            "sheet": {"size": "A3", "scale": {"sheet": 1, "model": 1}, "projection": "FirstAngle"},
+            "views": [{"id": 1, "role": "Front", "display": "HiddenRemoved", "tangent": "Removed"}],
+            "next_id": 2}"#;
+        let d = Drawing::from_json(v1).expect("version 1");
+        assert_eq!(d.title_block, TitleBlock::standard());
+        assert!(d.dimensions.is_empty());
+        assert_eq!(d.configuration, None);
+        assert!(d.to_json().expect("json").contains("\"format_version\": 2"));
     }
 
     #[test]

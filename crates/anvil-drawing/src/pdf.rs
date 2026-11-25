@@ -6,7 +6,7 @@
 //! every PDF reader has, so nothing is embedded. Nothing is drawn as an image.
 
 use crate::hlr::Path2;
-use crate::layout::{Pen, SheetPicture};
+use crate::layout::{Align, Note, Pen, SheetPicture, text_width};
 use glam::DVec2;
 use std::f64::consts::FRAC_PI_2;
 use std::fmt::Write as _;
@@ -70,8 +70,9 @@ fn path_ops(out: &mut String, path: &Path2) {
     }
 }
 
-/// `text` as a PDF string in WinAnsi encoding: brackets and backslashes escaped, anything
-/// outside printable ASCII shown as `?`.
+/// `text` as a PDF string in WinAnsi encoding: brackets and backslashes escaped, Latin-1
+/// letters and signs (such as Ø and °, which WinAnsi places where Latin-1 does) as octal
+/// escapes, anything else shown as `?`.
 fn pdf_string(text: &str) -> String {
     let mut s = String::from("(");
     for ch in text.chars() {
@@ -81,6 +82,9 @@ fn pdf_string(text: &str) -> String {
                 s.push(ch);
             }
             ' '..='~' => s.push(ch),
+            '\u{a0}'..='\u{ff}' => {
+                let _ = write!(s, "\\{:03o}", ch as u32);
+            }
             _ => s.push('?'),
         }
     }
@@ -88,19 +92,36 @@ fn pdf_string(text: &str) -> String {
     s
 }
 
-/// Width of `text` in Helvetica at 1 unit high, near enough to right-align a note.
-fn helvetica_width(text: &str) -> f64 {
-    text.chars()
-        .map(|c| {
-            if c == ' ' {
-                0.278
-            } else if c.is_ascii_uppercase() {
-                0.667
-            } else {
-                0.556
-            }
-        })
-        .sum()
+fn set_pen(out: &mut String, pen: Pen) {
+    num(out, pen.width() * PT);
+    out.push_str("w\n");
+    match pen.dash() {
+        Some((d, g)) => {
+            out.push('[');
+            num(out, d * PT);
+            num(out, g * PT);
+            out.push_str("] 0 d\n");
+        }
+        None => out.push_str("[] 0 d\n"),
+    }
+}
+
+fn note(out: &mut String, n: &Note) {
+    // Font size from the capital height: Helvetica capitals are 0.718 em high.
+    let size = n.height / 0.718 * PT;
+    let width = text_width(&n.text) * n.height * PT;
+    let x = n.pos.x * PT
+        - match n.align {
+            Align::Left => 0.0,
+            Align::Center => width * 0.5,
+            Align::Right => width,
+        };
+    out.push_str("BT /F1 ");
+    num(out, size);
+    out.push_str("Tf ");
+    num(out, x);
+    num(out, n.pos.y * PT);
+    let _ = writeln!(out, "Td {} Tj ET", pdf_string(&n.text));
 }
 
 /// The page's content stream.
@@ -110,31 +131,31 @@ fn content(pic: &SheetPicture) -> String {
     let mut pen: Option<Pen> = None;
     for s in &pic.strokes {
         if pen != Some(s.pen) {
-            num(&mut out, s.pen.width() * PT);
-            out.push_str("w\n");
-            match s.pen.dash() {
-                Some((d, g)) => {
-                    out.push('[');
-                    num(&mut out, d * PT);
-                    num(&mut out, g * PT);
-                    out.push_str("] 0 d\n");
-                }
-                None => out.push_str("[] 0 d\n"),
-            }
+            set_pen(&mut out, s.pen);
             pen = Some(s.pen);
         }
         path_ops(&mut out, &s.path);
         out.push_str("S\n");
     }
-    for n in &pic.notes {
-        let size = n.height / 0.718 * PT; // Helvetica capitals are 0.718 em high.
-        let x = n.pos.x * PT - helvetica_width(&n.text) * size;
-        out.push_str("BT /F1 ");
-        num(&mut out, size);
-        out.push_str("Tf ");
-        num(&mut out, x);
-        num(&mut out, n.pos.y * PT);
-        let _ = writeln!(out, "Td {} Tj ET", pdf_string(&n.text));
+    if !pic.dims.is_empty() {
+        set_pen(&mut out, Pen::Dim);
+    }
+    for d in &pic.dims {
+        for p in &d.lines {
+            path_ops(&mut out, p);
+            out.push_str("S\n");
+        }
+        for a in &d.arrows {
+            point(&mut out, a[0]);
+            out.push_str("m\n");
+            point(&mut out, a[1]);
+            out.push_str("l\n");
+            point(&mut out, a[2]);
+            out.push_str("l\nh f\n");
+        }
+    }
+    for n in pic.notes.iter().chain(pic.dims.iter().map(|d| &d.text)) {
+        note(&mut out, n);
     }
     out
 }
@@ -179,7 +200,7 @@ pub fn write_pdf(pic: &SheetPicture, title: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layout::{Note, Stroke};
+    use crate::layout::Stroke;
 
     #[test]
     fn numbers_are_short() {
@@ -193,7 +214,8 @@ mod tests {
 
     #[test]
     fn strings_are_escaped() {
-        assert_eq!(pdf_string("a(b)\\c\u{e9}"), "(a\\(b\\)\\\\c?)");
+        assert_eq!(pdf_string("a(b)\\c\u{e9}\u{2014}"), "(a\\(b\\)\\\\c\\351?)");
+        assert_eq!(pdf_string("\u{d8}8 30\u{b0}"), "(\\3308 30\\260)");
     }
 
     #[test]
@@ -224,8 +246,13 @@ mod tests {
                 path: Path2::Line { a: DVec2::ZERO, b: DVec2::new(25.4, 0.0) },
                 view: None,
             }],
-            notes: vec![Note { pos: DVec2::new(100.0, 10.0), height: 3.5, text: "Scale 1:1".into() }],
-            views: Vec::new(),
+            notes: vec![Note {
+                pos: DVec2::new(100.0, 10.0),
+                height: 3.5,
+                text: "Scale 1:1".into(),
+                align: Align::Left,
+            }],
+            ..SheetPicture::default()
         };
         let bytes = write_pdf(&pic, "test");
         let text = String::from_utf8(bytes).expect("ascii");
