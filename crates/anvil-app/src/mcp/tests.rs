@@ -100,6 +100,7 @@ fn handshake_and_tool_list() {
         "new_assembly",
         "insert_component",
         "add_mate",
+        "check_interference",
         "add_draft",
         "add_rib",
         "combine_bodies",
@@ -626,5 +627,47 @@ fn assembly_with_a_mate() {
     );
     let c = &m["assembly"]["components"][1];
     assert_vec(&c["origin"], [50.0, 0.0, 30.0]);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Issue #66: interference over MCP. Two blocks 5 mm into each other overlap by
+/// 5 x 20 x 30; a third 5 mm away is reported within a 6 mm clearance.
+#[test]
+fn interference_and_clearance() {
+    let mut s = server();
+    let dir = scratch("interference");
+    std::fs::create_dir_all(&dir).expect("dir");
+    block(&mut s);
+    let part = dir.join("block.anvprt");
+    call(&mut s, "save_part", json!({ "path": part }));
+    call(&mut s, "new_assembly", json!({}));
+    call(&mut s, "insert_component", json!({ "path": part }));
+    call(&mut s, "insert_component", json!({ "path": part, "at": [5, 0, 0] }));
+    call(&mut s, "insert_component", json!({ "path": part, "at": [0, 25, 0] }));
+    let r = call(&mut s, "check_interference", json!({}));
+    assert_eq!(r["pairs"], 3, "{r}");
+    let f = r["findings"].as_array().cloned().unwrap_or_default();
+    assert_eq!(f.len(), 1, "{r}");
+    assert_eq!(
+        (f[0]["kind"].as_str(), f[0]["a"].as_str(), f[0]["b"].as_str()),
+        (Some("overlap"), Some("block<1>"), Some("block<2>"))
+    );
+    assert!(f[0]["volume"].as_f64().is_some_and(|v| (v - 3000.0).abs() < 1e-7 * 3000.0), "{r}");
+    assert_eq!(f[0]["exact"], true);
+    let r = call(&mut s, "check_interference", json!({ "clearance": 6, "components": ["block<3>"] }));
+    let f = r["findings"].as_array().cloned().unwrap_or_default();
+    assert_eq!(r["pairs"], 2, "{r}");
+    assert_eq!(f.len(), 2, "{r}");
+    for x in &f {
+        assert_eq!(x["kind"], "clearance");
+        assert!(close(&x["distance"], 5.0), "{x}");
+    }
+    // The panel shows the last result.
+    let st = call(&mut s, "get_state", json!({}));
+    assert_eq!(
+        st["assembly"]["interference"]["report"]["findings"].as_array().map(Vec::len),
+        Some(2),
+        "{st}"
+    );
     let _ = std::fs::remove_dir_all(dir);
 }

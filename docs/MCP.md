@@ -4,7 +4,7 @@
 Claude Code, Cursor, Claude Desktop and other MCP clients use it to model parts with no
 window: create or open a part, add sketches, extrusions, revolves, fillets, chamfers,
 shells, holes, patterns, mirrors, drafts and ribs, combine and split bodies, build
-assemblies with mates, change dimensions and variables, measure the body, export STEP or
+assemblies with mates and check them for interference, change dimensions and variables, measure the body, export STEP or
 STL and look at screenshots.
 
 It is built on the [headless harness](AGENT_HARNESS.md), so it never opens a window, takes
@@ -72,6 +72,7 @@ server writes are created as needed.
 | `new_assembly` | `force` | starts a new, empty assembly; save it with `save_part` and a `.anvasm` path |
 | `insert_component` | `path`, `at` `[x, y, z]` | inserts a saved part; the first is fixed at the origin; returns its id and the assembly |
 | `add_mate` | `kind` (`coincident`, `concentric`, `parallel`, `perpendicular`, `tangent`, `distance`, `angle`), `a`, `b` (each `{ "face": [x, y, z] }` or `{ "plane": "front", "component": id or name }`), `value`, `flip`, `align` | constrains two components and solves; a mate that cannot hold with the others is refused and nothing changes; returns the mate id and each component's placement and definition |
+| `check_interference` | `clearance`, `touching`, `hidden`, `components` (ids or names) | checks the open assembly: each pair of components that overlap (with the exact volume, mm³), touch (if `touching`) or are at most `clearance` mm apart (with the distance and closest points), once each; hidden components only if `hidden` |
 | `add_plane` | `from` (`"front"`, `"top"`, `"right"`, a plane's id or name, or `[x, y, z]` on a flat face), `offset`, `flip` | adds a reference plane parallel to `from`; sketch on it with `add_sketch` `on_feature`, or use its id wherever a plane is asked for |
 | `add_draft` | `neutral` (`"front"`, `"top"`, `"right"` or `[x, y, z]` on a flat face), `faces` `[[x, y, z], ...]`, `angle` | tilts the faces by the angle about the neutral plane |
 | `add_rib` | `sketch`, `thickness`, `flip` | grows a wall from the sketch's line until it meets the part, centred on the sketch's plane |

@@ -258,6 +258,9 @@ pub trait Host {
     fn insert_component(&mut self, spec: &InsertSpec) -> Result<u32, String>;
     /// Adds a mate between two components and solves; returns the mate's id.
     fn add_mate(&mut self, spec: &MateSpec) -> Result<u32, String>;
+    /// Checks the open assembly for interference and shows the result in the
+    /// Interference panel; returns the findings (see `docs/SCRIPTING.md`).
+    fn interference(&mut self, spec: &InterferenceSpec) -> Result<serde_json::Value, String>;
     fn set_status(&mut self, text: &str);
 }
 
@@ -375,6 +378,20 @@ pub struct MateSpec {
     pub flip: bool,
     /// aligned, anti-aligned or closest (the default).
     pub align: Option<String>,
+}
+
+/// An interference check from `anvil.interference{...}`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InterferenceSpec {
+    /// Also report pairs at most this far apart (mm).
+    pub clearance: Option<f64>,
+    /// Also report pairs that touch without overlapping.
+    pub touching: bool,
+    /// Check hidden components too.
+    pub hidden: bool,
+    /// Only these components (ids or names): the pairs involving the one given, or the
+    /// pairs among several. Every pair when empty.
+    pub components: Vec<String>,
 }
 
 /// A reference plane from `anvil.plane{...}`: parallel to `from`, `offset` away.
@@ -767,6 +784,7 @@ impl Engine {
             "assembly",
             "insert",
             "mate",
+            "interference",
             "status",
         ];
         let result = self.guarded(|lua| {
@@ -978,6 +996,14 @@ impl Engine {
                     scope.create_function(move |_, t: Table| {
                         let spec = read_mate(&t).map_err(fail)?;
                         h.borrow_mut().add_mate(&spec).map_err(fail)
+                    })?,
+                )?;
+                anvil.set(
+                    "interference",
+                    scope.create_function(move |lua, t: Option<Table>| {
+                        let spec = read_interference(t.as_ref()).map_err(fail)?;
+                        let found = h.borrow_mut().interference(&spec).map_err(fail)?;
+                        lua.to_value(&found)
                     })?,
                 )?;
                 anvil.set(
@@ -1336,6 +1362,23 @@ fn plane_pick(v: Value, what: &str) -> Result<PlanePick, String> {
             "{what}: a plane is \"front\", \"top\", \"right\", a plane feature's id or name, or {{x, y, z}} on a flat face"
         )),
     }
+}
+
+fn read_interference(t: Option<&Table>) -> Result<InterferenceSpec, String> {
+    let what = "anvil.interference";
+    let Some(t) = t else { return Ok(InterferenceSpec::default()) };
+    let clearance = match t.get::<Value>("clearance").map_err(lua_err)? {
+        Value::Nil => None,
+        Value::Integer(i) => Some(i as f64),
+        Value::Number(n) => Some(n),
+        _ => return Err(format!("{what}: clearance is a number of mm")),
+    };
+    Ok(InterferenceSpec {
+        clearance,
+        touching: t.get::<Option<bool>>("touching").map_err(lua_err)?.unwrap_or(false),
+        hidden: t.get::<Option<bool>>("hidden").map_err(lua_err)?.unwrap_or(false),
+        components: names(t, "components", what, false)?,
+    })
 }
 
 fn read_mirror(t: &Table) -> Result<MirrorSpec, String> {

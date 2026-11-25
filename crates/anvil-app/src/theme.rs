@@ -345,6 +345,8 @@ pub enum Icon {
     InsertComponent,
     /// A mate: two faces brought together.
     Mate,
+    /// Interference: two blocks overlapping, the overlap filled.
+    Interference,
     /// A drawing: a sheet with a view on it.
     Drawing,
     /// Exporting a PDF: a sheet with an arrow out of it.
@@ -718,6 +720,11 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             poly(&[(9.5, 2.0), (14.5, 2.0), (14.5, 14.0), (9.5, 14.0)], Color32::TRANSPARENT, ln);
             line((7.0, 8.0), (9.0, 8.0), hi);
             path(&[(7.8, 6.5), (9.0, 8.0), (7.8, 9.5)], hi);
+        }
+        Icon::Interference => {
+            poly(&[(6.5, 6.5), (10.0, 6.5), (10.0, 10.0), (6.5, 10.0)], accent, Stroke::NONE);
+            poly(&[(1.5, 1.5), (10.0, 1.5), (10.0, 10.0), (1.5, 10.0)], Color32::TRANSPARENT, ln);
+            poly(&[(6.5, 6.5), (14.5, 6.5), (14.5, 14.5), (6.5, 14.5)], Color32::TRANSPARENT, ln);
         }
         Icon::Drawing => {
             poly(&[(2.0, 3.0), (14.0, 3.0), (14.0, 13.0), (2.0, 13.0)], Color32::TRANSPARENT, ln);

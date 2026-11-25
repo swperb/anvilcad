@@ -6,8 +6,8 @@ use super::*;
 use crate::keymap::{Matcher, Step};
 use crate::script::{
     self, Action, BlendSpec, CircularSpec, CombineHow, CombineSpec, Depth, DirPick, DraftSpec, Engine,
-    ExtrudeSpec, HoleSpec, Host, InsertSpec, MateSide, MateSpec, MirrorSpec, PatternSpec, PlaneDef,
-    PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec, SketchSpec, SplitSpec,
+    ExtrudeSpec, HoleSpec, Host, InsertSpec, InterferenceSpec, MateSide, MateSpec, MirrorSpec, PatternSpec,
+    PlaneDef, PlanePick, PlaneSpec, RevolveSpec, RibSpec, ShellSpec, SketchSpec, SplitSpec,
 };
 use anvil_model::assembly::{MateEntity, MateRef};
 use anvil_model::mates::{Alignment, MateKind};
@@ -28,6 +28,7 @@ pub const BUILTIN_COMMANDS: &[(&str, &str)] = &[
     ("Insert Component", "Place a part in the assembly"),
     ("Mate", "Add a mate between two components"),
     ("Bill of Materials", "Show the assembly's parts list"),
+    ("Interference", "Find components that overlap, touch or are too close"),
     ("Open", "Open a part, template, STEP or SOLIDWORKS file"),
     ("Save", "Save the part"),
     ("Save As", "Save the part under a new name"),
@@ -198,6 +199,7 @@ impl AnvilApp {
             "New Assembly" => self.request(PendingAction::NewAssembly),
             "Insert Component" => self.insert_component(),
             "Mate" => self.start_mate(),
+            "Interference" => self.open_interference(),
             "Bill of Materials" => {
                 if let Some(s) = &mut self.asm {
                     s.bom = true;
@@ -1387,6 +1389,30 @@ impl Host for AppHost<'_> {
         });
         let before = self.app.doc.clone();
         self.commit_feature(what, before, kind)
+    }
+
+    fn interference(&mut self, spec: &InterferenceSpec) -> Result<serde_json::Value, String> {
+        let what = "anvil.interference";
+        if !self.app.in_assembly() {
+            return Err(format!("{what}: no assembly is open; open one or start one with anvil.assembly()"));
+        }
+        let clearance = match spec.clearance {
+            Some(c) if !(c.is_finite() && c > 0.0) => {
+                return Err(format!("{what}: clearance must be more than 0 mm"));
+            }
+            c => c,
+        };
+        let components =
+            spec.components.iter().map(|c| self.component_named(what, c)).collect::<Result<Vec<_>, _>>()?;
+        let opts = anvil_model::interference::Options {
+            clearance,
+            touching: spec.touching,
+            include_hidden: spec.hidden,
+            components,
+        };
+        let report = self.app.run_interference(&opts).map_err(|e| format!("{what}: {e}"))?;
+        let s = self.app.asm.as_ref().ok_or(format!("{what}: no assembly is open"))?;
+        Ok(super::interference::report_json(&report, &|c| s.component_label(c)))
     }
 
     fn set_status(&mut self, text: &str) {
