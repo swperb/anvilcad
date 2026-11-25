@@ -242,7 +242,9 @@ name = "anvil-drawing"
 version = "0.2.0"
 dependencies = [
  "anvil-brep",
+ "anvil-kernel",
  "anvil-model",
+ "anvil-sketch",
  "glam",
  "serde",
  "serde_json",

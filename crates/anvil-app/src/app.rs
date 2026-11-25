@@ -1430,6 +1430,10 @@ impl AnvilApp {
                     ui.close_menu();
                     self.export_drawing_pdf();
                 }
+                if ui.add_enabled(self.in_drawing(), egui::Button::new("Export DXF...")).clicked() {
+                    ui.close_menu();
+                    self.export_drawing_dxf();
+                }
                 ui.separator();
                 if ui.button("Properties...").clicked() {
                     ui.close_menu();

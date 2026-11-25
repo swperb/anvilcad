@@ -306,7 +306,237 @@ fn part_files_load_to_exact_bodies() {
     assert!(part_bodies(&doc.rebuild()).is_err(), "an empty part has no body");
     let dir = std::env::temp_dir().join(format!("anvil-drawing-load-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("dir");
-    let missing = load_part(&dir.join("nope.anvprt"));
+    let missing = load_part(&dir.join("nope.anvprt"), None);
     assert!(missing.is_err_and(|e| e.0.contains("cannot open the part")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A 40 x 20 plate on the Front plane with an 8 mm hole, extruded 10 deep: its sketch has
+/// a 40 and a 20 length and a diameter. Returns the part and the sketch's id.
+fn plate(width: f64) -> (anvil_model::Document, u32) {
+    use anvil_kernel::v2;
+    use anvil_model::{
+        BodyOp, CustomProperty, Dim, EndCondition, ExtrudeFeature, PlaneRef, PropertyKind, SketchFeature,
+    };
+    use anvil_sketch::{Constraint, Geom, ORIGIN};
+    let mut doc = anvil_model::Document::new();
+    let mut sf = SketchFeature::new(PlaneRef::Front);
+    let s = &mut sf.sketch;
+    let l = s.add_rectangle(v2(0.0, 0.0), v2(width, 20.0));
+    let Some(Geom::Line { a, .. }) = s.entities.get(l[0]).map(|e| e.geom) else { unreachable!() };
+    s.add_constraint(Constraint::Coincident { p: a, q: ORIGIN });
+    s.add_constraint(Constraint::Length { line: l[0], value: width });
+    s.add_constraint(Constraint::Length { line: l[1], value: 20.0 });
+    let c = s.add_point(v2(width / 2.0, 10.0));
+    let hole = s.add_circle(c, 4.0);
+    s.add_constraint(Constraint::Diameter { entity: hole, value: 8.0 });
+    let sk = doc.add_feature(FeatureKind::Sketch(sf));
+    doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+        sketch: sk,
+        end: EndCondition::Blind,
+        depth: Dim::Value(10.0),
+        reverse: false,
+        op: BodyOp::Boss,
+        ..Default::default()
+    }));
+    doc.custom_properties =
+        vec![CustomProperty { name: "PartNo".into(), kind: PropertyKind::Text, value: "PL-40".into() }];
+    (doc, sk)
+}
+
+fn drawn(doc: &anvil_model::Document, d: &Drawing) -> (PartData, HashMap<u32, ViewGeometry>) {
+    let part = part_data(doc, d.configuration.as_deref(), "plate").expect("part");
+    let g = project_views(d, &part.bodies, &Progress::new()).expect("views");
+    (part, g)
+}
+
+fn values(d: &Drawing, part: &PartData, g: &HashMap<u32, ViewGeometry>) -> Vec<(ViewRole, String)> {
+    let pic = layout::layout_full(d, g, Some(part), "plate");
+    let mut v: Vec<(ViewRole, String)> = pic
+        .dims
+        .iter()
+        .map(|p| {
+            let dim = d.dimension(p.id).expect("dimension");
+            (d.view(dim.view).expect("view").role, p.text.text.clone())
+        })
+        .collect();
+    v.sort_by(|a, b| (a.0 as u8, &a.1).cmp(&(b.0 as u8, &b.1)));
+    v
+}
+
+#[test]
+fn model_dimensions_match_the_model_and_follow_it() {
+    let (mut doc, sk) = plate(40.0);
+    let mut d = Drawing::standard("plate.anvprt".into(), Sheet::default());
+    let (part, g) = drawn(&doc, &d);
+    for dim in dims::model_dimensions(&d, &part, &g) {
+        d.add_dimension(dim);
+    }
+    // The sketch's lengths and diameter go to the front view, which looks square onto the
+    // Front plane; the depth goes to the top view, which sees it side on.
+    assert_eq!(
+        values(&d, &part, &g),
+        vec![
+            (ViewRole::Front, "20".into()),
+            (ViewRole::Front, "40".into()),
+            (ViewRole::Front, "\u{d8}8".into()),
+            (ViewRole::Top, "10".into()),
+        ]
+    );
+    // The values are what the views measure.
+    let front = d.views[0].id;
+    let (lo, hi) = g[&front].bounds().expect("front");
+    assert!((hi.x - lo.x - 40.0).abs() < EPS && (hi.y - lo.y - 20.0).abs() < EPS);
+    // Inserting again adds nothing.
+    assert!(dims::model_dimensions(&d, &part, &g).is_empty());
+
+    // The part gets wider: the same dimensions now say 60.
+    if let Some(FeatureKind::Sketch(sf)) = doc.features.iter_mut().find(|f| f.id == sk).map(|f| &mut f.kind) {
+        let ci = sf.sketch.constraints.iter().position(|c| c.value() == Some(40.0)).expect("width");
+        sf.sketch.constraints[ci].set_value(60.0);
+    }
+    let (part, g) = drawn(&doc, &d);
+    let v = values(&d, &part, &g);
+    assert!(v.contains(&(ViewRole::Front, "60".into())), "{v:?}");
+    let (lo, hi) = g[&front].bounds().expect("front");
+    assert!((hi.x - lo.x - 60.0).abs() < EPS);
+
+    // A dimension deleted from the sketch is no longer in the model.
+    if let Some(FeatureKind::Sketch(sf)) = doc.features.iter_mut().find(|f| f.id == sk).map(|f| &mut f.kind) {
+        let last = sf.sketch.constraints.len() - 1;
+        sf.delete_constraint(last);
+    }
+    let (part, g) = drawn(&doc, &d);
+    let pic = layout::layout_full(&d, &g, Some(&part), "plate");
+    assert_eq!((pic.dims.len(), pic.dims_missing.len()), (3, 1));
+}
+
+#[test]
+fn a_reference_dimension_measures_the_view_and_no_longer_attaches_when_it_moves() {
+    let (doc, _) = plate(40.0);
+    let mut d = Drawing::standard("plate.anvprt".into(), Sheet::default());
+    let (part, g) = drawn(&doc, &d);
+    let top = d.views.iter().find(|v| v.role == ViewRole::Top).expect("top").id;
+    let found = dims::pickables(&g[&top]);
+    // The top view of the plate: a 40 x 10 rectangle; pick its long edge.
+    let edge = found.lines.iter().copied().find(|(a, b)| (a.distance(*b) - 40.0).abs() < EPS).expect("edge");
+    let mid = (edge.0 + edge.1) * 0.5;
+    let pick = dims::nearest(&found, mid + DVec2::new(0.0, 0.01), 0.5).expect("picked");
+    let o = d.view(top).map(|v| v.role.orientation(d.sheet.projection)).expect("orientation");
+    let dim = dims::reference_dimension(top, o, &[pick], mid + DVec2::new(0.0, 15.0)).expect("dimension");
+    let id = d.add_dimension(dim);
+    let pic = layout::layout_full(&d, &g, Some(&part), "plate");
+    let p = pic.dims.iter().find(|p| p.id == id).expect("drawn");
+    assert_eq!((p.text.text.as_str(), p.dangling), ("(40)", false));
+    assert_eq!(p.arrows.len(), 2);
+    // Saved and read back, it is the same.
+    let back = Drawing::from_json(&d.to_json().expect("json")).expect("read");
+    assert_eq!(back, d);
+
+    // The plate gets wider: that edge is gone, so the dimension no longer attaches and is
+    // left out of what is printed.
+    let (doc, _) = plate(50.0);
+    let (part, g) = drawn(&doc, &d);
+    let pic = layout::layout_full(&d, &g, Some(&part), "plate");
+    assert!(pic.dims.iter().any(|p| p.id == id && p.dangling));
+    assert!(!pic.for_output().dims.iter().any(|p| p.id == id));
+}
+
+fn title_texts(d: &Drawing, part: &PartData) -> Vec<String> {
+    layout::layout_full(d, &HashMap::new(), Some(part), "plate").notes.into_iter().map(|n| n.text).collect()
+}
+
+#[test]
+fn the_title_block_follows_the_part_properties_and_configuration() {
+    use anvil_model::{CustomProperty, PropertyKind};
+    let (mut doc, _) = plate(40.0);
+    let mut d = Drawing::standard("plate.anvprt".into(), Sheet::default());
+    let part = part_data(&doc, None, "plate").expect("part");
+    let t = title_texts(&d, &part);
+    assert!(t.contains(&"PL-40".to_string()), "{t:?}");
+    assert!(
+        t.contains(&"1:1".to_string())
+            && t.contains(&"First angle".to_string())
+            && t.contains(&"A3".to_string())
+    );
+    assert!(t.contains(&"Default".to_string()), "the configuration's name: {t:?}");
+    let pic = layout::layout_full(&d, &HashMap::new(), Some(&part), "plate");
+    assert_eq!(pic.title_missing, ["Description", "Revision", "DrawnBy"]);
+
+    // Changing the property changes the title block.
+    doc.custom_properties[0].value = "PL-41".into();
+    let part = part_data(&doc, None, "plate").expect("part");
+    let t = title_texts(&d, &part);
+    assert!(t.contains(&"PL-41".to_string()) && !t.contains(&"PL-40".to_string()), "{t:?}");
+
+    // A configuration's own value wins when the drawing shows that configuration.
+    let id = doc.add_configuration("Long", None).expect("configuration");
+    if let Some(c) = doc.configuration_mut(id) {
+        c.properties.push(CustomProperty {
+            name: "partno".into(),
+            kind: PropertyKind::Text,
+            value: "PL-41L".into(),
+        });
+    }
+    d.configuration = Some("Long".into());
+    d.title_block.fields[0].text = "Plate, {Configuration} ({{{FileName}}})".into();
+    let part = part_data(&doc, d.configuration.as_deref(), "plate").expect("part");
+    let t = title_texts(&d, &part);
+    assert!(t.contains(&"PL-41L".to_string()) && t.contains(&"Plate, Long ({plate})".to_string()), "{t:?}");
+    d.configuration = Some("Gone".into());
+    assert!(
+        part_data(&doc, d.configuration.as_deref(), "plate").is_err_and(|e| e.0.contains("no configuration"))
+    );
+}
+
+#[test]
+fn a_drawing_round_trips_through_dxf() {
+    let (doc, _) = plate(40.0);
+    let mut d = Drawing::standard("plate.anvprt".into(), Sheet::default());
+    for v in &mut d.views {
+        v.display = DisplayStyle::HiddenDashed;
+    }
+    let (part, g) = drawn(&doc, &d);
+    for dim in dims::model_dimensions(&d, &part, &g) {
+        d.add_dimension(dim);
+    }
+    let dir = std::env::temp_dir().join(format!("anvil-drawing-dxf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("plate.dxf");
+    export_dxf(&d, &g, Some(&part), &path, "plate").expect("written");
+    let f = dxf::read_dxf(&std::fs::read_to_string(&path).expect("read")).expect("parsed");
+    let pic = layout::layout_full(&d, &g, Some(&part), "plate").for_output();
+    assert_eq!(f.version.as_deref(), Some("AC1009"));
+    // One entity per sheet line, on its pen's layer.
+    let drawn_on = |layer: &str| {
+        f.entities.iter().filter(|e| e.layer() == layer && e.kind != "TEXT" && e.kind != "SOLID").count()
+    };
+    for pen in [Pen::Visible, Pen::Hidden, Pen::Frame, Pen::Title] {
+        let want = pic.strokes.iter().filter(|s| s.pen == pen).count();
+        assert_eq!(drawn_on(dxf::layer(pen)), want, "{pen:?}");
+    }
+    assert!(drawn_on("HIDDEN") > 0, "the hole is hidden in the side and top views");
+    // The hole in the front view is an exact circle of radius 4 at its true place.
+    let front = pic.views.iter().find(|v| v.id == d.views[0].id).expect("front");
+    let s = d.sheet.scale.factor();
+    let centre = front.origin + DVec2::new(20.0, 10.0) * s;
+    assert!(f.entities.iter().any(|e| e.kind == "CIRCLE"
+        && e.layer() == "VISIBLE"
+        && e.point(10).is_some_and(|c| c.distance(centre) < 1e-5)
+        && e.num(40).is_some_and(|r| (r - 4.0 * s).abs() < 1e-5)));
+    // Dimensions: their text, two arrowheads each, on the dimension layer.
+    let texts: Vec<&str> = f
+        .entities
+        .iter()
+        .filter(|e| e.kind == "TEXT" && e.layer() == "DIMENSIONS")
+        .filter_map(|e| e.get(1))
+        .collect();
+    let mut sorted = texts.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["%%c8", "10", "20", "40"]);
+    let arrows = f.entities.iter().filter(|e| e.kind == "SOLID").count();
+    assert_eq!(arrows, pic.dims.iter().map(|d| d.arrows.len()).sum::<usize>());
+    // And the title block's text.
+    assert!(f.entities.iter().any(|e| e.kind == "TEXT" && e.layer() == "TITLE" && e.get(1) == Some("PL-40")));
     let _ = std::fs::remove_dir_all(&dir);
 }

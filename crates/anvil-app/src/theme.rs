@@ -349,6 +349,10 @@ pub enum Icon {
     Drawing,
     /// Exporting a PDF: a sheet with an arrow out of it.
     ExportPdf,
+    /// Exporting a DXF: a sheet with a circle on it and an arrow out of it.
+    ExportDxf,
+    /// Model dimensions: a block with a dimension over it.
+    ModelDimensions,
     ViewFront,
     ViewTop,
     ViewRight,
@@ -724,6 +728,20 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             path(&[(9.0, 2.0), (3.0, 2.0), (3.0, 14.0), (13.0, 14.0), (13.0, 9.0)], ln);
             line((7.5, 8.5), (14.0, 2.0), hi);
             path(&[(10.0, 2.0), (14.0, 2.0), (14.0, 6.0)], hi);
+        }
+        Icon::ExportDxf => {
+            path(&[(9.0, 2.0), (3.0, 2.0), (3.0, 14.0), (13.0, 14.0), (13.0, 9.0)], ln);
+            painter.circle_stroke(p(7.0, 10.0), 2.0 * s, ln);
+            line((8.5, 7.5), (14.0, 2.0), hi);
+            path(&[(10.0, 2.0), (14.0, 2.0), (14.0, 6.0)], hi);
+        }
+        Icon::ModelDimensions => {
+            poly(&[(3.0, 8.5), (13.0, 8.5), (13.0, 14.0), (3.0, 14.0)], tint, ln);
+            line((3.0, 2.0), (3.0, 7.0), ln);
+            line((13.0, 2.0), (13.0, 7.0), ln);
+            line((3.5, 4.5), (12.5, 4.5), hi);
+            path(&[(5.3, 3.0), (3.5, 4.5), (5.3, 6.0)], hi);
+            path(&[(10.7, 3.0), (12.5, 4.5), (10.7, 6.0)], hi);
         }
         Icon::ViewFront => cube(1),
         Icon::ViewTop => cube(2),

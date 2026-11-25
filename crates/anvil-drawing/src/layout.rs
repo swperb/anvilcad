@@ -4,9 +4,12 @@
 //!
 //! Sheet coordinates are millimetres from the paper's lower-left corner, y up.
 
+use crate::PartData;
+use crate::dims::{self, DimPicture, Pickables, ViewContext};
 use crate::document::{DisplayStyle, Drawing, TangentEdges, View, ViewRole};
 use crate::hlr::{LineKind, Orientation, Path2, ViewGeometry};
 use crate::sheet::{FRAME_MARGIN, Projection, Scale, Sheet, SheetSize};
+use crate::title::{self, TitleBlock, Values};
 use glam::{DVec2, DVec3};
 use std::collections::HashMap;
 
@@ -19,8 +22,12 @@ pub enum Pen {
     Thin,
     /// Hidden edges: thin, dashed.
     Hidden,
-    /// The drawing frame.
+    /// The drawing frame and the title block's outline.
     Frame,
+    /// The title block's inner lines.
+    Title,
+    /// Dimension and extension lines: thin, continuous.
+    Dim,
 }
 
 impl Pen {
@@ -28,7 +35,7 @@ impl Pen {
     pub fn width(self) -> f64 {
         match self {
             Pen::Visible | Pen::Frame => 0.5,
-            Pen::Thin | Pen::Hidden => 0.25,
+            Pen::Thin | Pen::Hidden | Pen::Title | Pen::Dim => 0.25,
         }
     }
 
@@ -49,13 +56,40 @@ pub struct Stroke {
     pub view: Option<u32>,
 }
 
-/// Text on the sheet, its baseline ending at `pos` (right-aligned).
+/// How a note's text sits on its baseline point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+/// Text on the sheet: its baseline starts, is centred on, or ends at `pos`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Note {
     pub pos: DVec2,
-    /// Letter height in millimetres.
+    /// Letter height (of capitals) in millimetres.
     pub height: f64,
     pub text: String,
+    pub align: Align,
+}
+
+/// Width of `text` in Helvetica, in letter heights: near enough to place and fit text.
+pub fn text_width(text: &str) -> f64 {
+    // Helvetica advance widths (per em) over its capital height (0.718 em).
+    text.chars()
+        .map(|c| match c {
+            ' ' | '.' | ',' | ':' | ';' | 'i' | 'l' | 'j' | '!' | '|' | '\'' => 0.278,
+            '(' | ')' | '-' | 'f' | 't' | 'r' | '[' | ']' | '/' => 0.333,
+            '\u{b0}' => 0.4,
+            'm' | 'M' | 'W' => 0.833,
+            'w' => 0.722,
+            '\u{d8}' | 'O' | 'Q' | 'G' | 'C' | 'D' | 'H' | 'N' | 'U' | 'R' => 0.75,
+            c if c.is_ascii_uppercase() => 0.667,
+            _ => 0.556,
+        })
+        .sum::<f64>()
+        / 0.718
 }
 
 /// Where a view landed: the box round its lines, in sheet millimetres.
@@ -75,6 +109,21 @@ pub struct SheetPicture {
     pub strokes: Vec<Stroke>,
     pub notes: Vec<Note>,
     pub views: Vec<PlacedView>,
+    pub dims: Vec<DimPicture>,
+    /// Title-block placeholders the part does not set (only known once the part is in).
+    pub title_missing: Vec<String>,
+    /// Model dimensions no longer in the model, by id.
+    pub dims_missing: Vec<u32>,
+}
+
+impl SheetPicture {
+    /// The picture as it goes to PDF and DXF: dimensions that no longer attach to the model
+    /// are left out, so a stale value is never printed.
+    pub fn for_output(&self) -> SheetPicture {
+        let mut p = self.clone();
+        p.dims.retain(|d| !d.dangling);
+        p
+    }
 }
 
 impl Path2 {
@@ -114,15 +163,29 @@ pub fn view_gap(size: SheetSize) -> f64 {
     (size.size_mm().1 * 0.06).max(12.0)
 }
 
-/// Height kept free along the bottom of the frame for the scale and projection note.
-const NOTE_BAND: f64 = 8.0;
+/// The title block's width, its first row's height and the other rows' height, in
+/// millimetres (after ISO 7200).
+pub const TITLE_WIDTH: f64 = 180.0;
+const TITLE_ROW: f64 = 12.0;
+const FIELD_ROW: f64 = 9.0;
 
-/// The area inside the frame where views go: (lower-left, upper-right).
-fn view_area(size: SheetSize) -> (DVec2, DVec2) {
+/// The title block's height for `fields` fields: the first spans a row, the others go two
+/// to a row.
+pub fn title_height(fields: usize) -> f64 {
+    match fields {
+        0 => 0.0,
+        n => TITLE_ROW + (n - 1).div_ceil(2) as f64 * FIELD_ROW,
+    }
+}
+
+/// The area inside the frame where views go, above the title block: (lower-left,
+/// upper-right).
+fn view_area(size: SheetSize, block: &TitleBlock) -> (DVec2, DVec2) {
     let (w, h) = size.size_mm();
     let pad = 4.0;
+    let bottom = (title_height(block.fields.len()) + pad).max(8.0);
     (
-        DVec2::new(FRAME_MARGIN + pad, FRAME_MARGIN + NOTE_BAND),
+        DVec2::new(FRAME_MARGIN + pad, FRAME_MARGIN + bottom),
         DVec2::new(w - FRAME_MARGIN - pad, h - FRAME_MARGIN - pad),
     )
 }
@@ -215,7 +278,7 @@ pub fn fit_scale(drawing: &Drawing, extent: impl Fn(&View) -> Option<(DVec2, DVe
     let sheet = drawing.sheet;
     let extents: Vec<(u32, ViewRole, (DVec2, DVec2))> =
         drawing.views.iter().filter_map(|v| extent(v).map(|e| (v.id, v.role, e))).collect();
-    let (alo, ahi) = view_area(sheet.size);
+    let (alo, ahi) = view_area(sheet.size, &drawing.title_block);
     let room = ahi - alo;
     let gap = view_gap(sheet.size);
     for scale in crate::sheet::STANDARD_SCALES {
@@ -235,9 +298,32 @@ fn union(placed: &[(u32, DVec2, DVec2, DVec2)]) -> (DVec2, DVec2) {
     })
 }
 
-/// Lays the drawing out with the views that have been projected (`geometry`, by view id).
-/// Views not yet projected, or empty, are left out.
+/// Lays the drawing out with the views that have been projected (`geometry`, by view id),
+/// without the part: no model dimensions, and the title block's part values empty.
 pub fn layout(drawing: &Drawing, geometry: &HashMap<u32, ViewGeometry>) -> SheetPicture {
+    layout_full(drawing, geometry, None, "")
+}
+
+/// Lays the drawing out: views, dimensions and the title block. `part` gives model
+/// dimensions their values and fills the title block; `name` is the drawing's name.
+pub fn layout_full(
+    drawing: &Drawing,
+    geometry: &HashMap<u32, ViewGeometry>,
+    part: Option<&PartData>,
+    name: &str,
+) -> SheetPicture {
+    layout_with(drawing, geometry, part, name, None)
+}
+
+/// [`layout_full`], with each view's [`dims::pickables`] found beforehand (the app keeps
+/// them while the views do not change).
+pub fn layout_with(
+    drawing: &Drawing,
+    geometry: &HashMap<u32, ViewGeometry>,
+    part: Option<&PartData>,
+    name: &str,
+    picks: Option<&HashMap<u32, Pickables>>,
+) -> SheetPicture {
     let sheet: Sheet = drawing.sheet;
     let (w, h) = sheet.size.size_mm();
     let mut pic = SheetPicture { width: w, height: h, ..SheetPicture::default() };
@@ -249,11 +335,7 @@ pub fn layout(drawing: &Drawing, geometry: &HashMap<u32, ViewGeometry>) -> Sheet
         DVec2::new(FRAME_MARGIN, FRAME_MARGIN),
     ];
     pic.strokes.push(Stroke { pen: Pen::Frame, path: Path2::Poly(frame.to_vec()), view: None });
-    pic.notes.push(Note {
-        pos: DVec2::new(w - FRAME_MARGIN - 3.0, FRAME_MARGIN + 3.0),
-        height: 3.5,
-        text: format!("Scale {}   {} projection", sheet.scale, sheet.projection.label().to_lowercase()),
-    });
+    title_block(&mut pic, drawing, part, name);
 
     let extents: Vec<(u32, ViewRole, (DVec2, DVec2))> = drawing
         .views
@@ -267,7 +349,7 @@ pub fn layout(drawing: &Drawing, geometry: &HashMap<u32, ViewGeometry>) -> Sheet
     }
     // Centre the group of views in the area inside the frame.
     let (lo, hi) = union(&placed);
-    let (alo, ahi) = view_area(sheet.size);
+    let (alo, ahi) = view_area(sheet.size, &drawing.title_block);
     let shift = (alo + ahi) * 0.5 - (lo + hi) * 0.5;
     for (id, vlo, vhi, origin) in placed {
         let origin = origin + shift;
@@ -279,7 +361,143 @@ pub fn layout(drawing: &Drawing, geometry: &HashMap<u32, ViewGeometry>) -> Sheet
             }
         }
     }
+
+    let mut found: HashMap<u32, Pickables> = HashMap::new();
+    for d in &drawing.dimensions {
+        let (Some(view), Some(pv)) = (drawing.view(d.view), pic.views.iter().find(|v| v.id == d.view)) else {
+            continue;
+        };
+        let orientation = view.role.orientation(sheet.projection);
+        let g = geometry.get(&d.view);
+        let pk = match (picks.and_then(|m| m.get(&d.view)), g) {
+            (Some(p), _) => Some(p),
+            (None, Some(g)) if d.is_reference() => {
+                Some(&*found.entry(d.view).or_insert_with(|| dims::pickables(g)))
+            }
+            _ => None,
+        };
+        let cx = ViewContext { part, geometry: g, orientation, scale: s };
+        match dims::resolve(d, &cx, pk) {
+            Some(r) => pic.dims.push(dims::picture(d.id, &r, d.is_reference(), pv.origin, s)),
+            None if part.is_some() => pic.dims_missing.push(d.id),
+            None => {}
+        }
+    }
     pic
+}
+
+/// The values the title block's placeholders are filled from.
+pub fn title_values(drawing: &Drawing, part: Option<&PartData>, name: &str) -> Values {
+    let sheet = drawing.sheet;
+    let mut built_in = vec![
+        ("DrawingName", name.to_string()),
+        ("Scale", sheet.scale.to_string()),
+        ("Size", sheet.size.short_label().to_string()),
+        ("Projection", sheet.projection.label().to_string()),
+    ];
+    let mut properties = Vec::new();
+    if let Some(p) = part {
+        built_in.push(("Configuration", p.configuration.clone()));
+        built_in.push(("FileName", p.file_name.clone()));
+        built_in.push(("Material", p.material.clone().unwrap_or_default()));
+        properties = p.properties.clone();
+    }
+    Values { properties, built_in }
+}
+
+/// `text` at letter height `height`, made smaller (down to 2 mm) and then shortened so it
+/// fits `room` millimetres.
+fn fit_text(text: &str, height: f64, room: f64) -> (String, f64) {
+    let w = text_width(text);
+    if w * height <= room {
+        return (text.to_string(), height);
+    }
+    let h = (room / w.max(1e-9)).max(2.0).min(height);
+    if w * h <= room {
+        return (text.to_string(), h);
+    }
+    let mut cut: String = text.to_string();
+    while !cut.is_empty() && text_width(&format!("{cut}...")) * h > room {
+        cut.pop();
+    }
+    (format!("{}...", cut.trim_end()), h)
+}
+
+/// Draws the title block in the frame's lower right corner.
+fn title_block(pic: &mut SheetPicture, drawing: &Drawing, part: Option<&PartData>, name: &str) {
+    let fields = &drawing.title_block.fields;
+    if fields.is_empty() {
+        return;
+    }
+    let (w, _) = drawing.sheet.size.size_mm();
+    let width = TITLE_WIDTH.min(w - 2.0 * FRAME_MARGIN);
+    let height = title_height(fields.len());
+    let (x0, x1, y0) = (w - FRAME_MARGIN - width, w - FRAME_MARGIN, FRAME_MARGIN);
+    let top = y0 + height;
+    let rect =
+        |lo: DVec2, hi: DVec2| Path2::Poly(vec![lo, DVec2::new(hi.x, lo.y), hi, DVec2::new(lo.x, hi.y), lo]);
+    pic.strokes.push(Stroke {
+        pen: Pen::Frame,
+        path: rect(DVec2::new(x0, y0), DVec2::new(x1, top)),
+        view: None,
+    });
+    let values = title_values(drawing, part, name);
+    let mut missing: Vec<String> = Vec::new();
+    let mut cell = |pic: &mut SheetPicture, f: &title::TitleField, lo: DVec2, hi: DVec2, big: f64| {
+        let (text, unknown) = title::fill(&f.text, &|n| values.get(n));
+        for u in unknown {
+            if !missing.iter().any(|m| m.eq_ignore_ascii_case(&u)) {
+                missing.push(u);
+            }
+        }
+        let room = hi.x - lo.x - 3.0;
+        let (label, lh) = fit_text(&f.label, 1.8, room);
+        pic.notes.push(Note {
+            pos: DVec2::new(lo.x + 1.5, hi.y - 1.0 - lh),
+            height: lh,
+            text: label,
+            align: Align::Left,
+        });
+        if !text.is_empty() {
+            let (text, th) = fit_text(&text, big, room);
+            // High enough that descenders clear the cell's bottom line.
+            pic.notes.push(Note {
+                pos: DVec2::new(lo.x + 1.5, lo.y + 0.4 * th),
+                height: th,
+                text,
+                align: Align::Left,
+            });
+        }
+    };
+    cell(pic, &fields[0], DVec2::new(x0, top - TITLE_ROW), DVec2::new(x1, top), 5.0);
+    let xm = (x0 + x1) * 0.5;
+    let mut y = top - TITLE_ROW;
+    let mut lines = vec![(DVec2::new(x0, y), DVec2::new(x1, y))];
+    for (i, f) in fields[1..].iter().enumerate() {
+        let left = i % 2 == 0;
+        if left && i > 0 {
+            y -= FIELD_ROW;
+            lines.push((DVec2::new(x0, y), DVec2::new(x1, y)));
+        }
+        let (lo, hi) = if left {
+            (DVec2::new(x0, y - FIELD_ROW), DVec2::new(xm, y))
+        } else {
+            (DVec2::new(xm, y - FIELD_ROW), DVec2::new(x1, y))
+        };
+        cell(pic, f, lo, hi, 3.5);
+    }
+    if fields.len() > 1 {
+        lines.push((DVec2::new(xm, top - TITLE_ROW), DVec2::new(xm, y0)));
+    }
+    for (a, b) in lines {
+        // The outline already draws the block's bottom edge.
+        if (a.y - y0).abs() > 1e-9 {
+            pic.strokes.push(Stroke { pen: Pen::Title, path: Path2::Line { a, b }, view: None });
+        }
+    }
+    if part.is_some() {
+        pic.title_missing = missing;
+    }
 }
 
 #[cfg(test)]

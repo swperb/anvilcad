@@ -66,6 +66,22 @@ impl SheetSize {
         }
     }
 
+    /// The size's name alone, for the title block: "A3", "ANSI B".
+    pub fn short_label(self) -> &'static str {
+        match self {
+            SheetSize::A4 => "A4",
+            SheetSize::A3 => "A3",
+            SheetSize::A2 => "A2",
+            SheetSize::A1 => "A1",
+            SheetSize::A0 => "A0",
+            SheetSize::AnsiA => "ANSI A",
+            SheetSize::AnsiB => "ANSI B",
+            SheetSize::AnsiC => "ANSI C",
+            SheetSize::AnsiD => "ANSI D",
+            SheetSize::AnsiE => "ANSI E",
+        }
+    }
+
     pub fn is_iso(self) -> bool {
         matches!(self, SheetSize::A4 | SheetSize::A3 | SheetSize::A2 | SheetSize::A1 | SheetSize::A0)
     }
