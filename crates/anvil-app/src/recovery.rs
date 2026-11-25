@@ -14,6 +14,7 @@
 //! (a temporary file renamed over the old one), so a crash during an autosave leaves the
 //! previous copy intact.
 
+use anvil_drawing::Drawing;
 use anvil_model::assembly::Assembly;
 use anvil_model::document::Document;
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,7 @@ pub fn default_recovery_dir() -> Option<PathBuf> {
 pub enum Kind {
     Part,
     Assembly,
+    Drawing,
 }
 
 /// What is autosaved: the document, and the file it came from (if it has been saved).
@@ -72,6 +74,7 @@ pub enum Kind {
 pub enum Content {
     Part(Document),
     Assembly(Assembly),
+    Drawing(Drawing),
 }
 
 /// A recovery file on disk. The document is kept as the text its own format writes, so
@@ -105,6 +108,7 @@ impl Found {
         let untitled = match &self.content {
             Ok(Content::Part(_)) => "Part1",
             Ok(Content::Assembly(_)) => "Assembly1",
+            Ok(Content::Drawing(_)) => "Drawing1",
             // Nothing is known about it but its file.
             Err(_) if self.original.is_none() => {
                 let file =
@@ -153,8 +157,11 @@ pub fn read(path: &Path) -> Found {
         return found;
     }
     found.content = match env.kind {
-        Kind::Part => Document::from_json(&env.document).map(Content::Part),
-        Kind::Assembly => Assembly::from_json(&env.document).map(Content::Assembly),
+        Kind::Part => Document::from_json(&env.document).map(Content::Part).map_err(|e| e.to_string()),
+        Kind::Assembly => {
+            Assembly::from_json(&env.document).map(Content::Assembly).map_err(|e| e.to_string())
+        }
+        Kind::Drawing => Drawing::from_json(&env.document).map(Content::Drawing).map_err(|e| e.to_string()),
     }
     .map_err(|e| format!("The recovered document cannot be opened: {e}."));
     found
@@ -299,10 +306,11 @@ impl Recovery {
 
 fn write(target: &Path, content: &Content, original: Option<PathBuf>) -> Result<(), String> {
     let (kind, document) = match content {
-        Content::Part(d) => (Kind::Part, d.to_json()),
-        Content::Assembly(a) => (Kind::Assembly, a.to_json()),
+        Content::Part(d) => (Kind::Part, d.to_json().map_err(|e| e.to_string())),
+        Content::Assembly(a) => (Kind::Assembly, a.to_json().map_err(|e| e.to_string())),
+        Content::Drawing(d) => (Kind::Drawing, d.to_json().map_err(|e| e.to_string())),
     };
-    let document = document.map_err(|e| e.to_string())?;
+    let document = document?;
     let saved_at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let env = Envelope {
         format: RECOVERY_FORMAT.into(),

@@ -145,6 +145,15 @@ macOS the command-line tools are also inside the app, in
 - Bill of materials: one row per part and configuration, with part number, description
   and quantity
 
+**Drawings**
+- Drawings (`.anvdrw`) of a part on one sheet (ISO A4 to A0 or ANSI A to E) at a scale
+  fitted to the sheet, with first- or third-angle projection: front, top and side views
+  and an isometric, projected from the part's exact geometry with hidden lines removed,
+  dashed or shown as wireframe and tangent edges visible, thin or removed
+- Views update by themselves when the part file is saved, on a background thread with
+  progress and Cancel; Export PDF writes the sheet as vector paths
+  ([spec](docs/re/drawings.md))
+
 **Evaluate**
 - Measure: lengths, radii, arc and chord lengths, areas and perimeters of edges and faces,
   and distances (minimum, centre or maximum for round entities), normal distances and
@@ -184,8 +193,9 @@ macOS the command-line tools are also inside the app, in
 - Part templates (`.anvprtdot`)
 
 **Files**
-- Native part format `.anvprt` and assembly format `.anvasm` (versioned JSON, written
-  atomically; assemblies keep part paths relative to themselves)
+- Native part format `.anvprt`, assembly format `.anvasm` and drawing format `.anvdrw`
+  (versioned JSON, written atomically; assemblies and drawings keep part paths relative to
+  themselves)
 - STEP import (AP203, AP214, AP242 parts): planes, cylinders, cones, spheres, tori and
   B-spline surfaces, in millimetre, inch or metre units. Bodies made of planes,
   cylinders, cones, tori, spheres and B-spline surfaces import as exact solids, so features added to them build exactly

@@ -73,6 +73,9 @@ impl AnvilApp {
 
     /// The open document as autosave writes it, and the file it belongs to.
     fn autosave_content(&self) -> (Content, Option<PathBuf>) {
+        if let Some(d) = &self.drw {
+            return (Content::Drawing(d.drawing.clone()), d.path.clone());
+        }
         match &self.asm {
             Some(s) => (Content::Assembly(s.asm.clone()), s.path.clone()),
             None => (Content::Part(self.doc.clone()), self.path.clone()),
@@ -171,6 +174,7 @@ impl AnvilApp {
                 self.saved = on_disk.unwrap_or_default();
             }
             Ok(Content::Assembly(asm)) => self.restore_assembly(asm, f.original.clone()),
+            Ok(Content::Drawing(d)) => self.restore_drawing(d, f.original.clone()),
             Err(_) => {
                 // Not offered for files that cannot be read; keep it listed.
                 self.autosave.found.insert(i, f);
