@@ -678,6 +678,118 @@ mod tests {
         }
     }
 
+    /// Issue #200: a conic fillet too large for its faces used to be built by the exact
+    /// kernel into a broken body (about 3611 mm³ from this 24000 mm³ block) with no error.
+    /// Now it fails as a circular one does, with the same limit, and the block is
+    /// untouched and still exact.
+    #[test]
+    fn a_conic_fillet_too_large_fails_with_the_limit() {
+        let (mut doc, base) = block();
+        let side = |e: u32| FaceId::side(base, e);
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![EdgeRef::new(side(0), side(1))],
+            radius: Dim::Value(100.0),
+            profile: FilletProfile::ConicRho { rho: Dim::Value(0.5) },
+            tangent_propagation: false,
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(
+            e.cause,
+            "the fillet radius 100 mm does not fit on the faces next to the edge, which allow at most 30 mm"
+        );
+        assert_eq!(e.suggestion, "Try a radius under 30 mm.");
+        assert_eq!(e.edges, vec![EdgeRef::new(side(0), side(1))]);
+        let st = doc.rebuild();
+        assert_eq!(st.errors.len(), 1, "{:?}", st.errors);
+        assert_eq!(st.faceted_from, None);
+        assert!(st.exact.is_some());
+        assert_eq!(st.body.mass_properties().volume, 24000.0);
+    }
+
+    /// The other blends only the exact kernel builds are refused too when too large,
+    /// rather than built into a broken body: the other round profiles with the same limit
+    /// as a circular fillet, the offset and angle-distance chamfers (whose closed-form
+    /// tools check the fit) with the exact kernel's reason.
+    #[test]
+    fn other_exact_only_blends_too_large_leave_the_block_untouched() {
+        let profiles =
+            [FilletProfile::ConicRadius { radius: Dim::Value(150.0) }, FilletProfile::CurvatureContinuous];
+        let chamfers =
+            [ChamferKind::OffsetFace, ChamferKind::AngleDistance { angle: Dim::Value(45.0), flip: false }];
+        let kinds = profiles
+            .into_iter()
+            .map(|profile| {
+                FeatureKind::Fillet(FilletFeature {
+                    edges: vec![],
+                    radius: Dim::Value(100.0),
+                    profile,
+                    tangent_propagation: false,
+                })
+            })
+            .chain(chamfers.into_iter().map(|kind| {
+                FeatureKind::Chamfer(ChamferFeature {
+                    edges: vec![],
+                    distance: Dim::Value(100.0),
+                    kind,
+                    tangent_propagation: false,
+                })
+            }));
+        for mut kind in kinds {
+            let (mut doc, base) = block();
+            let edge = EdgeRef::new(FaceId::side(base, 0), FaceId::side(base, 1));
+            let fillet = matches!(kind, FeatureKind::Fillet(_));
+            match &mut kind {
+                FeatureKind::Fillet(f) => f.edges = vec![edge],
+                FeatureKind::Chamfer(c) => c.edges = vec![edge],
+                _ => unreachable!(),
+            }
+            let id = doc.add_feature(kind.clone());
+            let e = failed(&mut doc, id);
+            if fillet {
+                assert_eq!(
+                    e.cause,
+                    "the fillet radius 100 mm does not fit on the faces next to the edge, which allow at most 30 mm",
+                    "{kind:?}"
+                );
+            }
+            let st = doc.rebuild();
+            assert_eq!(st.faceted_from, None, "{kind:?}");
+            assert_eq!(st.body.mass_properties().volume, 24000.0, "{kind:?}");
+        }
+    }
+
+    /// A conic fillet that fits still builds on the exact kernel. At rho 0.5 the round is
+    /// a parabola, the quadratic Bezier from (r, 0) through the corner to (0, r) across a
+    /// right angle, which leaves a third of the control triangle: r² / 6 of the corner's
+    /// section is cut away along the 20 mm upright edge.
+    #[test]
+    fn a_conic_fillet_that_fits_builds_exactly() {
+        let (mut doc, base) = block();
+        let side = |e: u32| FaceId::side(base, e);
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![EdgeRef::new(side(0), side(1))],
+            radius: Dim::Value(10.0),
+            profile: FilletProfile::ConicRho { rho: Dim::Value(0.5) },
+            tangent_propagation: false,
+        }));
+        let st = doc.rebuild();
+        assert!(st.errors.is_empty(), "{:?}", st.errors);
+        assert_eq!(st.faceted_from, None);
+        assert!(st.exact_features.contains(&id));
+        let fine = anvil_brep::tess::TessParams { chord: 1e-4, max_angle: 0.01 };
+        let v: f64 = st
+            .exact
+            .as_ref()
+            .expect("exact")
+            .iter()
+            .map(|b| {
+                anvil_brep::mass::properties(&anvil_brep::tess::tessellate(b, &fine).expect("tess")).volume
+            })
+            .sum();
+        let want = 24000.0 - 10.0 * 10.0 / 6.0 * 20.0;
+        assert!((v - want).abs() / want < 1e-6, "{v} vs {want}");
+    }
+
     /// A fillet too large for some of its edges names those edges, and the tightest
     /// limit among them. On the 40 x 30 x 20 block a 25 mm round fits the 20 mm upright
     /// edge, between sides 40 and 30 mm wide, but not the top edges above 20 mm sides.

@@ -14,7 +14,7 @@ use crate::document::*;
 use crate::failure::{mm, Cause};
 use crate::kernel::{self, ExactKernel};
 use crate::refgeom::value;
-use anvil_kernel::blend::{blend_edges, EdgeTreatment};
+use anvil_kernel::blend::{blend_edges, check_fit, BlendError, EdgeTreatment};
 use anvil_kernel::build::revolve;
 use anvil_kernel::shell::shell;
 use anvil_kernel::{FaceId, FaceTag, Frame, MassProperties, Polygon, Solid, SurfaceKind, Vec3};
@@ -553,6 +553,15 @@ impl Document {
                     return Ok(());
                 }
                 if f.profile != FilletProfile::Circular {
+                    // Only the exact kernel builds this profile, but a round of any profile
+                    // touches the faces where a ball of its radius would, so the faceted
+                    // kernel can still say whether it fits and how large a round does, as
+                    // it does for a circular fillet (#200).
+                    if let Err(e @ BlendError::TooLarge { .. }) =
+                        check_fit(&st.body, &f.edges, EdgeTreatment::Fillet { radius })
+                    {
+                        return Err(e.into());
+                    }
                     let name_of = |f: u32| self.feature(f).map(|f| f.name.clone()).unwrap_or_default();
                     let what = format!("{} fillets", f.profile.label().to_lowercase());
                     let size = ("radius", radius);

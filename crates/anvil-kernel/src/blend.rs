@@ -91,6 +91,35 @@ pub fn blend_edges(
     t: EdgeTreatment,
     feature: u32,
 ) -> Result<Solid, BlendError> {
+    let (removes, adds) = edge_regions(solid, edges, t, feature, true)?;
+    let mut body = solid.clone();
+    for c in &removes {
+        body = body.subtract(c);
+    }
+    for c in &adds {
+        body = body.union(c);
+    }
+    Ok(body)
+}
+
+/// Checks that a fillet or chamfer fits on the faces next to each of the given edges,
+/// as [`blend_edges`] would, without building it. A fillet whose round is not a circular
+/// arc touches the faces where a ball of its radius would, so it fits exactly when a
+/// circular fillet of the same radius does.
+pub fn check_fit(solid: &Solid, edges: &[EdgeRef], t: EdgeTreatment) -> Result<(), BlendError> {
+    edge_regions(solid, edges, t, 0, false).map(|_| ())
+}
+
+/// The regions to cut from the solid (convex edges) and to add to it (concave edges) for
+/// a blend of `edges`, once every edge is known to fit. With `build` false the fit is
+/// checked and no region is made.
+fn edge_regions(
+    solid: &Solid,
+    edges: &[EdgeRef],
+    t: EdgeTreatment,
+    feature: u32,
+    build: bool,
+) -> Result<(Vec<Solid>, Vec<Solid>), BlendError> {
     if t.size().is_nan() || t.size() <= 0.0 {
         return Err(BlendError::Invalid("the size must be greater than zero".into()));
     }
@@ -125,7 +154,7 @@ pub fn blend_edges(
         let (sa, sb) = (solid.polygons[segs[0].1].tag.surface, solid.polygons[segs[0].2].tag.surface);
         let (region, convex) = match (sa, sb) {
             (SurfaceKind::Plane, SurfaceKind::Plane) => {
-                let regions = match linear_regions(solid, &segs, t, feature, base) {
+                let regions = match linear_regions(solid, &segs, t, feature, base, build) {
                     Err(Fit::TooLarge(limit)) => {
                         too_large.push((*e, limit));
                         continue;
@@ -147,13 +176,14 @@ pub fn blend_edges(
                 let plane_first = matches!(sa, SurfaceKind::Plane);
                 let segs: Vec<_> =
                     segs.iter().map(|&(s, a, b)| if plane_first { (s, a, b) } else { (s, b, a) }).collect();
-                match circular_region(solid, &segs, t, feature, base) {
+                match circular_region(solid, &segs, t, feature, base, build) {
                     Err(Fit::TooLarge(limit)) => {
                         too_large.push((*e, limit));
                         continue;
                     }
                     Err(Fit::Failed(err)) => return Err(err),
-                    Ok(r) => r,
+                    Ok(None) => continue,
+                    Ok(Some(r)) => r,
                 }
             }
             _ => {
@@ -176,14 +206,7 @@ pub fn blend_edges(
             limit,
         });
     }
-    let mut body = solid.clone();
-    for c in &removes {
-        body = body.subtract(c);
-    }
-    for c in &adds {
-        body = body.union(c);
-    }
-    Ok(body)
+    Ok((removes, adds))
 }
 
 /// Why one edge could not be blended: too wide for its faces, allowing at most the size
@@ -249,13 +272,15 @@ fn corner_loop(
     Loop2::new(segs)
 }
 
-/// Straight edges between two planar faces. Returns (region, convex) per run of the edge.
+/// Straight edges between two planar faces. Returns (region, convex) per run of the edge,
+/// or nothing when `build` is false and the blend fits.
 fn linear_regions(
     solid: &Solid,
     segs: &[([Vec3; 2], usize, usize)],
     t: EdgeTreatment,
     feature: u32,
     base: u32,
+    build: bool,
 ) -> Result<Vec<(Solid, bool)>, Fit> {
     let (pa, pb) = (&solid.polygons[segs[0].1], &solid.polygons[segs[0].2]);
     let (na, nb) = (pa.normal, pb.normal);
@@ -340,6 +365,9 @@ fn linear_regions(
         }
         return Err(Fit::TooLarge(most * per));
     }
+    if !build {
+        return Ok(Vec::new());
+    }
 
     // Cross-section frame: x along face a, z along the edge.
     let to2 = |v: Vec3, x: Vec3, y: Vec3| v2(v.dot(x), v.dot(y));
@@ -391,13 +419,16 @@ fn face_contains(solid: &Solid, face: FaceId, n: Vec3, along: Vec3, p: Vec3) -> 
 }
 
 /// Circular edge between a plane (first polygon of each pair) and a cylinder (second).
+/// Returns the region and whether the edge is convex, or nothing when `build` is false
+/// and the blend fits.
 fn circular_region(
     solid: &Solid,
     segs: &[([Vec3; 2], usize, usize)],
     t: EdgeTreatment,
     feature: u32,
     base: u32,
-) -> Result<(Solid, bool), Fit> {
+    build: bool,
+) -> Result<Option<(Solid, bool)>, Fit> {
     let (pp, pc) = (&solid.polygons[segs[0].1], &solid.polygons[segs[0].2]);
     let SurfaceKind::Cylinder { axis_origin: o, axis_dir, radius: big_r } = pc.tag.surface else {
         unreachable!()
@@ -450,6 +481,9 @@ fn circular_region(
     if sigma_r < 0.0 && size >= big_r - 1e-9 {
         return Err(Fit::TooLarge(big_r));
     }
+    if !build {
+        return Ok(None);
+    }
 
     // Angular extent of the edge around the axis.
     let u_ref = dir.any_perpendicular();
@@ -496,7 +530,7 @@ fn circular_region(
     let lp = corner_loop(k, a, b, center, v2(0.0, plane_up), v2(wall_out, 0.0), lift, base);
     let region = revolve(&[Profile::new(lp, vec![])], &frame, Vec2::ZERO, v2(0.0, 1.0), span, feature)
         .map_err(|e| BlendError::Invalid(e.to_string()))?;
-    Ok((region, convex))
+    Ok(Some((region, convex)))
 }
 
 #[cfg(test)]

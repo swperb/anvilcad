@@ -805,6 +805,7 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
             }
         }
         if !split.contains(&true) {
+            roller.check_fit(&ts, &sections, blend)?;
             let mut contacts: Vec<usize> = roller.legs.iter().flat_map(|l| [l.fa, l.fb]).collect();
             contacts.sort_unstable();
             contacts.dedup();
@@ -853,6 +854,41 @@ pub fn rolling_run_tool(solid: &Solid, edges: &[EdgeId], blend: Blend, tag_base:
         }
         let sections2 = fresh;
         (ts, sections, rates, fits) = (ts2, sections2, rates2, fits2);
+    }
+}
+
+impl Roller<'_> {
+    /// Checks that the blend fits on the faces, as the closed-form tools must: where it
+    /// meets each face at the middle of every leg has to lie on that face. Without this a
+    /// blend wider than a face cuts or adds material far from the edge (issue #200).
+    /// `ts` and `sections` are the run's sections once refined: each middle is solved from
+    /// the section nearest it, as one solved from a guess far off can land on another
+    /// solution of the faces' surfaces.
+    fn check_fit(&self, ts: &[f64], sections: &[Section], blend: Blend) -> Result<()> {
+        for (k, leg) in self.legs.iter().enumerate() {
+            let t = k as f64 + 0.5;
+            let Some(near) = ts
+                .iter()
+                .zip(sections)
+                .min_by(|x, y| (x.0 - t).abs().total_cmp(&(y.0 - t).abs()))
+                .map(|x| *x.1)
+            else {
+                continue;
+            };
+            let s = self
+                .section(t, &near)
+                .ok_or_else(|| KernelError::Unsupported("the ball cannot roll along this edge".into()))?;
+            if !boolean::face_contains(self.solid, leg.fa, s.a)
+                || !boolean::face_contains(self.solid, leg.fb, s.b)
+            {
+                return Err(KernelError::InvalidInput(format!(
+                    "a {} of {} does not fit on the faces next to this edge",
+                    blend.name(),
+                    self.radius
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
