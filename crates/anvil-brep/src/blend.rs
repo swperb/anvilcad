@@ -92,7 +92,7 @@ impl Blend {
         }
     }
 
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         if matches!(self, Blend::Fillet(_) | Blend::Profiled { .. }) { "fillet" } else { "chamfer" }
     }
 
@@ -817,6 +817,28 @@ mod tests {
         let rim = edge(&cyl, DVec3::new(3.0, 0.0, 5.0));
         assert!(blend_edge(&cyl, rim, Blend::Fillet(1.0), 1, 0).is_ok());
         assert!(matches!(blend_edge(&cyl, rim, Blend::Fillet(3.5), 1, 0), Err(KernelError::InvalidInput(_))));
+    }
+
+    /// Issue #200: a round swept by the rolling ball (every profile other than a circular
+    /// arc) is refused when it would not fit on the faces, as a closed-form tool is,
+    /// rather than cut into the part far from the edge. One that fits is still made.
+    #[test]
+    fn a_profiled_round_too_large_is_refused() {
+        let c = cube(10.0);
+        let e = edge(&c, DVec3::new(5.0, 0.0, 10.0));
+        for profile in [Profile::ConicRho(0.5), Profile::ConicRadius(30.0), Profile::CurvatureContinuous] {
+            let blend = Blend::Profiled { radius: 20.0, profile };
+            match blend_edge(&c, e, blend, 1, 0) {
+                Err(KernelError::InvalidInput(m)) => {
+                    assert_eq!(m, "a fillet of 20 does not fit on the faces next to this edge", "{profile:?}")
+                }
+                other => panic!("{profile:?}: {other:?}"),
+            }
+        }
+        // Rho 0.5 is a parabola, cutting r² / 6 from each section of the 10 mm edge.
+        let fits = Blend::Profiled { radius: 3.0, profile: Profile::ConicRho(0.5) };
+        let v = fine_volume(&blend_edge(&c, e, fits, 1, 0).expect("fits"));
+        assert!((v - (1000.0 - 1.5 * 10.0)).abs() < 1e-6 * 1000.0, "{v}");
     }
 
     /// Volume finely tessellated, each solid checked valid and watertight.
