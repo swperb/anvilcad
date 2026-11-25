@@ -153,6 +153,19 @@ mod tests {
     }
 
     #[test]
+    fn a_partial_ellipse_is_open_at_its_ends_and_a_whole_one_is_closed() {
+        let mut s = Sketch::new();
+        s.add_ellipse_sized(v2(0.0, 0.0), 20.0, 10.0, 0.0).expect("ellipse");
+        assert!(s.open_ends().is_empty());
+        let arc = s
+            .add_elliptic_arc(v2(100.0, 0.0), 20.0, 10.0, 0.0, v2(110.0, 0.0), v2(90.0, 0.0))
+            .expect("partial ellipse");
+        let (start, end) = arc.ends.expect("a partial ellipse has ends");
+        let ends: Vec<_> = s.open_ends().into_iter().map(|p| s.pos(p)).collect();
+        assert_eq!(ends, vec![s.pos(start), s.pos(end)]);
+    }
+
+    #[test]
     fn construction_geometry_ignored() {
         let mut s = Sketch::new();
         s.add_rectangle(v2(0.0, 0.0), v2(10.0, 10.0));
