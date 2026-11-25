@@ -68,6 +68,8 @@ pub const BODY_COLOR: [f32; 3] = [0.72, 0.75, 0.80];
 pub const HOVER_COLOR: [f32; 3] = [0.95, 0.75, 0.35];
 pub const SELECT_COLOR: [f32; 3] = [0.30, 0.60, 1.00];
 pub const EDGE_COLOR: [f32; 3] = [0.08, 0.08, 0.10];
+/// Faces a failed feature names: a red that reads on the body in both themes.
+pub const FAILED_COLOR: [f32; 3] = [0.85, 0.22, 0.20];
 
 /// CPU-side geometry waiting to be uploaded.
 #[derive(Default)]
@@ -82,6 +84,7 @@ impl SceneData {
         edges: &[[Vec3; 2]],
         hover: Option<FaceId>,
         selected: &[FaceId],
+        failed: &[FaceId],
         colors: &crate::theme::SceneColors,
     ) -> SceneData {
         let mut tris = Vec::with_capacity(mesh.indices.len() * 27);
@@ -89,7 +92,9 @@ impl SceneData {
             for &i in t {
                 let i = i as usize;
                 let face = mesh.faces[i];
-                let c = if selected.contains(&face) {
+                let c = if failed.contains(&face) {
+                    colors.failed
+                } else if selected.contains(&face) {
                     colors.select
                 } else if hover == Some(face) {
                     colors.hover

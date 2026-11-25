@@ -17,7 +17,11 @@ pub enum ShellError {
     /// The wall is too thick for the part: the cavity would turn inside out.
     TooThick,
     /// The wall is thicker than the radius of a curved region, so its offset folds over.
-    FoldsOver,
+    /// `faces` are the curved faces whose offset folds. No size is given: a faceted
+    /// round folds at about half its radius, so its radius would not be a safe limit.
+    FoldsOver {
+        faces: Vec<FaceId>,
+    },
 }
 
 impl std::fmt::Display for ShellError {
@@ -25,7 +29,7 @@ impl std::fmt::Display for ShellError {
         match self {
             ShellError::Invalid(s) => write!(f, "{s}"),
             ShellError::TooThick => write!(f, "the wall thickness is too large for this part"),
-            ShellError::FoldsOver => {
+            ShellError::FoldsOver { .. } => {
                 write!(f, "the wall is thicker than the radius of a curved region (such as a small fillet)")
             }
         }
@@ -132,7 +136,7 @@ pub fn shell(solid: &Solid, remove: &[FaceId], thickness: f64, feature: u32) -> 
     // Offset triangles that turned over, which means the offset surface crossed itself,
     // split by whether they come from a curved face (issue #173: a wall simply thicker than
     // the part turns flat faces over too, and is not a curved region's fault).
-    let (mut flipped_curved, mut flipped_flat) = (false, false);
+    let (mut flipped_curved, mut flipped_flat) = (BTreeSet::new(), false);
     for p in &solid.polygons {
         let tag = FaceTag {
             id: FaceId { feature, index: index_of[&p.tag.id] },
@@ -149,7 +153,7 @@ pub fn shell(solid: &Solid, remove: &[FaceId], thickness: f64, feature: u32) -> 
                     if p.tag.surface == SurfaceKind::Plane {
                         flipped_flat = true;
                     } else {
-                        flipped_curved = true;
+                        flipped_curved.insert(p.tag.id);
                     }
                 }
                 cavity.push(t);
@@ -157,8 +161,8 @@ pub fn shell(solid: &Solid, remove: &[FaceId], thickness: f64, feature: u32) -> 
         }
     }
     // The result would be wrong, so refuse, blaming a curved region only when one folded.
-    if flipped_curved {
-        return Err(ShellError::FoldsOver);
+    if !flipped_curved.is_empty() {
+        return Err(ShellError::FoldsOver { faces: flipped_curved.into_iter().collect() });
     }
     if flipped_flat {
         return Err(ShellError::TooThick);
@@ -259,7 +263,13 @@ mod tests {
             5,
         )
         .unwrap();
-        assert_eq!(shell(&rounded, &[top], 3.0, 7).err(), Some(ShellError::FoldsOver));
+        // The four rounds fold, and nothing else is blamed.
+        let rounds: Vec<FaceId> = (0..4).map(|k| FaceId { feature: 5, index: 8 * k + 4 }).collect();
+        for r in &rounds {
+            assert!(rounded.polygons.iter().any(|p| p.tag.id == *r
+                && matches!(p.tag.surface, SurfaceKind::Cylinder { radius, .. } if (radius - 2.0).abs() < 1e-9)));
+        }
+        assert_eq!(shell(&rounded, &[top], 3.0, 7).err(), Some(ShellError::FoldsOver { faces: rounds }));
         // A wall well inside the rounds is fine. (The faceted rounds fold from about 1 mm,
         // before a true R2 curve would; the exact kernel shells them properly.)
         assert!(shell(&rounded, &[top], 0.5, 7).is_ok());

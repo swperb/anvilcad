@@ -97,7 +97,7 @@ pub const THEME_COLORS: &[&str] = &[
 ];
 
 /// Model colours `anvil.theme` accepts directly (both themes).
-pub const MODEL_COLORS: &[&str] = &["body", "hover_face", "selected_face", "edge"];
+pub const MODEL_COLORS: &[&str] = &["body", "hover_face", "selected_face", "edge", "failed_face"];
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Options {
@@ -125,7 +125,7 @@ pub struct Options {
 pub struct ThemeOverrides {
     pub light: Vec<(String, Color32)>,
     pub dark: Vec<(String, Color32)>,
-    /// body, hover_face, selected_face, edge, as linear 0..1 RGB.
+    /// body, hover_face, selected_face, edge, failed_face, as linear 0..1 RGB.
     pub model: Vec<(String, [f32; 3])>,
 }
 

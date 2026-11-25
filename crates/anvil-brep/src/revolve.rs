@@ -3,12 +3,13 @@
 //! A profile of lines and arcs sweeps surfaces the kernel already has: a line across
 //! the axis sweeps a plane, one along it a cylinder, a slanted one a cone (pointed where
 //! it meets the axis); an arc centred on the axis sweeps a sphere, any other arc a
-//! torus. The solid is built like an extrusion whose path is a circle: every profile
+//! torus (a horn or spindle torus, pinched to a point on the axis, when its circle
+//! reaches the axis; see issue #145). The solid is built like an extrusion whose path is a circle: every profile
 //! vertex off the axis sweeps a circle (an arc when the turn is partial), and a partial
 //! turn has the profile itself as a flat start and end cap. Points on the axis stay
 //! put. A full turn closes the periodic faces (cylinders, cones, tori) with a seam at
-//! the profile; planes, spheres and pointed cones are laid out without one and are
-//! bounded by their circles alone.
+//! the profile; planes, spheres, pointed cones and pinched tori are laid out without one
+//! and are bounded by their circles alone.
 
 use crate::extrude::segment_curve;
 use crate::geom::{Curve, Frame, Surface};
@@ -318,11 +319,42 @@ fn meridian_segment(s: &Segment, to_q: &dyn Fn(DVec2) -> DVec2, full: bool, on_a
                 v.y.atan2(v.x)
             };
             let (start, sweep) = (image(start), if mirrored { -sweep } else { sweep });
-            let c = DVec2::new(c.x, if c.y.abs() <= on_axis { 0.0 } else { c.y });
+            // A centre on the axis sweeps a sphere, and a circle touching the axis a horn
+            // torus: both are snapped exactly, as points on the axis are.
+            let cy = if c.y.abs() <= on_axis {
+                0.0
+            } else if (c.y - radius).abs() <= on_axis {
+                radius
+            } else {
+                c.y
+            };
+            let c = DVec2::new(c.x, cy);
             let arc = |start: f64, sweep: f64| Segment::Arc { center: c, radius, start, sweep };
             let ends_on_axis = |seg: &Segment| seg.start().y.abs() <= on_axis && seg.end().y.abs() <= on_axis;
             let whole = arc(start, sweep);
-            let pole_to_pole = full && c.y == 0.0 && ends_on_axis(&whole);
+            if c.y == radius {
+                // A horn torus: its circle touches the axis at angle -pi/2, where a face
+                // must end (its layout is about that pole). Split there, and a whole
+                // circle is split there and half way round.
+                let pole = -0.5 * PI;
+                if sweep.abs() >= TAU - 1e-9 {
+                    let half = 0.5 * sweep;
+                    return vec![arc(pole, half), arc(pole + half, half)];
+                }
+                let rel = if sweep >= 0.0 {
+                    (pole - start).rem_euclid(TAU)
+                } else {
+                    (start - pole).rem_euclid(TAU)
+                };
+                if rel > 1e-9 && rel < sweep.abs() - 1e-9 {
+                    let first = rel * sweep.signum();
+                    return vec![arc(start, first), arc(start + first, sweep - first)];
+                }
+                return vec![whole];
+            }
+            // An arc from the axis back to it: on a sphere (for a full turn, which needs a
+            // boundary) or a spindle torus (whose faces may hold one pole each).
+            let pole_to_pole = ends_on_axis(&whole) && if c.y == 0.0 { full } else { c.y.abs() < radius };
             if sweep.abs() >= TAU - 1e-9 || pole_to_pole {
                 vec![arc(start, 0.5 * sweep), arc(start + 0.5 * sweep, 0.5 * sweep)]
             } else {
@@ -347,7 +379,7 @@ fn midpoint_and_tangent(s: &Segment) -> (DVec2, DVec2) {
 
 /// Whether a surface's layout wraps round its axis (so a full turn needs a seam).
 fn periodic(s: &Surface) -> bool {
-    matches!(s, Surface::Cylinder { .. } | Surface::Torus { .. } | Surface::Cone { apex: false, .. })
+    s.u_period().is_some()
 }
 
 /// How far an edge reaches in a surface's layout (the larger circle bounds the face).
@@ -406,13 +438,20 @@ fn side_surface(axis: &Frame, seg: &Segment, theta: f64, full: bool, on_axis: f6
                 };
                 return Ok(Surface::Sphere { frame, radius });
             }
-            if center.y <= radius + tol::LINEAR {
+            // A circle that touches the axis is snapped to it (see `meridian_segment`);
+            // one that passes closer than the tolerance without touching would leave a
+            // hole too small to model.
+            let gap = center.y - radius;
+            if gap != 0.0 && gap.abs() < tol::LINEAR {
                 return Err(KernelError::Unsupported(
-                    "an arc whose circle reaches the axis sweeps a self-intersecting torus".into(),
+                    "an arc whose circle passes the axis closer than the tolerance without touching it"
+                        .into(),
                 ));
             }
             // Tube angle phi of the arc's middle: distance from the axis is
-            // major + minor cos(phi), height minor sin(phi).
+            // major + minor cos(phi), height minor sin(phi). A circle that reaches the
+            // axis sweeps a horn or spindle torus, its centre (on either side of the
+            // axis) giving a signed `major`.
             let m = start + 0.5 * sweep;
             let v_mid = 0.5 * PI - m;
             let v_mid = (v_mid + PI).rem_euclid(TAU) - PI;

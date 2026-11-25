@@ -78,7 +78,7 @@ sketch tool on the command bar and in the sketch panel, count as one.
 
 | Command | Fields | Reply |
 |---|---|---|
-| `state` | | `state`: title, path, unsaved changes, status bar, active tab, selection, features (id, name, kind, suppressed, rolled back, rebuild error as a message, `error_info` with its `feature`, `cause`, `suggestion` and technical `details`, sketch status), body (volume, surface area, centroid, bounds, open edges, whether it is exact, triangle count), `bodies` (by name, as scripts refer to them: the feature that last changed each, with `[n]` when it left several), material, variables, configurations (each one's name, parent and whether it is active) and configured parameters with their value in each configuration, the open sketch (tool, solver status, degrees of freedom, counts), the open feature editor, open windows, the message dialog, the pending confirmation, undo and redo depth, the viewport rectangle, and `assembly` when an assembly is open (each component's name, path, placement and how well it is defined, each mate's state, and the Mate panel's picks) |
+| `state` | | `state`: title, path, unsaved changes, status bar, active tab, selection, features (id, name, kind, suppressed, rolled back, rebuild error as a message, `error_info` with its `feature`, `cause`, `suggestion`, technical `details`, and the `edges` and `faces` it failed on, sketch status), body (volume, surface area, centroid, bounds, open edges, whether it is exact, triangle count), `bodies` (by name, as scripts refer to them: the feature that last changed each, with `[n]` when it left several), material, variables, configurations (each one's name, parent and whether it is active) and configured parameters with their value in each configuration, the open sketch (tool, solver status, degrees of freedom, counts), the open feature editor, open windows, the message dialog, the pending confirmation, undo and redo depth, the viewport rectangle, and `assembly` when an assembly is open (each component's name, path, placement and how well it is defined, each mate's state, and the Mate panel's picks) |
 | `document` | | `document`: the whole part, as saved in `.anvprt` |
 | `widgets` | `filter`, `role` | `widgets`: each one's `label` or `value`, `role`, `rect`, `center`, and `disabled`, `checked` and `selected` where they apply |
 | `find` | `label`, `role`, `index` | `widget` |
@@ -94,7 +94,7 @@ sketch tool on the command bar and in the sketch panel, count as one.
 | `recovery` | `dir` | `found`: turns autosave on with its recovery files in `dir` (never the user's data folder unless you name it) and lists work a crash left there; the app's Recover window shows it |
 | `autosave` | | `path`, `written`: writes a copy of unsaved work now |
 | `file_dialog` | `path`, or `null` to cancel; answers the next dialog | |
-| `open` | `path` (part, template, assembly or STEP file) | |
+| `open` | `path` (part, template, assembly, drawing or STEP file) | |
 | `sample`, `new` | | |
 | `frames` | `n` | |
 | `wait` | `seconds` of virtual time, for example for hover tooltips | |
@@ -109,7 +109,8 @@ sketch tool on the command bar and in the sketch panel, count as one.
 `modifiers` is a list of `cmd`, `ctrl`, `shift` and `alt`. `cmd` means Command on macOS
 and Ctrl elsewhere, so `{"cmd":"key","key":"Z","modifiers":["cmd"]}` is Undo on every
 platform. Each input command keeps running frames until the UI settles, so the next
-`state` already shows its effect.
+`state` already shows its effect. Settling also waits for a drawing's views to finish
+projecting; `frames` does not, so a screenshot after `frames` can show the progress.
 
 ### A session
 

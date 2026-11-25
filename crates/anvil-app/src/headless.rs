@@ -261,6 +261,7 @@ impl Headless {
     /// Runs frames until egui stops asking for one straight away (animations finished,
     /// layout settled), at least two so a change is laid out and drawn.
     pub fn settle(&mut self) {
+        self.app.finish_background_work();
         for i in 0..SETTLE_FRAMES {
             if !self.step(Vec::new()) && i >= 1 {
                 break;

@@ -119,7 +119,7 @@ fn face_integral(
     let periods = (
         s.u_period(),
         match s {
-            Surface::Torus { minor, .. } => Some(std::f64::consts::TAU * minor),
+            Surface::Torus { minor, .. } if !s.is_pinched_torus() => Some(std::f64::consts::TAU * minor),
             _ => None,
         },
     );
@@ -238,6 +238,29 @@ fn face_integral(
     let period = if along_v { None } else { s.u_period() };
     let start = loops.iter().flatten().map(|(uv, _)| along(*uv)).fold(f64::INFINITY, f64::min);
     let at = |x: f64, other: f64| if along_v { DVec2::new(other, x) } else { DVec2::new(x, other) };
+    // A torus laid out about its pole (at the layout's origin) is pointed there, so its
+    // densities have a kink at the origin that quadrature along straight lines past it
+    // cannot follow. In polar form, Green's theorem is `∬ g dx dy = ∮ F dα` with `F` the
+    // integral of `g σ` out along the ray at angle `α` from the pole to the loop, and
+    // `g σ` is smooth along each ray.
+    if s.is_pinched_torus() {
+        let mut sum = Densities::default();
+        for (uv, dw) in loops.iter().flatten() {
+            let r2 = uv.length_squared();
+            if r2 <= (1e-12 * size).powi(2) {
+                continue;
+            }
+            let d_angle = uv.perp_dot(*dw) / r2;
+            let (reach, dir) = (r2.sqrt(), *uv / r2.sqrt());
+            let panels = ((reach / size * 4.0).ceil() as usize).clamp(1, 2000);
+            sum = sum + gauss(0.0, reach, panels, |t| dens(dir * t) * t) * d_angle;
+        }
+        if !(sum.volume.is_finite() && sum.area.is_finite()) {
+            return Err(crate::KernelError::NonFinite);
+        }
+        sum.area *= orient;
+        return Ok(sum);
+    }
     let mut sum = Densities::default();
     for pts in &loops {
         for (uv, dw) in pts {

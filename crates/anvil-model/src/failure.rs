@@ -12,6 +12,7 @@ use anvil_kernel::blend::BlendError;
 use anvil_kernel::build::BuildError;
 use anvil_kernel::offset::OffsetError;
 use anvil_kernel::shell::ShellError;
+use anvil_kernel::{EdgeRef, FaceId};
 use serde::Serialize;
 
 /// Why a feature could not be built, as the rebuild sees it.
@@ -121,6 +122,12 @@ pub struct FeatureError {
     pub suggestion: String,
     /// Technical detail for the Details section and the log, when there is any.
     pub details: Option<String>,
+    /// Edges of the part before this feature that the failure is about, such as those a
+    /// fillet is too large for. The app marks them while the feature is being edited.
+    pub edges: Vec<EdgeRef>,
+    /// Faces of the part before this feature that the failure is about, such as those a
+    /// shell folds over.
+    pub faces: Vec<FaceId>,
 }
 
 impl FeatureError {
@@ -196,6 +203,7 @@ fn general(d: Does) -> &'static str {
 pub fn explain(name: &str, kind: &FeatureKind, cause: Cause) -> FeatureError {
     let d = does(kind);
     let gen = general(d).to_string();
+    let (mut edges, mut faces) = (Vec::new(), Vec::new());
     let (cause, suggestion, details): (String, String, Option<String>) = match cause {
         Cause::Plain(s) => (fragment(&s), gen, None),
         Cause::Told { cause, suggestion } => (fragment(&cause), suggestion, None),
@@ -227,16 +235,45 @@ pub fn explain(name: &str, kind: &FeatureKind, cause: Cause) -> FeatureError {
                     "Try fewer edges at once, or edges between flat faces.".into(),
                     None,
                 ),
-                BlendError::TooLarge(_) => {
-                    (fragment(&e.to_string()), format!("Try a smaller {size}, or fewer edges at once."), None)
+                BlendError::TooLarge { edges: ref on, size: asked, limit } => {
+                    let what = if d == Does::Chamfer { "chamfer" } else { "fillet" };
+                    let next = if on.len() == 1 {
+                        "the faces next to the edge".to_string()
+                    } else {
+                        format!("the faces next to {} of its edges", on.len())
+                    };
+                    let detail = Some(e.to_string());
+                    edges = on.clone();
+                    if limit < 0.0005 {
+                        (
+                            format!("the {what} {size} {} mm does not fit on {next}", mm(asked)),
+                            format!("Try a smaller {size}, or leave out the edges that do not fit."),
+                            detail,
+                        )
+                    } else {
+                        let rest =
+                            if on.len() == 1 { "" } else { ", or leave out the edges that do not fit" };
+                        (
+                            format!(
+                                "the {what} {size} {} mm does not fit on {next}, which allow at most {} mm",
+                                mm(asked),
+                                mm(limit)
+                            ),
+                            format!("Try a {size} under {} mm{rest}.", mm(limit)),
+                            detail,
+                        )
+                    }
                 }
                 BlendError::Invalid(_) => (fragment(&e.to_string()), gen, None),
             }
         }
         Cause::Shell(e) => {
+            if let ShellError::FoldsOver { faces: on } = &e {
+                faces = on.clone();
+            }
             let how = match e {
                 ShellError::TooThick => "Try a thinner wall.",
-                ShellError::FoldsOver => {
+                ShellError::FoldsOver { .. } => {
                     "Try a wall thinner than the smallest fillet radius, or shell the part before adding small fillets."
                 }
                 ShellError::Invalid(_) => general(Does::Shell),
@@ -296,14 +333,14 @@ pub fn explain(name: &str, kind: &FeatureKind, cause: Cause) -> FeatureError {
             (what.to_string(), how, detail)
         }
     };
-    FeatureError { feature: name.to_string(), cause, suggestion, details }
+    FeatureError { feature: name.to_string(), cause, suggestion, details, edges, faces }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::document::*;
-    use anvil_kernel::{v2, EdgeRef, FaceId};
+    use anvil_kernel::v2;
 
     /// Signs of a Rust `{:?}` string or a raw identifier leaking into a message.
     fn looks_debug(s: &str) -> bool {
@@ -341,22 +378,26 @@ mod tests {
         let blend = [
             BlendError::EdgeNotFound(edge),
             BlendError::Unsupported("fillets on cones".into()),
-            BlendError::TooLarge("the radius is larger than a face next to the edge".into()),
+            BlendError::TooLarge { edges: vec![edge], size: 6.0, limit: 4.0 },
+            BlendError::TooLarge { edges: vec![edge, edge], size: 6.0, limit: 0.0 },
             BlendError::Invalid("the edges do not meet".into()),
         ];
         for b in &blend {
             match b {
                 BlendError::EdgeNotFound(_)
                 | BlendError::Unsupported(_)
-                | BlendError::TooLarge(_)
+                | BlendError::TooLarge { .. }
                 | BlendError::Invalid(_) => {}
             }
         }
-        let shell =
-            [ShellError::Invalid("no faces to remove".into()), ShellError::TooThick, ShellError::FoldsOver];
+        let shell = [
+            ShellError::Invalid("no faces to remove".into()),
+            ShellError::TooThick,
+            ShellError::FoldsOver { faces: vec![FaceId { feature: 3, index: 4 }] },
+        ];
         for s in &shell {
             match s {
-                ShellError::Invalid(_) | ShellError::TooThick | ShellError::FoldsOver => {}
+                ShellError::Invalid(_) | ShellError::TooThick | ShellError::FoldsOver { .. } => {}
             }
         }
         let offset = [OffsetError::NotAChain, OffsetError::Collapsed];
@@ -529,9 +570,18 @@ mod tests {
                 tangent_propagation: false,
             }));
             let e = failed(&mut doc, id);
-            assert_eq!(e.cause, format!("a {what} of {blend} does not fit on the faces next to this edge"));
+            // The upright edge is 20 mm tall between a 40 mm and a 30 mm wide side, so a
+            // right-angle blend may set back at most 30 mm into the narrower one.
             let size = if what == "fillet" { "radius" } else { "distance" };
-            assert_eq!(e.suggestion, format!("Try a smaller {size}, or fewer edges at once."));
+            assert_eq!(
+                e.cause,
+                format!(
+                    "the {what} {size} {blend} mm does not fit on the faces next to the edge, which allow at most 30 mm"
+                )
+            );
+            assert_eq!(e.suggestion, format!("Try a {size} under 30 mm."));
+            assert_eq!(e.edges, vec![EdgeRef::new(side(0), side(1))]);
+            assert!(e.faces.is_empty());
             let st = doc.rebuild();
             assert_eq!(st.errors.len(), 1, "{:?}", st.errors);
             assert_eq!(st.faceted_from, None);
@@ -542,6 +592,51 @@ mod tests {
             // Within 0.1 mm³ (the mesh of the round), well under the 17.2 mm³ it removes.
             assert!((v - want).abs() < 0.1, "{what}: {v} vs {want}");
         }
+    }
+
+    /// A fillet too large for some of its edges names those edges, and the tightest
+    /// limit among them. On the 40 x 30 x 20 block a 25 mm round fits the 20 mm upright
+    /// edge, between sides 40 and 30 mm wide, but not the top edges above 20 mm sides.
+    #[test]
+    fn a_fillet_too_large_for_some_edges_names_them_and_the_limit() {
+        let (mut doc, base) = block();
+        let side = |e: u32| FaceId::side(base, e);
+        let top = FaceId { feature: base, index: FaceId::END_CAP };
+        let (upright, top0, top1) =
+            (EdgeRef::new(side(0), side(1)), EdgeRef::new(top, side(0)), EdgeRef::new(top, side(1)));
+        let id = doc.add_feature(FeatureKind::Fillet(FilletFeature {
+            edges: vec![upright, top0, top1],
+            radius: Dim::Value(25.0),
+            profile: FilletProfile::Circular,
+            tangent_propagation: false,
+        }));
+        let e = failed(&mut doc, id);
+        assert_eq!(
+            e.cause,
+            "the fillet radius 25 mm does not fit on the faces next to 2 of its edges, which allow at most 20 mm"
+        );
+        assert_eq!(e.suggestion, "Try a radius under 20 mm, or leave out the edges that do not fit.");
+        assert_eq!(e.edges, vec![top0, top1]);
+    }
+
+    /// A shell that folds over a curved face names that face. (The exact kernel shells
+    /// rounds properly, so this comes from the faceted kernel, on a meshed part.)
+    #[test]
+    fn a_shell_that_folds_over_names_the_faces() {
+        let kind = FeatureKind::Shell(ShellFeature { remove: vec![], thickness: Dim::Value(3.0) });
+        let rounds = vec![FaceId { feature: 5, index: 4 }, FaceId { feature: 5, index: 12 }];
+        let e = explain("Shell1", &kind, Cause::Shell(ShellError::FoldsOver { faces: rounds.clone() }));
+        check(&e, "Shell1");
+        assert_eq!(
+            e.cause,
+            "the wall is thicker than the radius of a curved region (such as a small fillet)"
+        );
+        assert_eq!(
+            e.suggestion,
+            "Try a wall thinner than the smallest fillet radius, or shell the part before adding small fillets."
+        );
+        assert_eq!(e.faces, rounds);
+        assert!(e.edges.is_empty());
     }
 
     #[test]

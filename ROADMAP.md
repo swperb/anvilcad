@@ -51,6 +51,8 @@ The work is split into issues tracked in [#104](https://github.com/swperb/anvilc
    verified G-code in one app (item 1 under CAM below; [#99](https://github.com/swperb/anvilcad/issues/99), [#100](https://github.com/swperb/anvilcad/issues/100)).
 8. **A browser build**, so anyone can try AnvilCAD without installing it, running the same
    kernels compiled to WebAssembly ([#101](https://github.com/swperb/anvilcad/issues/101)).
+   The kernels already build and run there; [docs/WEB.md](docs/WEB.md) has the
+   measurements and the plan for the app.
 
 ### Also planned
 

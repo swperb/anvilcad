@@ -164,12 +164,20 @@ pub struct SceneColors {
     pub hover: [f32; 3],
     pub select: [f32; 3],
     pub edge: [f32; 3],
+    /// Faces a failed feature names, while it is being edited.
+    pub failed: [f32; 3],
 }
 
 impl Default for SceneColors {
     fn default() -> SceneColors {
-        use crate::render::{BODY_COLOR, EDGE_COLOR, HOVER_COLOR, SELECT_COLOR};
-        SceneColors { body: BODY_COLOR, hover: HOVER_COLOR, select: SELECT_COLOR, edge: EDGE_COLOR }
+        use crate::render::{BODY_COLOR, EDGE_COLOR, FAILED_COLOR, HOVER_COLOR, SELECT_COLOR};
+        SceneColors {
+            body: BODY_COLOR,
+            hover: HOVER_COLOR,
+            select: SELECT_COLOR,
+            edge: EDGE_COLOR,
+            failed: FAILED_COLOR,
+        }
     }
 }
 
@@ -182,6 +190,7 @@ pub fn scene_colors(ctx: &egui::Context) -> SceneColors {
                 "hover_face" => c.hover = *rgb,
                 "selected_face" => c.select = *rgb,
                 "edge" => c.edge = *rgb,
+                "failed_face" => c.failed = *rgb,
                 _ => {}
             }
         }
@@ -336,6 +345,10 @@ pub enum Icon {
     InsertComponent,
     /// A mate: two faces brought together.
     Mate,
+    /// A drawing: a sheet with a view on it.
+    Drawing,
+    /// Exporting a PDF: a sheet with an arrow out of it.
+    ExportPdf,
     ViewFront,
     ViewTop,
     ViewRight,
@@ -701,6 +714,16 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             poly(&[(9.5, 2.0), (14.5, 2.0), (14.5, 14.0), (9.5, 14.0)], Color32::TRANSPARENT, ln);
             line((7.0, 8.0), (9.0, 8.0), hi);
             path(&[(7.8, 6.5), (9.0, 8.0), (7.8, 9.5)], hi);
+        }
+        Icon::Drawing => {
+            poly(&[(2.0, 3.0), (14.0, 3.0), (14.0, 13.0), (2.0, 13.0)], Color32::TRANSPARENT, ln);
+            poly(&[(4.5, 6.0), (8.5, 6.0), (8.5, 10.5), (4.5, 10.5)], tint, hi);
+            line((10.0, 11.0), (12.5, 11.0), ln);
+        }
+        Icon::ExportPdf => {
+            path(&[(9.0, 2.0), (3.0, 2.0), (3.0, 14.0), (13.0, 14.0), (13.0, 9.0)], ln);
+            line((7.5, 8.5), (14.0, 2.0), hi);
+            path(&[(10.0, 2.0), (14.0, 2.0), (14.0, 6.0)], hi);
         }
         Icon::ViewFront => cube(1),
         Icon::ViewTop => cube(2),

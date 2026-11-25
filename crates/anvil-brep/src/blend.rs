@@ -161,6 +161,15 @@ pub fn blend_edge(
 /// blended, its neighbour no longer runs on into anything. Each edge comes with its
 /// tag base (see [`blend_edge`]).
 pub fn blend_chain(solid: &Solid, edges: &[(EdgeId, u32)], blend: Blend, owner: u32) -> Result<Vec<Solid>> {
+    let pinched = edges
+        .iter()
+        .flat_map(|e| solid.edge_faces(e.0))
+        .any(|f| solid.face(f).is_some_and(|f| f.surface.is_pinched_torus()));
+    if pinched {
+        return Err(KernelError::Unsupported(
+            "blending an edge of a horn or spindle torus (one whose tube reaches its axis)".into(),
+        ));
+    }
     // Closed-form tools where every edge has one; otherwise (a fillet with an edge between
     // faces not round about a common axis), or where joining and applying them meets
     // geometry the exact booleans do not yet handle, one swept tool along the whole run.

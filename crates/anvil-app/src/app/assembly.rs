@@ -87,8 +87,8 @@ pub(super) struct AsmSession {
     pub asm: Assembly,
     saved: Assembly,
     committed: Assembly,
-    undo: Vec<Assembly>,
-    redo: Vec<Assembly>,
+    pub(super) undo: Vec<Assembly>,
+    pub(super) redo: Vec<Assembly>,
     pub path: Option<PathBuf>,
     pub parts: Parts,
     pub status: AssemblyStatus,
@@ -336,6 +336,7 @@ impl AnvilApp {
     }
 
     fn enter_assembly(&mut self, s: AsmSession) {
+        self.leave_drawing();
         self.sketch = None;
         self.editor = None;
         self.measure = None;

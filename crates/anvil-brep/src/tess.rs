@@ -281,7 +281,7 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         Surface::Cylinder { radius, .. } | Surface::Cone { radius, .. } | Surface::Sphere { radius, .. } => {
             Some(*radius)
         }
-        Surface::Torus { major, .. } => Some(*major),
+        Surface::Torus { major, minor, .. } => Some(major.abs().max(*minor)),
         Surface::BSpline(s) => Some(1.0 / s.max_curvature().max(1e-6)),
         Surface::Plane { .. } => None,
     };
@@ -314,9 +314,15 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         } else {
             step_for(radius)
         };
-        // A cone laid out across its axis has lengths for parameters, like a sphere.
-        let across_axis = matches!(face.surface, Surface::Cone { apex: true, .. });
+        // A cone laid out across its axis has lengths for parameters, like a sphere, and
+        // so does a torus laid out about its pole (whose tube may bend more tightly than
+        // its widest circle).
+        let pinched = face.surface.is_pinched_torus();
+        let across_axis = pinched || matches!(face.surface, Surface::Cone { apex: true, .. });
         let mut du = if across_axis { radius * step_angle } else { scale * step_angle };
+        if let (true, Surface::Torus { minor, .. }) = (pinched, &face.surface) {
+            du = du.min(minor * step_for(*minor));
+        }
         let all: Vec<DVec2> = loops_uv.iter().flatten().copied().collect();
         let (mut lo, mut hi) = (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY));
         for p in &all {
@@ -339,7 +345,7 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
         };
         // A torus curves both ways, so long thin triangles across its tube tilt badly
         // (and show as creases): keep its grid cells within 2:1.
-        if matches!(face.surface, Surface::Torus { .. }) {
+        if matches!(face.surface, Surface::Torus { .. }) && !pinched {
             du = du.min(2.0 * dv);
         }
         // At most 200 000 grid points: past that, widen the spacing rather than drop it.
@@ -457,9 +463,13 @@ fn tessellate_face(face: &Face, face_index: u32, mesh: &mut TriMesh, params: &Te
     // A pointed cone has no normal at its apex: each triangle meeting there gets its own
     // copy of the apex, shaded with the normal along the cone line through the
     // triangle, or one side of the tip would be lit as if it faced the other way.
+    // A torus pinched to a point on its axis is pointed there too.
     let apex = match face.surface {
         Surface::Cone { frame, radius, half_angle, apex: true } => {
             Some(crate::geom::cone_apex(&frame, radius, half_angle))
+        }
+        Surface::Torus { frame, minor, .. } => {
+            face.surface.torus_pole().map(|(pole, _)| frame.origin + frame.z * (minor * pole.sin()))
         }
         _ => None,
     };
@@ -662,6 +672,7 @@ fn to_uv(surface: &Surface, pts: &[DVec3]) -> Vec<DVec2> {
                 .collect()
         }
         Surface::Cone { apex: true, .. } => pts.iter().map(|p| surface.uv(*p)).collect(),
+        Surface::Torus { .. } if surface.is_pinched_torus() => pts.iter().map(|p| surface.uv(*p)).collect(),
         Surface::Cylinder { .. } | Surface::Cone { .. } | Surface::Torus { .. } => {
             let period = surface.u_period().unwrap_or(TAU);
             let mut prev: Option<f64> = None;

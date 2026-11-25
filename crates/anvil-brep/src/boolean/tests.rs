@@ -1055,3 +1055,24 @@ fn empty_results_stay_empty() {
     let (p, q) = (ball(DVec3::ZERO, 1.0), ball(DVec3::new(2.0, 0.0, 0.0), 1.0));
     assert!(empty(boolean(&p, &q, BoolOp::Intersect)));
 }
+
+#[test]
+fn face_locator_rays_are_hidden_by_crossed_faces_only() {
+    let block = cuboid(DVec3::ZERO, DVec3::new(10.0, 10.0, 10.0));
+    let loc = FaceLocator::new(&block);
+    // From the middle of the bottom face up through the top: hidden.
+    assert!(loc.ray_blocked(DVec3::new(5.0, 5.0, 0.0), DVec3::Z, 1e-6));
+    // From the top face outwards, or along a face: seen.
+    assert!(!loc.ray_blocked(DVec3::new(5.0, 5.0, 10.0), DVec3::Z, 1e-6));
+    assert!(!loc.ray_blocked(DVec3::new(0.0, 5.0, 10.0), DVec3::X, 1e-6));
+    // From below the block, running along its side face: not hidden.
+    assert!(!loc.ray_blocked(DVec3::new(10.0, 5.0, -5.0), DVec3::new(0.0, 0.0, 1.0), 1e-6));
+    assert!(loc.on_face(0, DVec3::new(5.0, 5.0, 0.0)) || loc.on_face(1, DVec3::new(5.0, 5.0, 0.0)));
+
+    // A ray that only touches a cylinder at its side is not hidden; one that dips in is.
+    let rod = cylinder(DVec3::ZERO, DVec3::Z, 5.0, 0.0, 10.0);
+    let loc = FaceLocator::new(&rod);
+    assert!(!loc.ray_blocked(DVec3::new(-20.0, 5.0, 5.0), DVec3::X, 1e-6));
+    assert!(loc.ray_blocked(DVec3::new(-20.0, 4.999, 5.0), DVec3::X, 1e-6));
+    assert!(!loc.ray_blocked(DVec3::new(-20.0, 5.001, 5.0), DVec3::X, 1e-6));
+}
