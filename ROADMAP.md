@@ -98,6 +98,67 @@ recognised features to verified, simulated G-code; see the README. Next:
    tool-maker cutting data, then 4- and 5-axis indexed and simultaneous machining, and
    turning and mill-turn.
 
+## ECAD (electronics design)
+
+The first step is a minimal native crate, `anvil-ecad` ([#52](https://github.com/swperb/anvilcad/issues/52)):
+a two-layer board in a text format (`.anvbrd`) with design rule checks and Gerber, Excellon,
+BOM and placement output. Around it sit schematic capture ([#54](https://github.com/swperb/anvilcad/issues/54)),
+a board editor in the app ([#55](https://github.com/swperb/anvilcad/issues/55)), copper zones
+([#56](https://github.com/swperb/anvilcad/issues/56)), silkscreen ([#57](https://github.com/swperb/anvilcad/issues/57)),
+footprint libraries ([#58](https://github.com/swperb/anvilcad/issues/58)), boards as 3D bodies in
+assemblies ([#59](https://github.com/swperb/anvilcad/issues/59)), a SPICE netlist
+([#60](https://github.com/swperb/anvilcad/issues/60)) and a basic two-layer autorouter
+([#53](https://github.com/swperb/anvilcad/issues/53)). None of the full-ECAD work below is
+started, and none of it should be treated as available until it is in the README's "What
+works today". It is planned in the order listed, each item a slice that works on its own:
+
+1. **Multi-layer stackups.** A board with any even or odd number of copper layers, with each
+   dielectric and copper thickness and material recorded in a stackup. Then blind and buried
+   vias, and microvias, each defined by the pair of layers it joins, with design rules and
+   drill output that understand them.
+2. **Impedance control.** Track width and spacing calculated from the stackup for a target
+   single-ended or differential impedance, net classes that carry those values, and
+   differential pairs routed and checked as a pair (gap, coupling, skew).
+3. **Length tuning.** Length measured per net and per group, with serpentine and trombone
+   tuning to match lengths within a stated tolerance, counting via and package lengths where
+   the data exists.
+4. **An interactive push-and-shove router.** Routing by hand with live clearance checking,
+   pushing other tracks and vias out of the way, walking around obstacles, and following the
+   same design rules the checker uses.
+5. **Panelization.** Arrays of boards with tabs, V-grooves, fiducials, tooling holes and
+   rails, written as one set of fabrication files.
+6. **IPC-2581 and ODB++ output**, alongside Gerber and Excellon, for board houses that
+   prefer a single package with the stackup, nets and netlist inside.
+7. **3D component libraries.** A STEP body for each footprint, placed and oriented from the
+   footprint, so a board appears in an assembly with its parts (extends
+   [#59](https://github.com/swperb/anvilcad/issues/59)).
+8. **Variants.** One design with several builds: parts fitted, not fitted or swapped per
+   variant, with a BOM and placement file for each.
+9. **Mechanical and electrical co-design (IDX).** Exchange of board outline, holes, keep-outs,
+   component heights and placements with the mechanical design, with proposed changes
+   reviewed by either side. The IDX format needs to be studied from its published
+   specification before work starts.
+
+### What the board format must keep room for
+
+The `.anvbrd` format in [#52](https://github.com/swperb/anvilcad/issues/52) starts with two
+layers, but it should not have to be redesigned for the list above. It should therefore:
+
+- **Name layers through a layer stack**, not fixed "top" and "bottom" fields. Even a
+  two-layer board lists its stack: copper, dielectric and copper, with thicknesses. Tracks,
+  zones, pads and vias refer to layers by name, and a via records the layers it starts and
+  ends on, which for a through via are the outermost copper layers.
+- **Carry net classes.** Every net belongs to a class (a default one at first), and the class
+  holds the track width, clearance, via size and drill, and later the impedance target and
+  differential pair settings. Design rules read from the class.
+- **Start with a version field** on the first line, with a rule for reading newer files: a
+  reader refuses a file with a major version it does not know, and keeps unknown lines of a
+  known major version so a save does not drop them. Older versions open in newer releases,
+  and a test round-trips each version, as for the CAD files.
+- Keep room for **variant data** (per-part fitted or not fitted flags) and for **panel
+  data** (a board placed several times with an offset and rotation), as optional sections
+  that a two-layer board can leave out.
+
 ## PDM (product data management)
 
 Open formats and an open API, usable on one laptop or a team server.
