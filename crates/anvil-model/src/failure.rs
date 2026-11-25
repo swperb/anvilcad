@@ -861,8 +861,9 @@ mod tests {
         let mut doc = Document::new();
         let mut sf = SketchFeature::new(PlaneRef::Top);
         sf.sketch.add_rectangle(v2(0.0, 0.0), v2(40.0, 30.0));
-        // A spur from the rectangle's corner, so three curves meet there.
-        let (a, b) = (sf.sketch.add_point(v2(0.0, 0.0)), sf.sketch.add_point(v2(-10.0, -10.0)));
+        // A diagonal between opposite corners, so three curves meet at each and no end
+        // is left open.
+        let (a, b) = (sf.sketch.add_point(v2(0.0, 0.0)), sf.sketch.add_point(v2(40.0, 30.0)));
         sf.sketch.add_line(a, b);
         let sk = doc.add_feature(FeatureKind::Sketch(sf));
         let id = doc.add_feature(extrude(sk, Dim::Value(10.0), BodyOp::Boss));
