@@ -221,7 +221,7 @@ fn step_part(project: &Project, job: &Job, step: &str, r: &mut JobResult) -> std
     let bytes = std::fs::read(step).map_err(|e| format!("{step}: {e}"))?;
     let text = String::from_utf8_lossy(&bytes);
     let name = Path::new(step).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let (mut doc, report) = anvil_model::step::document_from_step(&text, &name)?;
+    let (mut doc, report) = anvil_model::step::document_from_step(&text, &name).map_err(|e| e.to_string())?;
     if report.bodies == 0 {
         return Err("the STEP file holds no solid bodies".into());
     }

@@ -94,7 +94,7 @@ impl Document {
                             }
                             }
                             e => e.into(),
-                        })
+                        });
                     }
                 },
             },
