@@ -1,0 +1,26 @@
+# A throwaway WebAssembly build of the kernel, used by scripts/wasm-check.sh to measure
+# the bundle size and to prove a part rebuilds in a browser engine. See docs/WEB.md.
+# It is not a workspace member (the empty [workspace] below keeps it out of the main
+# workspace) and is not shipped.
+[package]
+name = "anvil-wasm-probe"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anvil-model = { path = "../../crates/anvil-model" }
+anvil-step = { path = "../../crates/anvil-step" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
