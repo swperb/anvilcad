@@ -19,13 +19,17 @@ use std::fmt::Write as _;
 const CURVE_TOL: f64 = 0.01;
 
 /// The layers a sheet is written on, with their linetypes.
-pub const LAYERS: [(&str, &str); 6] = [
+pub const LAYERS: [(&str, &str); 10] = [
     ("VISIBLE", "CONTINUOUS"),
     ("HIDDEN", "DASHED"),
     ("THIN", "CONTINUOUS"),
     ("FRAME", "CONTINUOUS"),
     ("TITLE", "CONTINUOUS"),
     ("DIMENSIONS", "CONTINUOUS"),
+    ("HATCH", "CONTINUOUS"),
+    ("CUTTING_LINE", "CHAIN"),
+    ("CUTTING_LINE_ENDS", "CONTINUOUS"),
+    ("LABELS", "CONTINUOUS"),
 ];
 
 /// The layer a pen's lines go on.
@@ -37,6 +41,9 @@ pub fn layer(pen: Pen) -> &'static str {
         Pen::Frame => "FRAME",
         Pen::Title => "TITLE",
         Pen::Dim => "DIMENSIONS",
+        Pen::Hatch => "HATCH",
+        Pen::Chain => "CUTTING_LINE",
+        Pen::CutEnds => "CUTTING_LINE_ENDS",
     }
 }
 
@@ -153,6 +160,15 @@ fn path(o: &mut Out, layer: &str, p: &Path2) {
     }
 }
 
+/// A filled triangle.
+fn solid(o: &mut Out, layer: &str, a: &[DVec2; 3]) {
+    o.start("SOLID", layer);
+    o.point(10, a[0]);
+    o.point(11, a[1]);
+    o.point(12, a[2]);
+    o.point(13, a[2]);
+}
+
 fn text(o: &mut Out, layer: &str, n: &Note) {
     o.start("TEXT", layer);
     o.point(10, n.pos);
@@ -196,7 +212,7 @@ pub fn write_dxf(pic: &SheetPicture) -> String {
     o.pair(2, "TABLES");
     o.pair(0, "TABLE");
     o.pair(2, "LTYPE");
-    o.i(70, 2);
+    o.i(70, 3);
     o.pair(0, "LTYPE");
     o.pair(2, "CONTINUOUS");
     o.i(70, 0);
@@ -213,6 +229,17 @@ pub fn write_dxf(pic: &SheetPicture) -> String {
     o.f(40, 4.0);
     o.f(49, 3.0);
     o.f(49, -1.0);
+    o.pair(0, "LTYPE");
+    o.pair(2, "CHAIN");
+    o.i(70, 0);
+    o.pair(3, "Long-dash dot: 12 mm dashes, 0.5 mm dots, 1.25 mm gaps");
+    o.i(72, 65);
+    o.i(73, 4);
+    o.f(40, 15.0);
+    o.f(49, 12.0);
+    o.f(49, -1.25);
+    o.f(49, 0.5);
+    o.f(49, -1.25);
     o.pair(0, "ENDTAB");
     o.pair(0, "TABLE");
     o.pair(2, "LAYER");
@@ -256,13 +283,25 @@ pub fn write_dxf(pic: &SheetPicture) -> String {
             path(&mut o, l, p);
         }
         for a in &d.arrows {
-            o.start("SOLID", l);
-            o.point(10, a[0]);
-            o.point(11, a[1]);
-            o.point(12, a[2]);
-            o.point(13, a[2]);
+            solid(&mut o, l, a);
         }
         text(&mut o, l, &d.text);
+    }
+    for (pen, t) in &pic.fills {
+        solid(&mut o, layer(*pen), t);
+    }
+    for n in &pic.labels {
+        text(&mut o, "LABELS", n);
+    }
+    for c in &pic.callouts {
+        let l = layer(Pen::Dim);
+        for p in &c.lines {
+            path(&mut o, l, p);
+        }
+        solid(&mut o, l, &c.arrow);
+        for n in &c.text {
+            text(&mut o, l, n);
+        }
     }
     o.pair(0, "ENDSEC");
     o.pair(0, "EOF");

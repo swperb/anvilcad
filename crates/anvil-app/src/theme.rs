@@ -355,6 +355,10 @@ pub enum Icon {
     ExportDxf,
     /// Model dimensions: a block with a dimension over it.
     ModelDimensions,
+    /// A detail view: a small circle and the same circle drawn larger.
+    DetailView,
+    /// A hole callout: a hole with a leader to a line of text.
+    HoleCallout,
     ViewFront,
     ViewTop,
     ViewRight,
@@ -753,6 +757,18 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, ink: Color32,
             line((3.5, 4.5), (12.5, 4.5), hi);
             path(&[(5.3, 3.0), (3.5, 4.5), (5.3, 6.0)], hi);
             path(&[(10.7, 3.0), (12.5, 4.5), (10.7, 6.0)], hi);
+        }
+        Icon::DetailView => {
+            painter.circle_stroke(p(4.5, 11.5), 2.5 * s, ln);
+            painter.circle_filled(p(10.0, 6.0), 4.5 * s, tint);
+            painter.circle_stroke(p(10.0, 6.0), 4.5 * s, hi);
+            line((6.3, 9.7), (6.9, 9.1), ln);
+        }
+        Icon::HoleCallout => {
+            painter.circle_filled(p(5.0, 11.0), 3.5 * s, tint);
+            painter.circle_stroke(p(5.0, 11.0), 3.5 * s, ln);
+            path(&[(7.5, 8.5), (10.0, 4.0), (15.0, 4.0)], hi);
+            line((10.0, 1.8), (15.0, 1.8), hi);
         }
         Icon::ViewFront => cube(1),
         Icon::ViewTop => cube(2),

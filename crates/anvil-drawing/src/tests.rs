@@ -237,7 +237,7 @@ fn progress_runs_from_loading_to_done_across_the_views() {
     let p = Progress::new();
     assert_eq!(p.fraction(), None, "nothing projected yet");
     let d = Drawing::standard("p.anvprt".into(), Sheet::default());
-    project_views(&d, &[block()], &p).expect("views");
+    project_views(&d, &[block()], HatchPattern::General, &p).expect("views");
     assert_eq!(p.fraction(), Some(1.0));
     // Half way through the second of four views is three eighths done.
     p.set_stages(4);
@@ -263,7 +263,8 @@ fn pdf_holds_vector_paths_and_no_image() {
     for v in &mut d.views {
         v.display = DisplayStyle::HiddenDashed;
     }
-    let geometry = project_views(&d, &[tube()], &Progress::new()).expect("views");
+    let geometry =
+        project_views(&d, &[tube()], HatchPattern::General, &Progress::new()).expect("views").geometry;
     let pic = layout(&d, &geometry);
     let bytes = pdf::write_pdf(&pic, "tube");
     let text = String::from_utf8(bytes).expect("the file is plain text");
@@ -290,8 +291,9 @@ fn pdf_holds_vector_paths_and_no_image() {
 #[test]
 fn views_follow_the_part_when_it_changes() {
     let d = Drawing::standard("p.anvprt".into(), Sheet::default());
-    let small = project_views(&d, &[block()], &Progress::new()).expect("views");
-    let big = project_views(&d, &[tube()], &Progress::new()).expect("views");
+    let small =
+        project_views(&d, &[block()], HatchPattern::General, &Progress::new()).expect("views").geometry;
+    let big = project_views(&d, &[tube()], HatchPattern::General, &Progress::new()).expect("views").geometry;
     let front = d.views[0].id;
     let width = |g: &HashMap<u32, ViewGeometry>| g[&front].bounds().map(|(lo, hi)| hi.x - lo.x);
     assert_eq!(width(&small).map(|w| (w * 1e6).round()), Some(40e6));
@@ -346,7 +348,7 @@ fn plate(width: f64) -> (anvil_model::Document, u32) {
 
 fn drawn(doc: &anvil_model::Document, d: &Drawing) -> (PartData, HashMap<u32, ViewGeometry>) {
     let part = part_data(doc, d.configuration.as_deref(), "plate").expect("part");
-    let g = project_views(d, &part.bodies, &Progress::new()).expect("views");
+    let g = project_views(d, &part.bodies, HatchPattern::General, &Progress::new()).expect("views").geometry;
     (part, g)
 }
 
@@ -539,4 +541,330 @@ fn a_drawing_round_trips_through_dxf() {
     // And the title block's text.
     assert!(f.entities.iter().any(|e| e.kind == "TEXT" && e.layer() == "TITLE" && e.get(1) == Some("PL-40")));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A box from `lo` to `hi`.
+fn cuboid(lo: DVec3, hi: DVec3) -> Solid {
+    let pts =
+        [DVec2::new(lo.x, lo.y), DVec2::new(hi.x, lo.y), DVec2::new(hi.x, hi.y), DVec2::new(lo.x, hi.y)];
+    let segs = (0..4).map(|i| Segment::Line { a: pts[i], b: pts[(i + 1) % 4] }).collect();
+    let regions = build_regions(&[Loop2::new(segs)]).expect("region");
+    anvil_brep::extrude::extrude_regions(&Frame::world(), &regions, lo.z, hi.z).expect("extrude").remove(0)
+}
+
+/// A cylinder of radius `r` round the axis through `c` along `axis`, from `z0` to `z1`
+/// along it.
+fn cylinder(c: DVec3, axis: DVec3, r: f64, z0: f64, z1: f64) -> Solid {
+    let hint = if axis.x.abs() < 0.9 { DVec3::X } else { DVec3::Y };
+    let f = Frame::new(c, axis, hint).expect("frame");
+    let regions = build_regions(&[Loop2::new(vec![Segment::circle(DVec2::ZERO, r)])]).expect("region");
+    anvil_brep::extrude::extrude_regions(&f, &regions, z0, z1).expect("extrude").remove(0)
+}
+
+fn minus(a: &Solid, b: &Solid) -> Solid {
+    anvil_brep::boolean::boolean(a, b, anvil_brep::boolean::BoolOp::Subtract).expect("cut").remove(0)
+}
+
+/// The box round each hatch area, rounded, sorted.
+fn hatch_boxes(g: &ViewGeometry) -> Vec<[i64; 4]> {
+    let mut v: Vec<[i64; 4]> = g
+        .hatch
+        .iter()
+        .map(|h| {
+            let pts = h.loops.iter().flatten();
+            let lo = pts.clone().fold(DVec2::splat(f64::INFINITY), |a, p| a.min(*p));
+            let hi = pts.fold(DVec2::splat(f64::NEG_INFINITY), |a, p| a.max(*p));
+            key(lo, hi)
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+/// The area inside a hatch area's loops (outer less holes).
+fn hatch_area(g: &ViewGeometry) -> f64 {
+    g.hatch
+        .iter()
+        .flat_map(|h| h.loops.iter())
+        .map(|l| {
+            let n = l.len();
+            0.5 * (0..n).map(|i| l[i].perp_dot(l[(i + 1) % n])).sum::<f64>()
+        })
+        .map(f64::abs)
+        .sum()
+}
+
+fn section_of(solid: &Solid, def: &SectionDef) -> ViewGeometry {
+    section::project_section(def, std::slice::from_ref(solid), HatchPattern::Steel, &Progress::new())
+        .expect("not cancelled")
+        .expect("cut")
+}
+
+#[test]
+fn section_through_a_box_with_a_hole_shows_the_hole_split_in_two() {
+    // 40 x 30 x 20 with an 8 mm hole down Z at (20, 15).
+    let part = minus(
+        &cuboid(DVec3::ZERO, DVec3::new(40.0, 30.0, 20.0)),
+        &cylinder(DVec3::new(20.0, 15.0, 0.0), DVec3::Z, 4.0, -1.0, 21.0),
+    );
+    // On the front view, a horizontal line through the hole's centre, looking down.
+    let def = SectionDef::new(1, &Orientation::Front.axes(), true, &[DVec2::new(20.0, 15.0)]);
+    assert_eq!(def.orientation(), Some(Orientation::Top));
+    let g = section_of(&part, &def);
+    assert_exact(&g);
+    // Seen from above (X right, -Z up), the cut at y = 15 is the 40 x 20 rectangle less the
+    // hole's 8 mm slot: two cut faces, 16 x 20 each.
+    assert_eq!(hatch_boxes(&g), sorted(vec![k((0.0, -20.0), (16.0, 0.0)), k((24.0, -20.0), (40.0, 0.0))]));
+    assert!((hatch_area(&g) - 640.0).abs() < 1e-6, "{}", hatch_area(&g));
+    let vis = lines(&g, LineKind::Visible);
+    // The outline, and the hole's sides seen through the cut.
+    for want in [
+        k((0.0, -20.0), (0.0, 0.0)),
+        k((16.0, -20.0), (16.0, 0.0)),
+        k((24.0, -20.0), (24.0, 0.0)),
+        k((40.0, -20.0), (40.0, 0.0)),
+    ] {
+        assert!(vis.contains(&want), "{want:?} in {vis:?}");
+    }
+    // Along the top and bottom, the lines cover 0 to 40 exactly.
+    for v in [0.0, -20.0] {
+        let along: f64 = g
+            .lines
+            .iter()
+            .filter_map(|l| match l.path {
+                Path2::Line { a, b }
+                    if l.kind == LineKind::Visible && (a.y - v).abs() < EPS && (b.y - v).abs() < EPS =>
+                {
+                    Some((b.x - a.x).abs())
+                }
+                _ => None,
+            })
+            .sum();
+        assert!((along - 40.0).abs() < 1e-6, "{v}: {along}");
+    }
+    assert!(lines(&g, LineKind::Hidden).is_empty(), "{:?}", lines(&g, LineKind::Hidden));
+    // Hatching: steel's pairs at 45 degrees, only inside the two faces.
+    let h = g.hatch.iter().flat_map(|a| section::hatch_lines(a, 1.0)).collect::<Vec<_>>();
+    assert!(!h.is_empty());
+    for l in &h {
+        let Path2::Line { a, b } = l else { panic!("hatch lines are lines") };
+        assert!(a.x.min(b.x) > -EPS && a.x.max(b.x) < 40.0 + EPS);
+        assert!(
+            !((a.x + b.x) * 0.5 > 16.0 + EPS && (a.x + b.x) * 0.5 < 24.0 - EPS),
+            "no hatch in the hole: {l:?}"
+        );
+    }
+}
+
+#[test]
+fn section_along_a_stepped_shaft_is_its_profile() {
+    // Ø20 from x = 0 to 30, then Ø12 to x = 50, along X.
+    let big = cylinder(DVec3::ZERO, DVec3::X, 10.0, 0.0, 30.0);
+    let small = cylinder(DVec3::ZERO, DVec3::X, 6.0, 30.0, 50.0);
+    let shaft = anvil_brep::boolean::boolean(&big, &small, anvil_brep::boolean::BoolOp::Union)
+        .expect("union")
+        .remove(0);
+    let def = SectionDef::new(1, &Orientation::Front.axes(), true, &[DVec2::new(25.0, 0.0)]);
+    let g = section_of(&shaft, &def);
+    // The step's lines end where the small shaft's circle, behind the cut face, grazes the
+    // view: placed to the kernel's 1e-5 mm, so compared at 1e-4 mm (`key` rounds there).
+    let want = sorted(vec![
+        k((0.0, -10.0), (30.0, -10.0)),
+        k((30.0, -10.0), (30.0, -6.0)),
+        k((30.0, -6.0), (50.0, -6.0)),
+        k((50.0, -6.0), (50.0, 6.0)),
+        k((30.0, 6.0), (50.0, 6.0)),
+        k((30.0, 6.0), (30.0, 10.0)),
+        k((0.0, 10.0), (30.0, 10.0)),
+        k((0.0, -10.0), (0.0, 10.0)),
+    ]);
+    assert_eq!(lines(&g, LineKind::Visible), want);
+    assert_eq!(hatch_boxes(&g), vec![k((0.0, -10.0), (50.0, 10.0))]);
+    assert!((hatch_area(&g) - (30.0 * 20.0 + 20.0 * 12.0)).abs() < 1e-6, "{}", hatch_area(&g));
+}
+
+#[test]
+fn an_offset_section_cuts_two_holes_and_hides_its_shoulder() {
+    // 60 x 30 x 20 with 8 mm holes down Z at (15, 10) and (45, 20).
+    let mut part = cuboid(DVec3::ZERO, DVec3::new(60.0, 30.0, 20.0));
+    for (x, y) in [(15.0, 10.0), (45.0, 20.0)] {
+        part = minus(&part, &cylinder(DVec3::new(x, y, 0.0), DVec3::Z, 4.0, -1.0, 21.0));
+    }
+    let def = SectionDef::new(
+        1,
+        &Orientation::Front.axes(),
+        true,
+        &[DVec2::new(15.0, 10.0), DVec2::new(45.0, 20.0)],
+    );
+    assert_eq!(def.jogs(), vec![30.0]);
+    let g = section_of(&part, &def);
+    // Four cut faces, each 11 x 20: two at y = 10 left of the step, two at y = 20 right of it.
+    assert_eq!(
+        hatch_boxes(&g),
+        sorted(vec![
+            k((0.0, -20.0), (11.0, 0.0)),
+            k((19.0, -20.0), (30.0, 0.0)),
+            k((30.0, -20.0), (41.0, 0.0)),
+            k((49.0, -20.0), (60.0, 0.0)),
+        ])
+    );
+    assert!((hatch_area(&g) - 880.0).abs() < 1e-6);
+    // The step is seen edge on, and its edges (the shoulder) are not drawn.
+    let shoulder = g.lines.iter().any(|l| match l.path {
+        Path2::Line { a, b } => (a.x - 30.0).abs() < EPS && (b.x - 30.0).abs() < EPS,
+        _ => false,
+    });
+    assert!(!shoulder, "{:?}", lines(&g, LineKind::Visible));
+}
+
+#[test]
+fn section_and_detail_views_project_lay_out_and_export() {
+    let part = minus(
+        &cuboid(DVec3::ZERO, DVec3::new(40.0, 30.0, 20.0)),
+        &cylinder(DVec3::new(20.0, 15.0, 0.0), DVec3::Z, 4.0, -1.0, 21.0),
+    );
+    let mut d = Drawing::standard("p.anvprt".into(), Sheet::default());
+    let front = d.views[0].id;
+    let a =
+        d.add_section(SectionDef::new(front, &Orientation::Front.axes(), true, &[DVec2::new(20.0, 15.0)]));
+    let b = d.add_detail(DetailDef {
+        parent: a,
+        centre: [20.0, 0.0, 0.0],
+        radius: 6.0,
+        scale: detail::default_scale(d.sheet.scale),
+    });
+    let p = project_views(&d, &[part], HatchPattern::Steel, &Progress::new()).expect("views");
+    assert!(p.failed.is_empty(), "{:?}", p.failed);
+    assert_eq!(p.geometry.len(), 6);
+    // The detail is the section's lines inside the circle (centre (20, 0) on the top view).
+    let det = &p.geometry[&b];
+    assert_eq!(det.clip, Some((DVec2::new(20.0, 0.0), 6.0)));
+    assert!(
+        det.lines.iter().all(|l| l
+            .path
+            .points(0.01)
+            .iter()
+            .all(|q| q.distance(DVec2::new(20.0, 0.0)) <= 6.0 + 1e-9))
+    );
+    let pic = layout::layout(&d, &p.geometry);
+    // Labels under the views, letters at the cutting line and the circle.
+    let labels: Vec<&str> = pic.labels.iter().map(|n| n.text.as_str()).collect();
+    for want in ["SECTION A-A", "DETAIL B", "SCALE 2:1", "A", "B"] {
+        assert!(labels.contains(&want), "{want} in {labels:?}");
+    }
+    assert!(pic.strokes.iter().any(|s| s.pen == Pen::Chain && s.view == Some(front)));
+    assert_eq!(pic.fills.len(), 2, "an arrow at each end");
+    assert!(pic.strokes.iter().any(|s| s.pen == Pen::Hatch && s.view == Some(a)));
+    assert!(pic.strokes.iter().any(|s| s.pen == Pen::Hatch && s.view == Some(b)));
+    // Every view fits on the sheet, apart from the others.
+    let placed: Vec<_> = pic.views.clone();
+    for (i, v) in placed.iter().enumerate() {
+        assert!(
+            v.lo.x >= 10.0 && v.hi.x <= pic.width - 10.0 && v.lo.y >= 10.0 && v.hi.y <= pic.height - 10.0,
+            "{v:?}"
+        );
+        for w in &placed[i + 1..] {
+            let apart = v.lo.x >= w.hi.x || v.hi.x <= w.lo.x || v.lo.y >= w.hi.y || v.hi.y <= w.lo.y;
+            assert!(apart, "{v:?} overlaps {w:?}");
+        }
+    }
+    let dxf = dxf::write_dxf(&pic.for_output());
+    for layer in ["HATCH", "CUTTING_LINE", "CUTTING_LINE_ENDS", "LABELS"] {
+        assert!(dxf.contains(&format!("\r\n{layer}\r\n")), "{layer}");
+    }
+    let read = dxf::read_dxf(&dxf).expect("reads back");
+    assert!(read.entities.iter().any(|e| e.layer() == "LABELS" && e.get(1) == Some("SECTION A-A")));
+    let pdf = pdf::write_pdf(&pic.for_output(), "t");
+    assert!(String::from_utf8_lossy(&pdf).contains("(SECTION A-A) Tj"));
+}
+
+/// A 40 x 30 x 20 block standing on the Front plane with one Hole feature at (20, 15),
+/// drilled into it.
+fn block_with_hole(kind: usize, end: anvil_model::HoleEnd) -> anvil_model::Document {
+    use anvil_kernel::v2;
+    use anvil_model::hole::{Fit, Standard};
+    use anvil_model::{BodyOp, Dim, EndCondition, ExtrudeFeature, HoleFeature, PlaneRef, SketchFeature};
+    let mut doc = anvil_model::Document::new();
+    let mut sf = SketchFeature::new(PlaneRef::Front);
+    sf.sketch.add_rectangle(v2(0.0, 0.0), v2(40.0, 30.0));
+    let sk = doc.add_feature(FeatureKind::Sketch(sf));
+    doc.add_feature(FeatureKind::Extrude(ExtrudeFeature {
+        sketch: sk,
+        end: EndCondition::Blind,
+        depth: Dim::Value(20.0),
+        op: BodyOp::Boss,
+        ..Default::default()
+    }));
+    let mut pts = SketchFeature::new(PlaneRef::Front);
+    pts.sketch.add_point(v2(20.0, 15.0));
+    let ps = doc.add_feature(FeatureKind::Sketch(pts));
+    let mut h = HoleFeature::standard(ps, kind, Standard::IsoMetric, "M6", Fit::Normal).expect("M6");
+    h.end = end;
+    h.depth = Dim::Value(12.0);
+    if let anvil_model::HoleKind::Tapped { thread_depth, .. } = &mut h.kind {
+        *thread_depth = Dim::Value(10.0);
+    }
+    h.reverse = true;
+    doc.add_feature(FeatureKind::Hole(h));
+    doc
+}
+
+#[test]
+fn hole_callouts_come_from_the_hole_feature() {
+    use anvil_model::HoleEnd;
+    let doc = block_with_hole(1, HoleEnd::ThroughAll);
+    let part = part_data(&doc, None, "block").expect("part");
+    assert_eq!(part.holes.len(), 1);
+    let h = &part.holes[0];
+    assert!(h.axis.distance(DVec3::Z) < 1e-9, "drilled into the block: {:?}", h.axis);
+    assert!(h.centres[0].distance(DVec3::new(20.0, 15.0, 0.0)) < 1e-9);
+    let lines = h.callout_lines();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].ends_with(" THRU") && lines[1].starts_with("CBORE \u{d8}"), "{lines:?}");
+    let mut d = Drawing::standard("block.anvprt".into(), Sheet::default());
+    let new = callout::hole_callouts(&d, &part);
+    assert_eq!(new.len(), 1);
+    // Only the front view looks along Z.
+    assert_eq!(d.view(new[0].view).map(|v| v.role), Some(ViewRole::Front));
+    for c in new {
+        d.add_callout(c);
+    }
+    assert!(callout::hole_callouts(&d, &part).is_empty(), "called out once");
+    let g = project_views(&d, &part.bodies, part.hatch, &Progress::new()).expect("views").geometry;
+    let pic = layout::layout_full(&d, &g, Some(&part), "block");
+    assert_eq!(pic.callouts.len(), 1);
+    let texts: Vec<&str> = pic.callouts[0].text.iter().map(|n| n.text.as_str()).collect();
+    assert_eq!(texts, lines.iter().map(String::as_str).collect::<Vec<_>>());
+    // The leader ends on the counterbore's circle in the front view.
+    let fv = pic.views.iter().find(|v| v.id == d.views[0].id).expect("front");
+    let centre = fv.origin + DVec2::new(20.0, 15.0) * fv.scale;
+    assert!((pic.callouts[0].arrow[0].distance(centre) - h.outer_radius * fv.scale).abs() < 1e-9);
+    let dxf = dxf::write_dxf(&pic.for_output());
+    assert!(dxf.contains(&dxf::dxf_text(&lines[1])));
+    // A suppressed hole leaves its callout counted as missing.
+    let mut off = doc.clone();
+    if let Some(f) = off.features.last_mut() {
+        f.suppressed = true;
+    }
+    let part2 = part_data(&off, None, "block").expect("part");
+    let pic = layout::layout_full(&d, &g, Some(&part2), "block");
+    assert!(pic.callouts.is_empty());
+    assert_eq!(pic.callouts_missing.len(), 1);
+}
+
+#[test]
+fn every_hole_type_reads_from_the_part() {
+    use anvil_model::HoleEnd;
+    let text = |kind: usize, end: HoleEnd| {
+        let doc = block_with_hole(kind, end);
+        part_data(&doc, None, "b").expect("part").holes.first().expect("a hole").callout_lines()
+    };
+    let simple = text(0, HoleEnd::Blind);
+    assert_eq!(simple.len(), 1);
+    assert!(simple[0].starts_with('\u{d8}') && simple[0].ends_with(" X 12 DEEP"), "{simple:?}");
+    let csk = text(2, HoleEnd::ThroughAll);
+    assert!(csk[1].starts_with("CSK \u{d8}") && csk[1].ends_with(" X 90\u{b0}"), "{csk:?}");
+    let tap = text(3, HoleEnd::Blind);
+    assert_eq!(tap[1], "M6x1 X 10 DEEP", "{tap:?}");
+    assert_eq!(tap[0], "\u{d8}5 X 12 DEEP", "{tap:?}");
 }

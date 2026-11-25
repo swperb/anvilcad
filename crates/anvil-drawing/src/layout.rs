@@ -5,11 +5,13 @@
 //! Sheet coordinates are millimetres from the paper's lower-left corner, y up.
 
 use crate::PartData;
+use crate::callout::{self, CalloutPicture};
 use crate::dims::{self, DimPicture, Pickables, ViewContext};
 use crate::document::{DisplayStyle, Drawing, TangentEdges, View, ViewRole};
 use crate::hlr::{LineKind, Orientation, Path2, ViewGeometry};
 use crate::sheet::{FRAME_MARGIN, Projection, Scale, Sheet, SheetSize};
 use crate::title::{self, TitleBlock, Values};
+use crate::{detail, section};
 use glam::{DVec2, DVec3};
 use std::collections::HashMap;
 
@@ -28,21 +30,28 @@ pub enum Pen {
     Title,
     /// Dimension and extension lines: thin, continuous.
     Dim,
+    /// Hatching of cut faces: thin, continuous (dashed patterns are drawn as pieces).
+    Hatch,
+    /// A cutting line: thin, long-dash dot.
+    Chain,
+    /// The thick ends and corners of a cutting line.
+    CutEnds,
 }
 
 impl Pen {
     /// Line width in millimetres.
     pub fn width(self) -> f64 {
         match self {
-            Pen::Visible | Pen::Frame => 0.5,
-            Pen::Thin | Pen::Hidden | Pen::Title | Pen::Dim => 0.25,
+            Pen::Visible | Pen::Frame | Pen::CutEnds => 0.5,
+            Pen::Thin | Pen::Hidden | Pen::Title | Pen::Dim | Pen::Hatch | Pen::Chain => 0.25,
         }
     }
 
-    /// Dash and gap lengths in millimetres, for dashed pens.
-    pub fn dash(self) -> Option<(f64, f64)> {
+    /// Dash pattern in millimetres, on and off in turn, for broken pens.
+    pub fn dash(self) -> Option<&'static [f64]> {
         match self {
-            Pen::Hidden => Some((3.0, 1.0)),
+            Pen::Hidden => Some(&[3.0, 1.0]),
+            Pen::Chain => Some(&[12.0, 1.25, 0.5, 1.25]),
             _ => None,
         }
     }
@@ -100,6 +109,8 @@ pub struct PlacedView {
     pub hi: DVec2,
     /// Where the model's origin falls on the sheet.
     pub origin: DVec2,
+    /// Sheet millimetres per model millimetre in this view.
+    pub scale: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -110,10 +121,18 @@ pub struct SheetPicture {
     pub notes: Vec<Note>,
     pub views: Vec<PlacedView>,
     pub dims: Vec<DimPicture>,
+    /// Filled triangles (arrowheads of cutting lines), with the pen they belong with.
+    pub fills: Vec<(Pen, [DVec2; 3])>,
+    /// View labels and the letters of cutting lines and detail circles.
+    pub labels: Vec<Note>,
+    pub callouts: Vec<CalloutPicture>,
     /// Title-block placeholders the part does not set (only known once the part is in).
     pub title_missing: Vec<String>,
     /// Model dimensions no longer in the model, by id.
     pub dims_missing: Vec<u32>,
+    /// Hole callouts whose Hole feature is gone, suppressed or no longer square to the
+    /// view, by id.
+    pub callouts_missing: Vec<u32>,
 }
 
 impl SheetPicture {
@@ -124,6 +143,17 @@ impl SheetPicture {
         p.dims.retain(|d| !d.dangling);
         p
     }
+}
+
+/// Height of a view label's first line and of its scale line, and the gap above it, in
+/// sheet millimetres.
+pub const LABEL_HEIGHT: f64 = 5.0;
+const SCALE_HEIGHT: f64 = 3.5;
+const LABEL_GAP: f64 = 3.0;
+
+/// The room a derived view's label takes below it.
+fn label_room(has_scale: bool) -> f64 {
+    LABEL_GAP + LABEL_HEIGHT + if has_scale { 2.0 + SCALE_HEIGHT } else { 0.0 }
 }
 
 impl Path2 {
@@ -254,6 +284,45 @@ fn arrange(
     out
 }
 
+/// A section or detail view to place: its id, its extent in model millimetres on its
+/// plane, its scale, and the room its label takes below it.
+#[derive(Debug, Clone, Copy)]
+struct Derived {
+    id: u32,
+    extent: (DVec2, DVec2),
+    scale: f64,
+    label: f64,
+}
+
+/// Places section and detail views in columns to the right of `placed` (the standard
+/// views), top to bottom, starting a new column when one would grow taller than `room`.
+fn arrange_derived(placed: &mut Vec<(u32, DVec2, DVec2, DVec2)>, derived: &[Derived], gap: f64, room: f64) {
+    if derived.is_empty() {
+        return;
+    }
+    let (glo, ghi) = if placed.is_empty() { (DVec2::ZERO, DVec2::ZERO) } else { union(placed) };
+    let top = if placed.is_empty() { 0.0 } else { ghi.y };
+    let mut x = if placed.is_empty() { 0.0 } else { ghi.x + gap };
+    let bottom = if placed.is_empty() { top - room } else { (ghi.y - room).min(glo.y) };
+    let mut y = top;
+    let mut col_width: f64 = 0.0;
+    for d in derived {
+        let (lo, hi) = d.extent;
+        let size = (hi - lo) * d.scale;
+        let h = size.y + d.label;
+        if y < top && y - h < bottom {
+            x += col_width + gap;
+            y = top;
+            col_width = 0.0;
+        }
+        let vlo = DVec2::new(x, y - size.y);
+        let origin = vlo - lo * d.scale;
+        placed.push((d.id, vlo, vlo + size, origin));
+        col_width = col_width.max(size.x);
+        y -= h + gap;
+    }
+}
+
 /// The extent of a view of a box, from its corners: what the views of a part will need
 /// before they are projected.
 pub fn box_extent(lo: DVec3, hi: DVec3, o: Orientation) -> (DVec2, DVec2) {
@@ -275,21 +344,64 @@ pub fn box_extent(lo: DVec3, hi: DVec3, o: Orientation) -> (DVec2, DVec2) {
 
 /// The largest standard scale at which views of the given extents fit on the sheet.
 pub fn fit_scale(drawing: &Drawing, extent: impl Fn(&View) -> Option<(DVec2, DVec2)>) -> Scale {
-    let sheet = drawing.sheet;
-    let extents: Vec<(u32, ViewRole, (DVec2, DVec2))> =
-        drawing.views.iter().filter_map(|v| extent(v).map(|e| (v.id, v.role, e))).collect();
-    let (alo, ahi) = view_area(sheet.size, &drawing.title_block);
-    let room = ahi - alo;
-    let gap = view_gap(sheet.size);
     for scale in crate::sheet::STANDARD_SCALES {
-        let placed = arrange(&extents, sheet.projection, scale.factor(), gap);
-        let (lo, hi) = union(&placed);
-        let size = hi - lo;
-        if size.x <= room.x && size.y <= room.y {
+        if fits(drawing, scale, &extent) {
             return scale;
         }
     }
     Scale { sheet: 1, model: 1000 }
+}
+
+/// True when every view, with the derived views' labels, fits the sheet at `scale`.
+pub fn fits(drawing: &Drawing, scale: Scale, extent: &impl Fn(&View) -> Option<(DVec2, DVec2)>) -> bool {
+    let sheet = drawing.sheet;
+    let (alo, ahi) = view_area(sheet.size, &drawing.title_block);
+    let room = ahi - alo;
+    let gap = view_gap(sheet.size);
+    let (standard, derived) = split_views(drawing, scale, |v| extent(v));
+    let mut placed = arrange(&standard, sheet.projection, scale.factor(), gap);
+    arrange_derived(&mut placed, &derived, gap, room.y);
+    if placed.is_empty() {
+        return true;
+    }
+    let (lo, hi) = union_with_labels(&placed, &derived);
+    let size = hi - lo;
+    size.x <= room.x + 1e-9 && size.y <= room.y + 1e-9
+}
+
+/// A standard view's id, role and extent in model millimetres on its plane.
+type Extent = (u32, ViewRole, (DVec2, DVec2));
+
+/// The standard views' extents, and the derived views to place, at sheet scale `scale`.
+fn split_views(
+    drawing: &Drawing,
+    scale: Scale,
+    extent: impl Fn(&View) -> Option<(DVec2, DVec2)>,
+) -> (Vec<Extent>, Vec<Derived>) {
+    let mut standard = Vec::new();
+    let mut derived = Vec::new();
+    for v in &drawing.views {
+        let Some(e) = extent(v) else { continue };
+        if v.role.is_derived() {
+            let own = v.detail.as_ref().map(|d| d.scale);
+            let vs = own.unwrap_or(scale);
+            derived.push(Derived { id: v.id, extent: e, scale: vs.factor(), label: label_room(vs != scale) });
+        } else {
+            standard.push((v.id, v.role, e));
+        }
+    }
+    (standard, derived)
+}
+
+/// The box round every placed view, with the derived views' labels below them.
+fn union_with_labels(placed: &[(u32, DVec2, DVec2, DVec2)], derived: &[Derived]) -> (DVec2, DVec2) {
+    let (mut lo, hi) = union(placed);
+    for d in derived {
+        if let Some(p) = placed.iter().find(|p| p.0 == d.id) {
+            lo.y = lo.y.min(p.1.y - d.label);
+        }
+    }
+    (lo, hi)
 }
 
 fn union(placed: &[(u32, DVec2, DVec2, DVec2)]) -> (DVec2, DVec2) {
@@ -337,37 +449,76 @@ pub fn layout_with(
     pic.strokes.push(Stroke { pen: Pen::Frame, path: Path2::Poly(frame.to_vec()), view: None });
     title_block(&mut pic, drawing, part, name);
 
-    let extents: Vec<(u32, ViewRole, (DVec2, DVec2))> = drawing
-        .views
-        .iter()
-        .filter_map(|v| geometry.get(&v.id).and_then(|g| g.bounds()).map(|b| (v.id, v.role, b)))
-        .collect();
     let s = sheet.scale.factor();
-    let placed = arrange(&extents, sheet.projection, s, view_gap(sheet.size));
+    let (standard, derived) =
+        split_views(drawing, sheet.scale, |v| geometry.get(&v.id).and_then(|g| g.bounds()));
+    let gap = view_gap(sheet.size);
+    let (alo, ahi) = view_area(sheet.size, &drawing.title_block);
+    let mut placed = arrange(&standard, sheet.projection, s, gap);
+    arrange_derived(&mut placed, &derived, gap, (ahi - alo).y);
     if placed.is_empty() {
         return pic;
     }
     // Centre the group of views in the area inside the frame.
-    let (lo, hi) = union(&placed);
-    let (alo, ahi) = view_area(sheet.size, &drawing.title_block);
+    let (lo, hi) = union_with_labels(&placed, &derived);
     let shift = (alo + ahi) * 0.5 - (lo + hi) * 0.5;
     for (id, vlo, vhi, origin) in placed {
         let origin = origin + shift;
-        pic.views.push(PlacedView { id, lo: vlo + shift, hi: vhi + shift, origin });
+        let vs = drawing.view_scale(id).factor();
+        pic.views.push(PlacedView { id, lo: vlo + shift, hi: vhi + shift, origin, scale: vs });
         let (Some(view), Some(geom)) = (drawing.view(id), geometry.get(&id)) else { continue };
         for line in &geom.lines {
             if let Some(pen) = pen_for(line.kind, view) {
-                pic.strokes.push(Stroke { pen, path: line.path.placed(origin, s), view: Some(id) });
+                pic.strokes.push(Stroke { pen, path: line.path.placed(origin, vs), view: Some(id) });
+            }
+        }
+        for area in &geom.hatch {
+            for h in section::hatch_lines(area, vs) {
+                let pieces = match geom.clip {
+                    Some((c, r)) => detail::clip_path(&h, c, r),
+                    None => vec![h],
+                };
+                for p in pieces {
+                    pic.strokes.push(Stroke { pen: Pen::Hatch, path: p.placed(origin, vs), view: Some(id) });
+                }
+            }
+        }
+        if let Some((c, r)) = geom.clip {
+            pic.strokes.push(Stroke {
+                pen: Pen::Thin,
+                path: circle(origin + c * vs, r * vs),
+                view: Some(id),
+            });
+        }
+        if view.role.is_derived() {
+            let below = (vlo + shift).y - LABEL_GAP - LABEL_HEIGHT;
+            let x = 0.5 * ((vlo + shift).x + (vhi + shift).x);
+            pic.labels.push(Note {
+                pos: DVec2::new(x, below),
+                height: LABEL_HEIGHT,
+                text: view.title(sheet.projection).to_uppercase(),
+                align: Align::Center,
+            });
+            let own = drawing.view_scale(id);
+            if own != sheet.scale {
+                pic.labels.push(Note {
+                    pos: DVec2::new(x, below - 2.0 - SCALE_HEIGHT),
+                    height: SCALE_HEIGHT,
+                    text: format!("SCALE {own}"),
+                    align: Align::Center,
+                });
             }
         }
     }
+    marks_on_parents(&mut pic, drawing, geometry);
 
     let mut found: HashMap<u32, Pickables> = HashMap::new();
     for d in &drawing.dimensions {
-        let (Some(view), Some(pv)) = (drawing.view(d.view), pic.views.iter().find(|v| v.id == d.view)) else {
+        let (Some(orientation), Some(pv)) =
+            (drawing.view_orientation(d.view), pic.views.iter().find(|v| v.id == d.view).copied())
+        else {
             continue;
         };
-        let orientation = view.role.orientation(sheet.projection);
         let g = geometry.get(&d.view);
         let pk = match (picks.and_then(|m| m.get(&d.view)), g) {
             (Some(p), _) => Some(p),
@@ -376,14 +527,109 @@ pub fn layout_with(
             }
             _ => None,
         };
-        let cx = ViewContext { part, geometry: g, orientation, scale: s };
+        let cx = ViewContext { part, geometry: g, orientation, scale: pv.scale };
         match dims::resolve(d, &cx, pk) {
-            Some(r) => pic.dims.push(dims::picture(d.id, &r, d.is_reference(), pv.origin, s)),
+            Some(r) => pic.dims.push(dims::picture(d.id, &r, d.is_reference(), pv.origin, pv.scale)),
             None if part.is_some() => pic.dims_missing.push(d.id),
             None => {}
         }
     }
+    for c in &drawing.callouts {
+        let (Some(orientation), Some(pv)) =
+            (drawing.view_orientation(c.view), pic.views.iter().find(|v| v.id == c.view).copied())
+        else {
+            continue;
+        };
+        let Some(part) = part else { continue };
+        let drawn = part
+            .holes
+            .iter()
+            .find(|h| h.feature == c.feature)
+            .and_then(|h| callout::picture(c, h, orientation, pv.origin, pv.scale, pv.hi.y));
+        match drawn {
+            Some(p) => pic.callouts.push(p),
+            None => pic.callouts_missing.push(c.id),
+        }
+    }
     pic
+}
+
+/// A full circle on the sheet.
+fn circle(c: DVec2, r: f64) -> Path2 {
+    Path2::Conic { c, u: DVec2::X * r, v: DVec2::Y * r, t0: 0.0, t1: std::f64::consts::TAU }
+}
+
+/// Draws each section view's cutting line and each detail view's circle on its parent,
+/// with their letters.
+fn marks_on_parents(pic: &mut SheetPicture, drawing: &Drawing, geometry: &HashMap<u32, ViewGeometry>) {
+    for v in &drawing.views {
+        let Some(parent) = v.parent() else { continue };
+        let (Some(pv), Some(po)) =
+            (pic.views.iter().find(|p| p.id == parent).copied(), drawing.view_orientation(parent))
+        else {
+            continue;
+        };
+        let Some((glo, ghi)) = geometry.get(&parent).and_then(|g| g.bounds()) else { continue };
+        let axes = po.axes();
+        let to = |p: DVec2| pv.origin + p * pv.scale;
+        if let Some(def) = &v.section {
+            let (pts, a2, s2) = section::line_on_parent(def, &axes, glo, ghi, 6.0 / pv.scale);
+            let pts: Vec<DVec2> = pts.into_iter().map(to).collect();
+            let a2 = a2.normalize_or(DVec2::X);
+            let s2 = s2.normalize_or(DVec2::Y);
+            pic.strokes.push(Stroke { pen: Pen::Chain, path: Path2::Poly(pts.clone()), view: Some(parent) });
+            // Thick strokes at the ends and either side of every corner.
+            let n = pts.len();
+            let thick = |a: DVec2, b: DVec2, len: f64| {
+                a + (b - a).normalize_or(DVec2::ZERO) * len.min(a.distance(b) * 0.5)
+            };
+            let (first, last) = (pts[0], pts[n - 1]);
+            pic.strokes.push(Stroke {
+                pen: Pen::CutEnds,
+                path: Path2::Line { a: first, b: thick(first, pts[1], 6.0) },
+                view: Some(parent),
+            });
+            pic.strokes.push(Stroke {
+                pen: Pen::CutEnds,
+                path: Path2::Line { a: last, b: thick(last, pts[n - 2], 6.0) },
+                view: Some(parent),
+            });
+            for i in 1..n.saturating_sub(1) {
+                let c = pts[i];
+                let path = Path2::Poly(vec![thick(c, pts[i - 1], 3.0), c, thick(c, pts[i + 1], 3.0)]);
+                pic.strokes.push(Stroke { pen: Pen::CutEnds, path, view: Some(parent) });
+            }
+            for (end, out) in [(first, -a2), (last, a2)] {
+                let tip = end + s2 * 7.0;
+                let back = tip - s2 * 4.0;
+                let side = a2 * 0.8;
+                pic.strokes.push(Stroke {
+                    pen: Pen::Dim,
+                    path: Path2::Line { a: end, b: back },
+                    view: Some(parent),
+                });
+                pic.fills.push((Pen::CutEnds, [tip, back + side, back - side]));
+                pic.labels.push(Note {
+                    pos: end + s2 * 4.5 + out * 3.5 - DVec2::Y * (LABEL_HEIGHT * 0.5),
+                    height: LABEL_HEIGHT,
+                    text: v.label.clone(),
+                    align: Align::Center,
+                });
+            }
+        }
+        if let Some(def) = &v.detail {
+            let (c, r) = def.circle(&axes);
+            let (c, r) = (to(c), r * pv.scale);
+            pic.strokes.push(Stroke { pen: Pen::Thin, path: circle(c, r), view: Some(parent) });
+            let d = DVec2::new(1.0, 1.0).normalize();
+            pic.labels.push(Note {
+                pos: c + d * (r + 4.0) - DVec2::Y * (LABEL_HEIGHT * 0.5),
+                height: LABEL_HEIGHT,
+                text: v.label.clone(),
+                align: Align::Center,
+            });
+        }
+    }
 }
 
 /// The values the title block's placeholders are filled from.
@@ -574,6 +820,9 @@ mod tests {
             role: ViewRole::Front,
             display: DisplayStyle::HiddenRemoved,
             tangent: TangentEdges::Removed,
+            section: None,
+            detail: None,
+            label: String::new(),
         };
         assert_eq!(pen_for(LineKind::Visible, &v), Some(Pen::Visible));
         assert_eq!(pen_for(LineKind::Hidden, &v), None);

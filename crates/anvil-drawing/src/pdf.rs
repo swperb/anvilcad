@@ -96,10 +96,11 @@ fn set_pen(out: &mut String, pen: Pen) {
     num(out, pen.width() * PT);
     out.push_str("w\n");
     match pen.dash() {
-        Some((d, g)) => {
+        Some(dash) => {
             out.push('[');
-            num(out, d * PT);
-            num(out, g * PT);
+            for d in dash {
+                num(out, d * PT);
+            }
             out.push_str("] 0 d\n");
         }
         None => out.push_str("[] 0 d\n"),
@@ -154,7 +155,34 @@ fn content(pic: &SheetPicture) -> String {
             out.push_str("l\nh f\n");
         }
     }
-    for n in pic.notes.iter().chain(pic.dims.iter().map(|d| &d.text)) {
+    let fill = |out: &mut String, a: &[DVec2; 3]| {
+        point(out, a[0]);
+        out.push_str("m\n");
+        point(out, a[1]);
+        out.push_str("l\n");
+        point(out, a[2]);
+        out.push_str("l\nh f\n");
+    };
+    for (_, t) in &pic.fills {
+        fill(&mut out, t);
+    }
+    if !pic.callouts.is_empty() {
+        set_pen(&mut out, Pen::Dim);
+    }
+    for c in &pic.callouts {
+        for p in &c.lines {
+            path_ops(&mut out, p);
+            out.push_str("S\n");
+        }
+        fill(&mut out, &c.arrow);
+    }
+    let texts = pic
+        .notes
+        .iter()
+        .chain(pic.dims.iter().map(|d| &d.text))
+        .chain(pic.labels.iter())
+        .chain(pic.callouts.iter().flat_map(|c| c.text.iter()));
+    for n in texts {
         note(&mut out, n);
     }
     out

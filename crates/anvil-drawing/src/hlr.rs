@@ -41,6 +41,10 @@ pub enum Orientation {
     Left,
     /// Looking from (1, 1, 1), Y up.
     Isometric,
+    /// Looking up from -Y, X to the right (section views only).
+    Bottom,
+    /// Looking at the back from -Z, Y up (section views only).
+    Back,
 }
 
 impl Orientation {
@@ -54,7 +58,29 @@ impl Orientation {
             Orientation::Right => "Right",
             Orientation::Left => "Left",
             Orientation::Isometric => "Isometric",
+            Orientation::Bottom => "Bottom",
+            Orientation::Back => "Back",
         }
+    }
+
+    /// The orthographic orientation whose eye is `eye`, when it is one of the six axis
+    /// directions.
+    pub fn from_eye(eye: DVec3) -> Option<Orientation> {
+        [
+            Orientation::Front,
+            Orientation::Back,
+            Orientation::Top,
+            Orientation::Bottom,
+            Orientation::Right,
+            Orientation::Left,
+        ]
+        .into_iter()
+        .find(|o| o.axes().eye.dot(eye) > 1.0 - 1e-9)
+    }
+
+    /// True for the isometric, which is foreshortened.
+    pub fn is_pictorial(self) -> bool {
+        self == Orientation::Isometric
     }
 
     pub fn axes(self) -> ViewAxes {
@@ -64,6 +90,8 @@ impl Orientation {
             Orientation::Right => (DVec3::X, DVec3::Y),
             Orientation::Left => (-DVec3::X, DVec3::Y),
             Orientation::Isometric => (DVec3::ONE.normalize(), DVec3::Y),
+            Orientation::Bottom => (-DVec3::Y, DVec3::Z),
+            Orientation::Back => (-DVec3::Z, DVec3::Y),
         };
         let up = (up - eye * up.dot(eye)).normalize();
         ViewAxes { right: up.cross(eye), up, eye }
@@ -86,6 +114,11 @@ impl ViewAxes {
 
     fn project_dir(&self, d: DVec3) -> DVec2 {
         self.project(d)
+    }
+
+    /// The model point on the view plane (depth 0) that projects to `p`.
+    pub fn lift(&self, p: DVec2) -> DVec3 {
+        self.right * p.x + self.up * p.y
     }
 }
 
@@ -130,7 +163,7 @@ impl Path2 {
         }
     }
 
-    fn range(&self) -> (f64, f64) {
+    pub(crate) fn range(&self) -> (f64, f64) {
         match self {
             Path2::Line { .. } => (0.0, 1.0),
             Path2::Conic { t0, t1, .. } => (*t0, *t1),
@@ -138,7 +171,7 @@ impl Path2 {
         }
     }
 
-    fn sub(&self, s0: f64, s1: f64) -> Path2 {
+    pub(crate) fn sub(&self, s0: f64, s1: f64) -> Path2 {
         match self {
             Path2::Line { .. } => Path2::Line { a: self.eval(s0), b: self.eval(s1) },
             Path2::Conic { c, u, v, .. } => Path2::Conic { c: *c, u: *u, v: *v, t0: s0, t1: s1 },
@@ -170,7 +203,7 @@ impl Path2 {
         pts.windows(2).map(|w| (w[1] - w[0]).length()).sum()
     }
 
-    fn bounds(&self) -> (DVec2, DVec2) {
+    pub(crate) fn bounds(&self) -> (DVec2, DVec2) {
         let pts = match self {
             Path2::Conic { t0, t1, .. } => {
                 (0..=64).map(|i| self.eval(t0 + (t1 - t0) * i as f64 / 64.0)).collect()
@@ -266,15 +299,33 @@ pub struct ViewLine {
     pub path: Path2,
 }
 
+/// A cut face of a section view to be hatched: its boundary loops on the view plane
+/// (outer and holes alike; hatching fills by the even-odd rule), the body it was cut from
+/// and its material's pattern.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HatchArea {
+    pub loops: Vec<Vec<DVec2>>,
+    pub body: usize,
+    pub pattern: crate::section::HatchPattern,
+}
+
 /// The lines of one view, in model millimetres on the view plane.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ViewGeometry {
     pub lines: Vec<ViewLine>,
+    /// Cut faces to hatch (section views, and detail views of them).
+    pub hatch: Vec<HatchArea>,
+    /// The circle a detail view is clipped to: centre and radius on the view plane.
+    pub clip: Option<(DVec2, f64)>,
 }
 
 impl ViewGeometry {
-    /// The box round every line, visible or not, or `None` for an empty view.
+    /// The box round every line, visible or not, or `None` for an empty view. A detail
+    /// view's box is its circle's.
     pub fn bounds(&self) -> Option<(DVec2, DVec2)> {
+        if let Some((c, r)) = self.clip {
+            return Some((c - DVec2::splat(r), c + DVec2::splat(r)));
+        }
         let mut out: Option<(DVec2, DVec2)> = None;
         for l in &self.lines {
             let (a, b) = l.path.bounds();
@@ -450,11 +501,25 @@ struct Candidate {
 /// [`LineKind::HiddenTangent`] so the caller can show or hide them without projecting
 /// again.
 pub fn project(solids: &[Solid], axes: &ViewAxes, progress: &Progress) -> Result<ViewGeometry, ProjectError> {
+    project_except(solids, axes, progress, &|_, _| false)
+}
+
+/// [`project`], leaving out the edges `skip(body, edge)` picks (a section view's
+/// shoulders).
+pub fn project_except(
+    solids: &[Solid],
+    axes: &ViewAxes,
+    progress: &Progress,
+    skip: &(dyn Fn(usize, usize) -> bool + Sync),
+) -> Result<ViewGeometry, ProjectError> {
     let locators: Vec<FaceLocator> = solids.iter().map(FaceLocator::new).collect();
     let size = model_size(solids);
     let mut candidates = Vec::new();
     for (b, s) in solids.iter().enumerate() {
         for (e, edge) in s.edges.iter().enumerate() {
+            if skip(b, e) {
+                continue;
+            }
             let role = match classify_edge(s, e) {
                 EdgeClass::Seam => continue,
                 EdgeClass::Sharp => Role::Edge,
@@ -506,7 +571,10 @@ pub fn project(solids: &[Solid], axes: &ViewAxes, progress: &Progress) -> Result
     }
     results.sort_by_key(|(i, _)| *i);
     let lines: Vec<ViewLine> = results.into_iter().flat_map(|(_, l)| l).collect();
-    Ok(ViewGeometry { lines: join_lines(remove_overlaps(lines, size, progress)?, size) })
+    Ok(ViewGeometry {
+        lines: join_lines(remove_overlaps(lines, size, progress)?, size),
+        ..ViewGeometry::default()
+    })
 }
 
 /// Joins straight pieces of the same kind that continue one another, so an edge cut where
