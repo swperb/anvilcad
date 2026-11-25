@@ -757,12 +757,12 @@ impl AnvilApp {
                 to_screen(v.hi + DVec2::splat(3.0)),
             );
             if s.selected == Some(v.id) {
-                painter.rect_stroke(r, 2.0, Stroke::new(1.5, pal.select), egui::StrokeKind::Outside);
+                painter.rect_stroke(r, 2.0_f32, Stroke::new(1.5_f32, pal.select), egui::StrokeKind::Outside);
             } else if hover_view == Some(v.id) {
                 painter.rect_stroke(
                     r,
-                    2.0,
-                    Stroke::new(1.0, pal.select.gamma_multiply(0.5)),
+                    2.0_f32,
+                    Stroke::new(1.0_f32, pal.select.gamma_multiply(0.5)),
                     egui::StrokeKind::Outside,
                 );
             }
@@ -796,7 +796,7 @@ impl AnvilApp {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area));
             egui::Frame::new()
                 .fill(pal.float_fill)
-                .stroke(Stroke::new(1.0, if error { pal.error } else { pal.border }))
+                .stroke(Stroke::new(1.0_f32, if error { pal.error } else { pal.border }))
                 .corner_radius(8.0)
                 .inner_margin(10.0)
                 .show(&mut child, |ui| {
