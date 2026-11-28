@@ -147,6 +147,22 @@ to recover more, as long as nothing is gated behind it.
 - If a feature seems impossible without SOLIDWORKS, say so and propose a native design
   before writing code.
 
+## UI framework: use GPUI where appropriate
+
+The desktop app is built on egui/eframe today (`crates/anvil-app`). Use
+[GPUI](https://www.gpui.rs) (the GPU-accelerated Rust UI framework from Zed) where it is the
+better fit for AnvilCAD, for example new UI surfaces that need fast, retained,
+GPU-rendered layout.
+
+- Weigh it per change and say in the pull request why GPUI was or was not used.
+- Do not port working egui code to GPUI without a stated reason and a plan agreed with the
+  maintainer; a migration lands in slices that each work end to end.
+- Anything built on GPUI must work on macOS, Linux and Windows, be reachable from the
+  headless harness (`anvilcad-agent`) for screenshots and tests, and follow the existing
+  theme, layout and key bindings.
+- Pin the GPUI version exactly, as the egui crates are, and check its licence before adding
+  it.
+
 ## Seeing and testing the app: use the headless harness
 
 - To see or test the app, use `anvilcad-agent`, never the windowed app:
